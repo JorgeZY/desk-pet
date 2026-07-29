@@ -33,10 +33,10 @@ const api: DesktopPetApi = {
     ipcRenderer.on("runtime:state", wrapped);
     return () => ipcRenderer.removeListener("runtime:state", wrapped);
   },
-  onOpenSettings: (listener: () => void) => {
-    const wrapped = (): void => listener();
-    ipcRenderer.on("app:open-settings", wrapped);
-    return () => ipcRenderer.removeListener("app:open-settings", wrapped);
+  onOpenView: (listener: (mode: WindowMode) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, mode: WindowMode): void => listener(mode);
+    ipcRenderer.on("app:open-view", wrapped);
+    return () => ipcRenderer.removeListener("app:open-view", wrapped);
   },
 };
 

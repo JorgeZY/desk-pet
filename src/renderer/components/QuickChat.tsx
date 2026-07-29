@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatEvent, ChatMessage, RuntimeState } from "../../shared/types";
+import { appendChatMessages, readChatHistory, updateChatMessage } from "../chat-history";
 
 interface QuickChatProps {
   runtime: RuntimeState;
@@ -20,49 +21,116 @@ export function QuickChat({ runtime, onOpenChat, onStartRuntime }: QuickChatProp
   const [input, setInput] = useState("");
   const [reply, setReply] = useState("");
   const [starting, setStarting] = useState(false);
-  const activeRequest = useRef<string | null>(null);
+  const [activeRequest, setActiveRequest] = useState<string | null>(null);
+  const activeRequestRef = useRef<string | null>(null);
+  const assistantIdRef = useRef<string | null>(null);
+  const replyRef = useRef("");
+
+  const changeActiveRequest = (requestId: string | null) => {
+    activeRequestRef.current = requestId;
+    setActiveRequest(requestId);
+  };
+
+  const saveAssistantReply = (content: string) => {
+    const assistantId = assistantIdRef.current;
+    if (!assistantId) return;
+    updateChatMessage(assistantId, (message) => ({ ...message, content }));
+  };
 
   useEffect(() => {
     const unsubscribe = window.desktopPet.onChatEvent((event: ChatEvent) => {
-      if (event.requestId !== activeRequest.current) return;
-      if (event.type === "delta") setReply((current) => current + event.text);
+      if (event.requestId !== activeRequestRef.current) return;
+      if (event.type === "delta") {
+        const nextReply = replyRef.current + event.text;
+        replyRef.current = nextReply;
+        setReply(nextReply);
+        saveAssistantReply(nextReply);
+      }
+      if (event.type === "reasoning") {
+        const assistantId = assistantIdRef.current;
+        if (assistantId) {
+          updateChatMessage(assistantId, (message) => ({
+            ...message,
+            reasoning: (message.reasoning ?? "") + event.text,
+          }));
+        }
+      }
       if (event.type === "error") {
-        setReply(event.message === "已停止生成" ? "（停在这里啦）" : `⚠ ${event.message}`);
-        activeRequest.current = null;
+        const fallback = event.message === "已停止生成" ? "（停在这里啦）" : `⚠ ${event.message}`;
+        const finalReply = replyRef.current || fallback;
+        replyRef.current = finalReply;
+        setReply(finalReply);
+        saveAssistantReply(finalReply);
+        changeActiveRequest(null);
       }
       if (event.type === "done") {
-        setReply((current) => current || "这次没有生成内容，要不要换个问法？");
-        activeRequest.current = null;
+        const finalReply = replyRef.current || "这次没有生成内容，要不要换个问法？";
+        replyRef.current = finalReply;
+        setReply(finalReply);
+        saveAssistantReply(finalReply);
+        changeActiveRequest(null);
       }
     });
     return () => {
       unsubscribe();
-      if (activeRequest.current) window.desktopPet.abortChat(activeRequest.current);
+      const requestId = activeRequestRef.current;
+      if (requestId) {
+        window.desktopPet.abortChat(requestId);
+        saveAssistantReply(replyRef.current || "（快捷回答已停止，可在完整对话中继续。）");
+        activeRequestRef.current = null;
+      }
     };
   }, []);
 
   const submit = () => {
     const content = input.trim();
-    if (!content || runtime.phase !== "ready" || activeRequest.current) return;
+    if (!content || runtime.phase !== "ready" || activeRequestRef.current) return;
     const requestId = crypto.randomUUID();
-    const message: ChatMessage = {
+    const user: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
       content,
       createdAt: Date.now(),
     };
-    activeRequest.current = requestId;
+    const assistant: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "",
+      createdAt: Date.now(),
+    };
+    const nextMessages = [...readChatHistory(), user];
+    appendChatMessages([user, assistant]);
+    assistantIdRef.current = assistant.id;
+    replyRef.current = "";
+    changeActiveRequest(requestId);
     setInput("");
     setReply("");
     window.desktopPet.startChat({
       requestId,
-      messages: [message],
+      messages: nextMessages,
       thinking: false,
     });
   };
 
   const stop = () => {
-    if (activeRequest.current) window.desktopPet.abortChat(activeRequest.current);
+    const requestId = activeRequestRef.current;
+    if (!requestId) return;
+    window.desktopPet.abortChat(requestId);
+    const finalReply = replyRef.current || "（停在这里啦）";
+    replyRef.current = finalReply;
+    setReply(finalReply);
+    saveAssistantReply(finalReply);
+    changeActiveRequest(null);
+  };
+
+  const openFullChat = () => {
+    const requestId = activeRequestRef.current;
+    if (requestId) {
+      window.desktopPet.abortChat(requestId);
+      saveAssistantReply(replyRef.current || "（快捷回答已停止，可在完整对话中继续。）");
+      changeActiveRequest(null);
+    }
+    onOpenChat();
   };
 
   const start = async () => {
@@ -76,7 +144,7 @@ export function QuickChat({ runtime, onOpenChat, onStartRuntime }: QuickChatProp
     }
   };
 
-  const isGenerating = activeRequest.current !== null;
+  const isGenerating = activeRequest !== null;
   const ready = runtime.phase === "ready";
 
   return (
@@ -84,7 +152,7 @@ export function QuickChat({ runtime, onOpenChat, onStartRuntime }: QuickChatProp
       <div className="quick-chat__message">
         <span className="quick-chat__avatar">团</span>
         <p title={reply || runtimeHint(runtime)}>{reply || runtimeHint(runtime)}</p>
-        <button type="button" onClick={onOpenChat} aria-label="打开完整对话" title="打开完整对话">↗</button>
+        <button type="button" onClick={openFullChat} aria-label="打开完整对话" title="打开完整对话">↗</button>
       </div>
 
       {ready ? (

@@ -92,6 +92,12 @@ function showWindow(mode?: WindowMode): void {
   mainWindow.moveTop();
 }
 
+function openWindowMode(mode: WindowMode): void {
+  const nextMode = config.setupComplete ? mode : "onboarding";
+  showWindow(nextMode);
+  mainWindow?.webContents.send("app:open-view", nextMode);
+}
+
 function createMainWindow(): BrowserWindow {
   const mode: WindowMode = requestedWindowMode() ?? (config.setupComplete ? "pet" : "onboarding");
   const size = WINDOW_SIZES[mode];
@@ -173,14 +179,11 @@ function createTray(): Tray {
       },
       {
         label: "开始聊天",
-        click: () => showWindow("chat"),
+        click: () => openWindowMode("chat"),
       },
       {
         label: "设置",
-        click: () => {
-          showWindow("settings");
-          mainWindow?.webContents.send("app:open-settings");
-        },
+        click: () => openWindowMode("settings"),
       },
       { type: "separator" },
       {

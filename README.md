@@ -1,36 +1,35 @@
 # desk-pet
 
-一个模型无关、本地优先的桌面宠物：Electron 负责透明置顶窗口与交互，`llama.cpp`
-负责端侧推理。可以使用 Hugging Face GGUF，也可以随时切换任意 llama.cpp 支持的本地
-`.gguf` 模型。
+desk-pet 是一个本地优先、模型可切换的 AI 桌面宠物。它平时以一只常驻桌面的橘猫陪伴
+用户，需要时可以快速聊一句，也可以展开完整对话。应用通过 `llama.cpp` 在本机运行
+GGUF 模型，不依赖云端聊天服务。
 
-它不是参考项目的 fork，而是按相同的“桌宠 UI + 本地推理 sidecar + 首次引导”
-思路重新实现。当前首版聚焦 Windows，同时保留 macOS / Linux 可移植结构。
+项目当前主要面向 Windows 桌面环境，同时保留向 macOS / Linux 迁移的结构。模型层不与
+MiniCPM 或其他单一模型绑定：既可以使用内置推荐模型，也可以切换到任意受当前
+`llama.cpp` 版本支持的本地 `.gguf` 文件。
 
-## 已实现
+## 项目能力
 
 - 原创橘猫桌宠 UI：透明、置顶、可拖动、托盘常驻
-- 首次启动引导：检测 llama.cpp、填写远程 GGUF 或选择本地模型、性能配置
-- 自动管理 `llama` / `llama-server` 子进程
-- 本地 OpenAI 兼容接口流式聊天
-- 快速回答 / 深度思考双模式（由当前模型能力决定）
-- 流式回答、思考折叠、停止生成与本地历史
-- 缩小桌宠状态下的一句话快捷对话
-- CPU 线程、GPU 卸载、上下文、温度、端口和人格配置
+- 桌宠状态下的快捷对话，以及可展开的完整会话界面
+- 会话历史同步、流式回答、停止生成与可折叠思考内容
+- 首次启动引导：检测 llama.cpp、选择模型并设置运行参数
+- 自动管理 `llama` / `llama-server` 子进程与本地推理服务
+- 支持 Hugging Face GGUF、自动下载缓存和已有本地模型
+- CPU 线程、GPU 卸载、上下文、温度、端口与人格配置
 - `Ctrl/Cmd + Shift + M` 显示或隐藏桌宠
-- Electron 安全边界：`contextIsolation`、sandbox、无 renderer Node 权限
 
-## 运行要求
+## 快速开始
+
+### 1. 准备环境
 
 - Node.js 20+
 - Windows 10/11 x64（MVP 的主要验证目标）
-- 约 1.5 GB 可用磁盘空间
-- 首次使用自动下载模式时需要网络
-- 较新的 llama.cpp；具体模型所需能力以其模型卡为准
+- 可用的较新版本 `llama` 或 `llama-server`
+- 足够存放 GGUF 模型的磁盘空间
+- 首次使用自动下载模式时可访问模型仓库的网络
 
-### 安装 llama.cpp
-
-Windows 推荐：
+Windows 可以通过 winget 安装 llama.cpp：
 
 ```powershell
 winget install llama.cpp
@@ -38,27 +37,36 @@ llama --version
 ```
 
 也可以从 [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases)
-下载预编译包，然后在首次引导里选择 `llama-server.exe`。
+下载预编译包，之后在应用引导中选择 `llama-server.exe`。
 
-## 开发
+### 2. 启动项目
 
 ```powershell
 npm install
 npm run dev
 ```
 
-第一次进入引导时：
+### 3. 完成首次引导
 
 1. 检测 `llama` 命令，或选择 `llama-server.exe`。
-2. 填写 `owner/repo:quant` 格式的 Hugging Face GGUF；也可选择任意已有的 `.gguf`。
-3. 保持默认 8K 上下文与 GPU 卸载设置。
-4. 完成引导。首次唤醒会下载约 700 MB 模型，进度会显示在状态区域。
+2. 使用推荐的远程 GGUF，或选择电脑中已有的 `.gguf` 模型。
+3. 根据设备调整上下文长度、CPU 线程和 GPU 卸载层数；不确定时保留默认值。
+4. 完成设置并唤醒模型。自动下载模式会在状态区域显示下载进度。
 
-内置默认模型由 Electron 的 Chromium 网络栈下载，会继承系统代理和 PAC 配置，并支持
-ModelScope / Hugging Face 回退与 `.part` 断点续传。其他 Hugging Face 标识交给
-`llama.cpp -hf` 处理；网络受限时建议先下载 GGUF，再切换到本地模式。
+## 使用引导
 
-## 验证与打包
+- 在桌宠下方输入一句话，可以直接进行快捷对话。
+- 点击桌宠或快捷对话右上角箭头，可以展开完整会话。
+- 右键托盘图标可以开始聊天、打开设置、重启模型或退出应用。
+- 在设置中可以随时切换 Hugging Face 模型或本地 GGUF，并调整推理参数。
+- 使用 `Ctrl/Cmd + Shift + M` 可以快速显示或隐藏桌宠。
+
+快捷对话与完整会话使用同一份本地历史。聊天请求只会发送到本机运行的 llama.cpp
+服务；如果选择自动下载模型，模型文件会缓存在应用数据目录中。
+
+## 开发与验证
+
+提交修改前建议运行：
 
 ```powershell
 npm run typecheck
@@ -77,9 +85,13 @@ npm run dist:win
 CI 中下载固定版本的 llama.cpp release，并通过 electron-builder
 `extraResources` 打入安装包。
 
-## 本地模型模式
+## 模型与下载
 
-若已经下载了模型，可以在引导或设置中选择任意 llama.cpp 支持的文件，例如：
+内置推荐模型使用 Electron 的 Chromium 网络栈下载，可以继承系统代理和 PAC 配置，并
+支持 ModelScope / Hugging Face 回退与 `.part` 断点续传。其他 Hugging Face 标识会交给
+`llama.cpp -hf` 处理；网络受限时建议先下载 GGUF，再切换到本地模式。
+
+若已经下载模型，可以在引导或设置中选择任意 llama.cpp 支持的文件，例如：
 
 ```text
 my-local-model-Q4_K_M.gguf
