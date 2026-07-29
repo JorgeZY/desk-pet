@@ -1,0 +1,17 @@
+node_modules/
+dist-electron/
+dist-renderer/
+release/
+coverage/
+*.log
+models/
+bin/
+.env
+.DS_Store
+Thumbs.db
+.smoke-user-data/
+smoke-*.png
+qa-*.png
+assets/desk-pet-icon-chroma.png
+assets/desk-pet-icon.png
+assets/icon-preview.png
