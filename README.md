@@ -12,6 +12,12 @@
   本地优先 · 模型可换 · 会聊天 · 会卖萌 · 偶尔吃满显存
 </p>
 
+<p align="center">
+  <a href="https://github.com/JorgeZY/desk-pet/actions/workflows/ci.yml">
+    <img src="https://github.com/JorgeZY/desk-pet/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+</p>
+
 desk-pet 是一只住在桌面上的 AI 橘猫，名字叫「团子」。平时它安静趴着陪你，需要时可以
 快速聊一句，也可以展开完整对话。它通过 `llama.cpp` 在本机运行 GGUF 模型——你的聊天
 不用飘到云端，只有电脑风扇知道你们聊了什么。🌬️
@@ -38,17 +44,20 @@ desk-pet 是一只住在桌面上的 AI 橘猫，名字叫「团子」。平时�
 
 ## 🚀 把团子领回桌面
 
-### 方案 A：直接安装
+### 1. 下载源码
 
-前往 [Releases](https://github.com/JorgeZY/desk-pet/releases/latest) 下载 Windows x64
-安装包。当前预览版尚未使用商业代码签名证书，Windows SmartScreen 可能会提醒你：
-“这只猫认识吗？”——请确认文件来自本仓库并核对 Release 页面提供的 SHA256。
+前往 [Releases](https://github.com/JorgeZY/desk-pet/releases/latest)，下载 GitHub 自动生成的
+`Source code (zip)` 或 `Source code (tar.gz)`。也可以直接克隆仓库：
 
-安装包暂不内置 llama.cpp 和模型权重，继续完成下面的「准备猫粮」即可。
+```powershell
+git clone https://github.com/JorgeZY/desk-pet.git
+cd desk-pet
+```
 
-### 方案 B：从源码启动
+项目目前只发布源码归档，不提供预编译安装包。这样没有证书警告，也不会让一只来历不明的
+橘猫突然住进系统目录。🐾
 
-准备：
+### 2. 准备运行环境
 
 - Node.js 20+
 - Windows 10/11 x64（当前主要验证环境）
@@ -66,7 +75,7 @@ llama --version
 也可以从 [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases)
 下载预编译包，然后在首次引导中选择 `llama-server.exe`。
 
-接着启动项目：
+### 3. 启动项目
 
 ```powershell
 npm install
@@ -123,18 +132,10 @@ llama-server `
 npm run typecheck
 npm test
 npm run build
-npm run pack
 ```
 
-生成 Windows 安装包：
-
-```powershell
-npm run dist:win
-```
-
-`release/` 是构建产物目录。当前安装包不内置 llama.cpp 与模型权重；正式分发时可以在
-CI 中下载固定版本的 llama.cpp release，再通过 electron-builder 的
-`extraResources` 打入安装包。
+公开 Release 只包含 GitHub 根据版本标签自动生成的源码 ZIP / TAR.GZ，不上传预编译
+安装包。需要本地验证 Electron 打包流程时，开发者仍可运行 `npm run pack`。
 
 ## 🏠 猫窝结构
 
