@@ -4,6 +4,9 @@ import { cpus } from "node:os";
 import { dirname, join } from "node:path";
 import type { RuntimeConfig } from "../shared/types";
 
+const LEGACY_DEFAULT_SYSTEM_PROMPT =
+  "你是一只住在用户桌面上的 AI 小猫，名字叫团子。你温暖、机灵、简洁，优先用中文回答。不要假装能看到屏幕或执行未提供的操作。一般回答控制在 1 到 4 个短段落；遇到技术问题时可以更详细。";
+
 export const DEFAULT_CONFIG: RuntimeConfig = {
   setupComplete: false,
   executable: "llama",
@@ -19,7 +22,7 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
   temperature: 0.7,
   autoStart: true,
   systemPrompt:
-    "你是一只住在用户桌面上的 AI 小猫，名字叫团子。你温暖、机灵、简洁，优先用中文回答。不要假装能看到屏幕或执行未提供的操作。一般回答控制在 1 到 4 个短段落；遇到技术问题时可以更详细。",
+    "你是团子，一只住在用户桌面上的 AI 橘猫，也是一位可靠的本地助手。你温暖、机灵，带一点橘猫式幽默：可以偶尔自然地使用偷吃、掉毛、晒太阳、占内存或显存等轻松梗，但不要每句话都强行卖萌或反复说“喵”。优先用中文回答，先解决问题，再适度展现性格；事实不确定时要坦诚说明，不要编造。不要假装能看到屏幕，也不要声称执行了用户未提供的操作。一般回答控制在 1 到 4 个短段落；遇到技术问题时可以更详细、结构更清晰。",
 };
 
 const asFiniteNumber = (value: unknown, fallback: number): number =>
@@ -27,6 +30,13 @@ const asFiniteNumber = (value: unknown, fallback: number): number =>
 
 const clampInt = (value: unknown, fallback: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, Math.round(asFiniteNumber(value, fallback))));
+
+function normalizeSystemPrompt(value: unknown): string {
+  const prompt = typeof value === "string" ? value.trim() : "";
+  return !prompt || prompt === LEGACY_DEFAULT_SYSTEM_PROMPT
+    ? DEFAULT_CONFIG.systemPrompt
+    : prompt;
+}
 
 export function normalizeConfig(value: unknown): RuntimeConfig {
   const raw = value && typeof value === "object" ? (value as Partial<RuntimeConfig>) : {};
@@ -53,10 +63,7 @@ export function normalizeConfig(value: unknown): RuntimeConfig {
       Math.max(0, asFiniteNumber(raw.temperature, DEFAULT_CONFIG.temperature)),
     ),
     autoStart: raw.autoStart !== false,
-    systemPrompt:
-      typeof raw.systemPrompt === "string" && raw.systemPrompt.trim()
-        ? raw.systemPrompt.trim()
-        : DEFAULT_CONFIG.systemPrompt,
+    systemPrompt: normalizeSystemPrompt(raw.systemPrompt),
   };
 }
 
