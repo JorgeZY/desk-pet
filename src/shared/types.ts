@@ -104,5 +104,5 @@ export interface DesktopPetApi {
   abortChat(requestId: string): void;
   onChatEvent(listener: (event: ChatEvent) => void): () => void;
   onRuntimeState(listener: (state: RuntimeState) => void): () => void;
-  onOpenSettings(listener: () => void): () => void;
+  onOpenView(listener: (mode: WindowMode) => void): () => void;
 }

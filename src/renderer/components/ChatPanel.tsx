@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatEvent, ChatMessage, RuntimeState } from "../../shared/types";
+import { readChatHistory, writeChatHistory } from "../chat-history";
 import { Pet, type PetMood } from "./Pet";
 import { RuntimeBadge } from "./RuntimeBadge";
 
@@ -10,21 +11,8 @@ interface ChatPanelProps {
   onStartRuntime: () => Promise<void>;
 }
 
-const HISTORY_KEY = "desk-pet:history:v1";
-const LEGACY_HISTORY_KEY = "minicpm5-desk-pet:history:v1";
-
-function readHistory(): ChatMessage[] {
-  try {
-    const saved = localStorage.getItem(HISTORY_KEY) ?? localStorage.getItem(LEGACY_HISTORY_KEY);
-    const parsed = JSON.parse(saved ?? "[]") as ChatMessage[];
-    return Array.isArray(parsed) ? parsed.slice(-40) : [];
-  } catch {
-    return [];
-  }
-}
-
 export function ChatPanel({ runtime, onClose, onSettings, onStartRuntime }: ChatPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>(readHistory);
+  const [messages, setMessages] = useState<ChatMessage[]>(readChatHistory);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
@@ -32,7 +20,7 @@ export function ChatPanel({ runtime, onClose, onSettings, onStartRuntime }: Chat
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(messages.slice(-40)));
+    writeChatHistory(messages);
     requestAnimationFrame(() => {
       if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     });

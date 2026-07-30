@@ -37,7 +37,7 @@ export function App() {
     return window.desktopPet.onRuntimeState(setRuntime);
   }, []);
 
-  useEffect(() => window.desktopPet.onOpenSettings(() => setView("settings")), []);
+  useEffect(() => window.desktopPet.onOpenView(setView), []);
 
   useEffect(() => {
     void window.desktopPet.setWindowMode(view);
