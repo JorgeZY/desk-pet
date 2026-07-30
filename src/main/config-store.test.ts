@@ -9,6 +9,24 @@ describe("runtime config", () => {
     expect(config.contextSize).toBe(8192);
   });
 
+  it("defaults to the orange-cat personality without overwriting a custom prompt", () => {
+    expect(DEFAULT_CONFIG.systemPrompt).toContain("橘猫式幽默");
+    expect(DEFAULT_CONFIG.systemPrompt).toContain("先解决问题");
+
+    const migrated = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      systemPrompt:
+        "你是一只住在用户桌面上的 AI 小猫，名字叫团子。你温暖、机灵、简洁，优先用中文回答。不要假装能看到屏幕或执行未提供的操作。一般回答控制在 1 到 4 个短段落；遇到技术问题时可以更详细。",
+    });
+    expect(migrated.systemPrompt).toBe(DEFAULT_CONFIG.systemPrompt);
+
+    const config = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      systemPrompt: "保持专业，直接回答。",
+    });
+    expect(config.systemPrompt).toBe("保持专业，直接回答。");
+  });
+
   it("clamps unsafe numeric values", () => {
     const config = normalizeConfig({
       ...DEFAULT_CONFIG,
