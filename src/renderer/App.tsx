@@ -1,17 +1,69 @@
-import { useEffect, useMemo, useState } from "react";
-import type { BootstrapData, RuntimeConfig, RuntimeState, WindowMode } from "../shared/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  BootstrapData,
+  RuntimeConfig,
+  RuntimeState,
+  SpeechEvent,
+  SpeechState,
+  WindowMode,
+} from "../shared/types";
 import { ChatPanel } from "./components/ChatPanel";
 import { Onboarding } from "./components/Onboarding";
 import { Pet, type PetMood } from "./components/Pet";
 import { QuickChat } from "./components/QuickChat";
 import { RuntimeBadge } from "./components/RuntimeBadge";
+
+interface GlobalSpeechFeedback {
+  sessionId: string;
+  text: string;
+  phase: "recording" | "transcribing" | "done" | "error";
+}
 import { Settings } from "./components/Settings";
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapData | null>(null);
   const [runtime, setRuntime] = useState<RuntimeState | null>(null);
+  const [speech, setSpeech] = useState<SpeechState | null>(null);
   const [view, setView] = useState<WindowMode>("pet");
   const [fatalError, setFatalError] = useState("");
+  const [draft, setDraft] = useState("");
+  const draftRef = useRef("");
+  const speechBaseDraftRef = useRef("");
+  const activeSpeechRef = useRef<string | null>(null);
+  const globalSpeechRef = useRef<string | null>(null);
+  const globalSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewTransitionRef = useRef(false);
+  const preparingSpeechRef = useRef(false);
+  const [globalSpeech, setGlobalSpeech] = useState<GlobalSpeechFeedback | null>(null);
+
+  const updateDraft = (value: string) => {
+    draftRef.current = value;
+    setDraft(value);
+  };
+
+  const speechDraft = (base: string, transcript: string) => {
+    const separator = base && !/\s$/u.test(base) ? " " : "";
+    return `${base}${separator}${transcript}`;
+  };
+
+  const transitionToView = async (nextView: WindowMode) => {
+    if (viewTransitionRef.current || nextView === view) return;
+    viewTransitionRef.current = true;
+    const root = document.documentElement;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    root.classList.add("view-transitioning");
+    try {
+      await new Promise((resolve) => setTimeout(resolve, reducedMotion ? 0 : 110));
+      await window.desktopPet.setWindowMode(nextView);
+      setView(nextView);
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    } finally {
+      root.classList.remove("view-transitioning");
+      viewTransitionRef.current = false;
+    }
+  };
 
   useEffect(() => {
     window.desktopPet
@@ -19,6 +71,7 @@ export function App() {
       .then((data) => {
         setBootstrap(data);
         setRuntime(data.runtime);
+        setSpeech(data.speech);
         const requestedView = new URLSearchParams(location.search).get("view");
         const isKnownView =
           requestedView === "pet" ||
@@ -35,6 +88,81 @@ export function App() {
       })
       .catch((error) => setFatalError(error instanceof Error ? error.message : String(error)));
     return window.desktopPet.onRuntimeState(setRuntime);
+  }, []);
+
+  const prepareSpeech = async (force = false) => {
+    if (preparingSpeechRef.current) return;
+    if (!window.confirm(force
+      ? "将重新下载约 450 MB 的本地语音模型，是否继续？"
+      : "首次使用语音输入需要下载约 450 MB 的本地模型。模型将保存到项目或应用旁的 models/speech，是否继续？")) return;
+    preparingSpeechRef.current = true;
+    try {
+      setSpeech(await window.desktopPet.prepareSpeech(force));
+    } catch (error) {
+      console.error("Failed to prepare local speech models:", error);
+    } finally {
+      preparingSpeechRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    const unsubscribeState = window.desktopPet.onSpeechState(setSpeech);
+    const unsubscribeEvent = window.desktopPet.onSpeechEvent((event: SpeechEvent) => {
+      if (event.type === "setup-required") {
+        void prepareSpeech();
+        return;
+      }
+      if (event.type === "started") {
+        if (event.source === "shortcut") {
+          if (globalSpeechTimerRef.current) clearTimeout(globalSpeechTimerRef.current);
+          globalSpeechRef.current = event.sessionId;
+          setGlobalSpeech({
+            sessionId: event.sessionId,
+            text: "正在聆听…",
+            phase: "recording",
+          });
+          return;
+        }
+        speechBaseDraftRef.current = draftRef.current;
+        activeSpeechRef.current = event.sessionId;
+        return;
+      }
+      if (event.sessionId && event.sessionId === globalSpeechRef.current) {
+        if (event.type === "partial") {
+          setGlobalSpeech({ sessionId: event.sessionId, text: event.text || "正在聆听…", phase: "recording" });
+        } else if (event.type === "final") {
+          setGlobalSpeech({ sessionId: event.sessionId, text: event.text, phase: "transcribing" });
+        } else if (event.type === "inserted") {
+          setGlobalSpeech({ sessionId: event.sessionId, text: event.text, phase: "done" });
+          globalSpeechRef.current = null;
+          globalSpeechTimerRef.current = setTimeout(() => setGlobalSpeech(null), 1_500);
+        } else if (event.type === "cancelled") {
+          setGlobalSpeech({ sessionId: event.sessionId, text: event.message, phase: "error" });
+          globalSpeechRef.current = null;
+          globalSpeechTimerRef.current = setTimeout(() => setGlobalSpeech(null), 1_500);
+        } else if (event.type === "insertion-error" || event.type === "error") {
+          setGlobalSpeech({ sessionId: event.sessionId, text: event.message, phase: "error" });
+          globalSpeechRef.current = null;
+          globalSpeechTimerRef.current = setTimeout(() => setGlobalSpeech(null), 3_000);
+        }
+        return;
+      }
+      if (!event.sessionId || event.sessionId !== activeSpeechRef.current) return;
+      if (event.type === "partial") {
+        updateDraft(speechDraft(speechBaseDraftRef.current, event.text));
+      } else if (event.type === "final") {
+        updateDraft(speechDraft(speechBaseDraftRef.current, event.text));
+        activeSpeechRef.current = null;
+      } else if (event.type === "cancelled" || event.type === "error") {
+        updateDraft(speechBaseDraftRef.current);
+        activeSpeechRef.current = null;
+      }
+    });
+    return () => {
+      unsubscribeState();
+      unsubscribeEvent();
+      if (globalSpeechTimerRef.current) clearTimeout(globalSpeechTimerRef.current);
+    };
   }, []);
 
   useEffect(() => window.desktopPet.onOpenView(setView), []);
@@ -55,7 +183,7 @@ export function App() {
     const data = await window.desktopPet.saveConfig(nextConfig);
     setBootstrap(data);
     setRuntime(data.runtime);
-    setView("chat");
+    await transitionToView("chat");
     setRuntime(await window.desktopPet.startRuntime());
   };
 
@@ -63,11 +191,49 @@ export function App() {
     const data = await window.desktopPet.saveConfig({ ...nextConfig, setupComplete: true });
     setBootstrap(data);
     setRuntime(data.runtime);
+    setSpeech(data.speech);
     if (restart) setRuntime(await window.desktopPet.restartRuntime());
-    setView("pet");
+    await transitionToView("pet");
   };
 
   const startRuntime = async () => setRuntime(await window.desktopPet.startRuntime());
+
+  const startSpeech = async (): Promise<string | undefined> => {
+    if (!speech || !speech.enabled) return undefined;
+    if (speech.phase === "not-installed") {
+      await prepareSpeech();
+      return undefined;
+    }
+    const result = await window.desktopPet.startSpeech();
+    return result?.sessionId;
+  };
+
+  const stopSpeech = async (sessionId: string) => {
+    setSpeech(await window.desktopPet.stopSpeech(sessionId));
+  };
+
+  const cancelSpeech = async (sessionId: string) => {
+    setSpeech(await window.desktopPet.cancelSpeech(sessionId));
+  };
+
+  const globalSpeechPhase = globalSpeech?.phase === "recording" && speech?.phase === "transcribing"
+    ? "transcribing"
+    : globalSpeech?.phase;
+  const globalSpeechBubble = globalSpeech && globalSpeechPhase ? (
+    <aside className={`global-speech-bubble phase-${globalSpeechPhase}`} aria-live="polite">
+      <span className="global-speech-bubble__status" aria-hidden="true" />
+      <div>
+        <b>{globalSpeechPhase === "recording"
+          ? "团子正在听"
+          : globalSpeechPhase === "transcribing"
+            ? "团子正在转成文字"
+            : globalSpeechPhase === "done"
+              ? "已输入当前文本框"
+              : "这次没有输入"}</b>
+        <p>{globalSpeech.text}</p>
+      </div>
+    </aside>
+  ) : null;
 
   if (fatalError) {
     return (
@@ -79,10 +245,10 @@ export function App() {
     );
   }
 
-  if (!bootstrap || !runtime) {
+  if (!bootstrap || !runtime || !speech) {
     return (
       <main className="loading-screen">
-        <Pet mood="sleeping" phase="stopped" compact />
+        <Pet mood="sleeping" compact />
         <p>正在启动 desk-pet…</p>
       </main>
     );
@@ -100,40 +266,68 @@ export function App() {
 
   if (view === "chat") {
     return (
-      <ChatPanel
-        runtime={runtime}
-        onClose={() => setView("pet")}
-        onSettings={() => setView("settings")}
-        onStartRuntime={startRuntime}
-      />
+      <>
+        <ChatPanel
+          runtime={runtime}
+          speech={speech}
+          draft={draft}
+          onDraftChange={updateDraft}
+          onPrepareSpeech={prepareSpeech}
+          onStartSpeech={startSpeech}
+          onStopSpeech={stopSpeech}
+          onCancelSpeech={cancelSpeech}
+          onClose={() => void transitionToView("pet")}
+          onSettings={() => void transitionToView("settings")}
+          onStartRuntime={startRuntime}
+        />
+        {globalSpeechBubble}
+      </>
     );
   }
 
   if (view === "settings") {
     return (
-      <Settings
-        initialConfig={bootstrap.config}
-        runtime={runtime}
-        onClose={() => setView("pet")}
-        onSave={saveSettings}
-      />
+      <>
+        <Settings
+          initialConfig={bootstrap.config}
+          runtime={runtime}
+          speech={speech}
+          onPrepareSpeech={prepareSpeech}
+          onClose={() => void transitionToView("pet")}
+          onSave={saveSettings}
+        />
+        {globalSpeechBubble}
+      </>
     );
   }
 
   return (
     <main className="pet-stage">
-      <div className="pet-drag-handle" aria-label="拖动窗口"><i /><i /><i /></div>
       <div className="pet-stage__actions">
         <RuntimeBadge runtime={runtime} />
-        <button className="mini-icon-button" type="button" onClick={() => setView("settings")} aria-label="设置">⚙</button>
+        <button className="mini-icon-button" type="button" onClick={() => void transitionToView("settings")} aria-label="设置">⚙</button>
         <button className="mini-icon-button" type="button" onClick={() => window.desktopPet.hideWindow()} aria-label="隐藏">×</button>
       </div>
-      <QuickChat
-        runtime={runtime}
-        onOpenChat={() => setView("chat")}
-        onStartRuntime={startRuntime}
+      {!globalSpeech && (
+        <QuickChat
+          runtime={runtime}
+          speech={speech}
+          draft={draft}
+          onDraftChange={updateDraft}
+          onPrepareSpeech={prepareSpeech}
+          onStartSpeech={startSpeech}
+          onStopSpeech={stopSpeech}
+          onCancelSpeech={cancelSpeech}
+          onOpenChat={() => void transitionToView("chat")}
+          onStartRuntime={startRuntime}
+        />
+      )}
+      <Pet
+        mood={speech.phase === "recording" ? "listening" : speech.phase === "transcribing" ? "transcribing" : mood}
+        windowDrag
+        onClick={() => void transitionToView("chat")}
       />
-      <Pet mood={mood} phase={runtime.phase} onClick={() => setView("chat")} />
+      {globalSpeechBubble}
     </main>
   );
 }

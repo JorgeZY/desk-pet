@@ -5,7 +5,7 @@
 首版的目标是建立一个可以继续产品化的最小闭环：
 
 ```text
-点击桌宠 → 输入消息 → 本地流式推理 → 桌宠反馈 → 保存本地配置
+点击桌宠 / 按住 F8 → 文本或本地语音输入 → 本地流式推理 → 桌宠反馈 → 保存本地配置
 ```
 
 模型权重和 llama.cpp 二进制保持为外部依赖，避免开发包膨胀，也便于独立升级。
@@ -25,6 +25,7 @@ preload 使用 `contextBridge` 暴露以下能力：
 - 选择 llama.cpp 或 GGUF 文件
 - 启停本地运行时
 - 发起、停止聊天并订阅流事件
+- 准备语音模型、控制按钮录音并订阅语音状态与转写事件
 - 调整窗口模式
 
 ### Main
@@ -33,10 +34,11 @@ preload 使用 `contextBridge` 暴露以下能力：
 
 - 透明置顶窗口、托盘和全局快捷键
 - JSON 配置的规范化、校验与原子写入
-- 通过 Chromium 网络栈下载模型、镜像回退与断点续传
+- 通过 Chromium 网络栈下载 GGUF，并通过打包的 PowerShell 脚本下载语音模型
 - `llama` / `llama-server` 子进程生命周期
 - `/health` 就绪轮询
 - OpenAI Chat Completions SSE 解析
+- 默认麦克风采集、F8 按下/释放与 Sherpa-ONNX 语音识别
 - 退出时终止由应用启动的运行时
 
 ### llama.cpp
@@ -62,6 +64,28 @@ ready
 
 当配置端口上已经存在健康的 llama.cpp 服务时，应用连接该外部服务，但不会在退出时
 终止它。
+
+## 语音输入
+
+语音模型与 GGUF 共用模型根目录：开发时为项目根目录的 `models/`，打包后为可执行文件
+旁的 `models/`。其中流式 Paraformer 负责录音中的临时文本，离线 SenseVoice 在松键后
+覆盖最终草稿。首次准备模型时，主进程依次启动 `download-streaming-model.ps1` 与
+`download-models.ps1`；脚本使用 `Invoke-WebRequest` 和系统 `tar`，打包后从
+`resources/scripts/` 执行。音频被重采样为 16 kHz 单声道，只在当前会话内保存在主进程内存。
+Paraformer 明确加载 INT8 encoder/decoder，并删除官方归档中未使用的 FP32 副本。
+
+```text
+not-installed → downloading → loading → ready
+                                         └─ 按住按钮/F8 → recording
+                                                            └─ 松开 → transcribing → ready
+```
+
+全局 F8 会以不激活窗口的方式显示桌宠，保持原应用输入焦点。Paraformer 临时稿实时显示在
+橘猫气泡中；SenseVoice 最终稿完成后，主进程短暂写入系统剪贴板并通过 `uiohook-napi`
+模拟 `Ctrl+V`，随后恢复原剪贴板内容。聊天框麦克风按钮仍只修改桌宠草稿。录音中使用
+竖耳、声波和呼吸动画；最终转换时使用闭眼与环绕光点动画。
+当 Quick Chat 或完整聊天的编辑框持有焦点时，renderer 通过 IPC 标记 composer focus；此时
+F8 会以 `button` 来源启动同一语音会话，直接更新聊天草稿，不进入全局剪贴板粘贴路径。
 
 ## 聊天协议
 

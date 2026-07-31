@@ -2,6 +2,14 @@ export type ModelMode = "huggingface" | "local";
 
 export type WindowMode = "pet" | "chat" | "settings" | "onboarding";
 
+export interface SpeechConfig {
+  enabled: boolean;
+  globalShortcut: boolean;
+  shortcut: "F8";
+  threads: number;
+  language: "auto";
+}
+
 export interface RuntimeConfig {
   setupComplete: boolean;
   executable: string;
@@ -17,6 +25,7 @@ export interface RuntimeConfig {
   temperature: number;
   autoStart: boolean;
   systemPrompt: string;
+  speech: SpeechConfig;
 }
 
 export type RuntimePhase =
@@ -48,9 +57,57 @@ export interface RuntimeState {
   updatedAt: number;
 }
 
+export type SpeechPhase =
+  | "not-installed"
+  | "downloading"
+  | "loading"
+  | "ready"
+  | "recording"
+  | "transcribing"
+  | "error";
+
+export type SpeechModelId = "streaming-paraformer" | "sense-voice";
+
+export interface SpeechDownloadProgress {
+  model: SpeechModelId;
+  receivedBytes: number;
+  totalBytes?: number;
+  percent?: number;
+}
+
+export interface SpeechState {
+  enabled: boolean;
+  phase: SpeechPhase;
+  message: string;
+  modelDirectory: string;
+  inputDevice?: string;
+  activeSessionId?: string;
+  level?: number;
+  progress?: SpeechDownloadProgress;
+  error?: string;
+  updatedAt: number;
+}
+
+export type SpeechSessionSource = "button" | "shortcut";
+
+export type SpeechEvent =
+  | { type: "setup-required" }
+  | { type: "started"; sessionId: string; source: SpeechSessionSource }
+  | { type: "partial"; sessionId: string; text: string }
+  | { type: "final"; sessionId: string; text: string }
+  | { type: "inserted"; sessionId: string; text: string }
+  | { type: "insertion-error"; sessionId: string; message: string }
+  | { type: "cancelled"; sessionId: string; message: string }
+  | { type: "error"; sessionId?: string; message: string };
+
+export interface SpeechStartResult {
+  sessionId: string;
+}
+
 export interface BootstrapData {
   config: RuntimeConfig;
   runtime: RuntimeState;
+  speech: SpeechState;
   platform: string;
   appVersion: string;
 }
@@ -95,6 +152,11 @@ export interface DesktopPetApi {
   startRuntime(): Promise<RuntimeState>;
   stopRuntime(): Promise<RuntimeState>;
   restartRuntime(): Promise<RuntimeState>;
+  prepareSpeech(force?: boolean): Promise<SpeechState>;
+  startSpeech(): Promise<SpeechStartResult | null>;
+  stopSpeech(sessionId: string): Promise<SpeechState>;
+  cancelSpeech(sessionId: string): Promise<SpeechState>;
+  setSpeechComposerFocused(focused: boolean): void;
   pickExecutable(): Promise<FilePickResult | null>;
   pickModel(): Promise<FilePickResult | null>;
   setWindowMode(mode: WindowMode): Promise<void>;
@@ -104,5 +166,7 @@ export interface DesktopPetApi {
   abortChat(requestId: string): void;
   onChatEvent(listener: (event: ChatEvent) => void): () => void;
   onRuntimeState(listener: (state: RuntimeState) => void): () => void;
+  onSpeechState(listener: (state: SpeechState) => void): () => void;
+  onSpeechEvent(listener: (event: SpeechEvent) => void): () => void;
   onOpenView(listener: (mode: WindowMode) => void): () => void;
 }

@@ -5,6 +5,8 @@ import type {
   DesktopPetApi,
   RuntimeConfig,
   RuntimeState,
+  SpeechEvent,
+  SpeechState,
   WindowMode,
 } from "../shared/types";
 
@@ -15,6 +17,11 @@ const api: DesktopPetApi = {
   startRuntime: () => ipcRenderer.invoke("runtime:start"),
   stopRuntime: () => ipcRenderer.invoke("runtime:stop"),
   restartRuntime: () => ipcRenderer.invoke("runtime:restart"),
+  prepareSpeech: (force?: boolean) => ipcRenderer.invoke("speech:prepare", force),
+  startSpeech: () => ipcRenderer.invoke("speech:start"),
+  stopSpeech: (sessionId: string) => ipcRenderer.invoke("speech:stop", sessionId),
+  cancelSpeech: (sessionId: string) => ipcRenderer.invoke("speech:cancel", sessionId),
+  setSpeechComposerFocused: (focused: boolean) => ipcRenderer.send("speech:composer-focus", focused),
   pickExecutable: () => ipcRenderer.invoke("dialog:pick-executable"),
   pickModel: () => ipcRenderer.invoke("dialog:pick-model"),
   setWindowMode: (mode: WindowMode) => ipcRenderer.invoke("window:set-mode", mode),
@@ -32,6 +39,18 @@ const api: DesktopPetApi = {
       listener(payload);
     ipcRenderer.on("runtime:state", wrapped);
     return () => ipcRenderer.removeListener("runtime:state", wrapped);
+  },
+  onSpeechState: (listener: (state: SpeechState) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: SpeechState): void =>
+      listener(payload);
+    ipcRenderer.on("speech:state", wrapped);
+    return () => ipcRenderer.removeListener("speech:state", wrapped);
+  },
+  onSpeechEvent: (listener: (event: SpeechEvent) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: SpeechEvent): void =>
+      listener(payload);
+    ipcRenderer.on("speech:event", wrapped);
+    return () => ipcRenderer.removeListener("speech:event", wrapped);
   },
   onOpenView: (listener: (mode: WindowMode) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, mode: WindowMode): void => listener(mode);

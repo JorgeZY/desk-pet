@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   globalShortcut,
   ipcMain,
@@ -21,11 +22,17 @@ import type {
   FilePickResult,
   ProbeResult,
   RuntimeConfig,
+  SpeechEvent,
+  SpeechState,
   WindowMode,
 } from "../shared/types";
 import { ConfigStore } from "./config-store";
+import { pasteDictationText, resolveShortcutSpeechSource } from "./global-dictation";
 import { LlamaRuntime } from "./llama-runtime";
+import { migrateModelDirectory, resolveModelDirectory } from "./model-directory";
 import { ManagedModelDownloader } from "./model-downloader";
+import { SpeechModelManager } from "./speech-model-manager";
+import { SpeechRuntime } from "./speech-runtime";
 
 const execFileAsync = promisify(execFile);
 app.setName("desk-pet");
@@ -43,6 +50,16 @@ let isQuitting = false;
 let configStore: ConfigStore;
 let config: RuntimeConfig;
 let runtime: LlamaRuntime;
+let speech: SpeechRuntime;
+let currentWindowMode: WindowMode = "pet";
+let shortcutHook: typeof import("uiohook-napi").uIOhook | undefined;
+let shortcutHookStarted = false;
+let shortcutListenersRegistered = false;
+let shortcutPressed = false;
+let shortcutReleasedBeforeStart = false;
+let shortcutSessionId: string | undefined;
+let speechComposerFocused = false;
+const globalDictationSessions = new Set<string>();
 
 function assetPath(fileName: string): string {
   return join(__dirname, "../../assets", fileName);
@@ -76,10 +93,13 @@ function anchorWindow(window: BrowserWindow, width: number, height: number): voi
   const y = wasNearBottom
     ? workArea.y + workArea.height - height - margin
     : Math.min(Math.max(previous.y, workArea.y), workArea.y + workArea.height - height);
-  window.setBounds({ x, y, width, height }, true);
+  // Renderer fades out before changing modes, so resize once instead of exposing
+  // Windows' uneven transparent-window animation between the two layouts.
+  window.setBounds({ x, y, width, height }, false);
 }
 
 function setWindowMode(mode: WindowMode): void {
+  currentWindowMode = mode;
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const size = WINDOW_SIZES[mode];
   anchorWindow(mainWindow, size.width, size.height);
@@ -100,6 +120,7 @@ function openWindowMode(mode: WindowMode): void {
 
 function createMainWindow(): BrowserWindow {
   const mode: WindowMode = requestedWindowMode() ?? (config.setupComplete ? "pet" : "onboarding");
+  currentWindowMode = mode;
   const size = WINDOW_SIZES[mode];
   const { workArea } = screen.getPrimaryDisplay();
   const window = new BrowserWindow({
@@ -251,6 +272,7 @@ function bootstrap(): BootstrapData {
   return {
     config,
     runtime: runtime.snapshot,
+    speech: speech.snapshot,
     platform: process.platform,
     appVersion: app.getVersion(),
   };
@@ -290,12 +312,23 @@ function registerIpc(): void {
   ipcMain.handle("desktop-pet:save-config", async (_event, nextConfig: RuntimeConfig) => {
     config = await configStore.write(nextConfig);
     runtime.updateConfig(config);
+    speech.updateConfig(config.speech);
+    configureSpeechShortcut();
     return bootstrap();
   });
   ipcMain.handle("runtime:probe", (_event, executable?: string) => probeExecutable(executable));
   ipcMain.handle("runtime:start", () => runtime.start());
   ipcMain.handle("runtime:stop", () => runtime.stop());
   ipcMain.handle("runtime:restart", () => runtime.restart());
+  ipcMain.handle("speech:prepare", (_event, force?: boolean) => speech.prepare(force === true));
+  ipcMain.handle("speech:start", () => speech.start("button"));
+  ipcMain.handle("speech:stop", (_event, sessionId: string) => speech.stop(sessionId));
+  ipcMain.handle("speech:cancel", (_event, sessionId: string) => speech.cancel(sessionId));
+  ipcMain.on("speech:composer-focus", (event, focused: boolean) => {
+    if (mainWindow && event.sender === mainWindow.webContents) {
+      speechComposerFocused = focused === true;
+    }
+  });
   ipcMain.handle("dialog:pick-executable", () =>
     pickFile("选择 llama.cpp 可执行文件", [
       { name: "llama.cpp", extensions: process.platform === "win32" ? ["exe"] : ["*"] },
@@ -319,6 +352,113 @@ function registerIpc(): void {
   ipcMain.on("chat:abort", (_event, requestId: string) => runtime.abortChat(requestId));
 }
 
+function sendSpeechState(state: SpeechState): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("speech:state", state);
+}
+
+function sendSpeechEvent(event: SpeechEvent): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("speech:event", event);
+}
+
+function revealGlobalDictation(): void {
+  if (!config.setupComplete) return;
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return;
+  setWindowMode("pet");
+  mainWindow.webContents.send("app:open-view", "pet");
+  if (!mainWindow.isVisible()) {
+    mainWindow.showInactive();
+  }
+  mainWindow.moveTop();
+}
+
+async function insertGlobalDictation(event: Extract<SpeechEvent, { type: "final" }>): Promise<void> {
+  if (!shortcutHook) throw new Error("全局键盘服务未启动，无法写入当前输入框。");
+  const { UiohookKey } = require("uiohook-napi") as typeof import("uiohook-napi");
+  await pasteDictationText(event.text, clipboard, shortcutHook, {
+    paste: UiohookKey.V,
+    control: UiohookKey.Ctrl,
+  });
+}
+
+function handleSpeechEvent(event: SpeechEvent): void {
+  sendSpeechEvent(event);
+  if (!("sessionId" in event) || !event.sessionId || !globalDictationSessions.has(event.sessionId)) return;
+
+  if (event.type === "final") {
+    globalDictationSessions.delete(event.sessionId);
+    void insertGlobalDictation(event)
+      .then(() => sendSpeechEvent({ type: "inserted", sessionId: event.sessionId, text: event.text }))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("Failed to insert global dictation:", error);
+        sendSpeechEvent({ type: "insertion-error", sessionId: event.sessionId, message });
+      });
+  } else if (event.type === "cancelled" || event.type === "error") {
+    globalDictationSessions.delete(event.sessionId);
+  }
+}
+
+function registerShortcutListeners(): void {
+  if (!shortcutHook || shortcutListenersRegistered) return;
+  const { UiohookKey } = require("uiohook-napi") as typeof import("uiohook-napi");
+  shortcutHook.on("keydown", (event) => {
+    if (event.keycode !== UiohookKey.F8 || shortcutPressed) return;
+    shortcutPressed = true;
+    shortcutReleasedBeforeStart = false;
+    if (!config.setupComplete || !config.speech.enabled || !config.speech.globalShortcut) return;
+    if (["downloading", "loading", "recording", "transcribing"].includes(speech.snapshot.phase)) return;
+    const source = resolveShortcutSpeechSource(
+      speechComposerFocused,
+      mainWindow?.isFocused() === true,
+    );
+    if (source === "shortcut") revealGlobalDictation();
+    void speech
+      .start(source)
+      .then((result) => {
+        shortcutSessionId = result?.sessionId;
+        if (shortcutSessionId && source === "shortcut") {
+          globalDictationSessions.add(shortcutSessionId);
+        }
+        if (shortcutReleasedBeforeStart && shortcutSessionId) {
+          const sessionId = shortcutSessionId;
+          shortcutSessionId = undefined;
+          return speech.stop(sessionId);
+        }
+        return undefined;
+      })
+      .catch((error) => console.error("Failed to start F8 speech input:", error));
+  });
+  shortcutHook.on("keyup", (event) => {
+    if (event.keycode !== UiohookKey.F8) return;
+    shortcutPressed = false;
+    shortcutReleasedBeforeStart = true;
+    const sessionId = shortcutSessionId;
+    shortcutSessionId = undefined;
+    if (sessionId) void speech.stop(sessionId).catch((error) => console.error("Failed to stop F8 speech input:", error));
+  });
+  shortcutListenersRegistered = true;
+}
+
+function configureSpeechShortcut(): void {
+  const shouldRun = config.setupComplete && config.speech.enabled && config.speech.globalShortcut;
+  if (shouldRun && !shortcutHook) {
+    try {
+      shortcutHook = (require("uiohook-napi") as typeof import("uiohook-napi")).uIOhook;
+      registerShortcutListeners();
+    } catch (error) {
+      console.error("Could not load the F8 speech shortcut:", error);
+      return;
+    }
+  }
+  if (shouldRun && shortcutHook && !shortcutHookStarted) {
+    shortcutHook.start();
+    shortcutHookStarted = true;
+  } else if (!shouldRun && shortcutHook && shortcutHookStarted) {
+    shortcutHook.stop();
+    shortcutHookStarted = false;
+  }
+}
+
 async function initialize(): Promise<void> {
   if (process.env.DESK_PET_USER_DATA) {
     app.setPath("userData", process.env.DESK_PET_USER_DATA);
@@ -329,15 +469,35 @@ async function initialize(): Promise<void> {
   } catch (error) {
     console.warn("Could not migrate legacy desk-pet data:", error);
   }
+  const modelDirectory = resolveModelDirectory({
+    appPath: app.getAppPath(),
+    executablePath: app.getPath("exe"),
+    isPackaged: app.isPackaged,
+    override: process.env.DESK_PET_MODEL_DIRECTORY,
+  });
+  try {
+    await migrateModelDirectory(join(app.getPath("userData"), "models"), modelDirectory);
+  } catch (error) {
+    console.warn("Could not migrate the desk-pet model cache:", error);
+  }
   configStore = new ConfigStore();
   config = await configStore.read();
   const modelDownloader = new ManagedModelDownloader(
-    join(app.getPath("userData"), "models"),
+    modelDirectory,
     (input, init) => net.fetch(input, init),
   );
   runtime = new LlamaRuntime(config, (modelId, options) =>
     modelDownloader.resolve(modelId, options),
   );
+  speech = new SpeechRuntime(
+    config.speech,
+    new SpeechModelManager(
+      modelDirectory,
+      app.isPackaged ? join(process.resourcesPath, "scripts") : join(app.getAppPath(), "scripts"),
+    ),
+  );
+  speech.on("state", sendSpeechState);
+  speech.on("event", handleSpeechEvent);
   runtime.on("state", (state) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("runtime:state", state);
@@ -346,7 +506,12 @@ async function initialize(): Promise<void> {
 
   registerIpc();
   mainWindow = createMainWindow();
+  mainWindow.on("blur", () => {
+    speechComposerFocused = false;
+  });
   tray = createTray();
+  configureSpeechShortcut();
+  void speech.initializeAvailability();
 
   globalShortcut.register("CommandOrControl+Shift+M", () => {
     if (mainWindow?.isVisible()) mainWindow.hide();
@@ -375,8 +540,11 @@ app.on("activate", () => showWindow());
 app.on("before-quit", () => {
   isQuitting = true;
   globalShortcut.unregisterAll();
+  if (shortcutHookStarted) shortcutHook?.stop();
+  shortcutHookStarted = false;
   tray?.destroy();
   void runtime?.stop();
+  void speech?.dispose();
 });
 app.on("window-all-closed", () => {
   // The tray keeps the pet alive until the user explicitly quits.

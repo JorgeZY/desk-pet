@@ -1,23 +1,28 @@
-import type { RuntimePhase } from "../../shared/types";
-
-export type PetMood = "idle" | "thinking" | "talking" | "sleeping" | "sad";
+export type PetMood =
+  | "idle"
+  | "thinking"
+  | "talking"
+  | "sleeping"
+  | "sad"
+  | "listening"
+  | "transcribing";
 
 interface PetProps {
   mood: PetMood;
-  phase: RuntimePhase;
   compact?: boolean;
   onClick?: () => void;
+  windowDrag?: boolean;
 }
 
-export function Pet({ mood, phase, compact = false, onClick }: PetProps) {
+export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetProps) {
   return (
     <button
-      className={`pet ${compact ? "pet--compact" : ""} mood-${mood}`}
+      className={`pet ${compact ? "pet--compact" : ""} ${windowDrag ? "pet--window-drag" : ""} mood-${mood}`}
       type="button"
       onClick={onClick}
-      aria-label="打开 desk-pet 对话"
+      aria-label={windowDrag ? "拖动桌宠窗口" : "打开 desk-pet 对话"}
     >
-      <span className={`runtime-orb phase-${phase}`} aria-hidden="true" />
+      {windowDrag && <span className="pet__drag-zone" aria-hidden="true" />}
       <svg viewBox="0 0 260 240" role="img" aria-label="橘色桌宠小猫">
         <defs>
           <linearGradient id="fur" x1="0" y1="0" x2="1" y2="1">
@@ -86,6 +91,18 @@ export function Pet({ mood, phase, compact = false, onClick }: PetProps) {
           <circle cx="207" cy="63" r="5" />
           <circle cx="221" cy="46" r="7" />
           <circle cx="239" cy="24" r="10" />
+        </g>
+        <g className="voice-waves" fill="none" stroke="#58b89a" strokeLinecap="round">
+          <path d="M44 78c-8 8-8 20 0 28" strokeWidth="5" />
+          <path d="M31 68c-15 15-15 38 0 53" strokeWidth="4" />
+          <path d="M216 78c8 8 8 20 0 28" strokeWidth="5" />
+          <path d="M229 68c15 15 15 38 0 53" strokeWidth="4" />
+        </g>
+        <g className="transcribe-card">
+          <rect x="181" y="14" width="65" height="50" rx="11" fill="#fff8eb" stroke="#eda371" strokeWidth="3" />
+          <path className="transcribe-line line-1" d="M194 28h37" />
+          <path className="transcribe-line line-2" d="M194 39h29" />
+          <path className="transcribe-line line-3" d="M194 50h34" />
         </g>
       </svg>
     </button>

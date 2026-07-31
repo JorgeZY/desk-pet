@@ -39,6 +39,20 @@ describe("runtime config", () => {
     expect(config.contextSize).toBe(131072);
     expect(config.temperature).toBe(0);
     expect(config.threads).toBe(1);
+    expect(config.speech.threads).toBe(2);
+  });
+
+  it("migrates speech defaults and clamps speech threads", () => {
+    const migrated = normalizeConfig({ ...DEFAULT_CONFIG, speech: undefined });
+    expect(migrated.speech).toEqual(DEFAULT_CONFIG.speech);
+
+    const configured = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      speech: { ...DEFAULT_CONFIG.speech, enabled: false, globalShortcut: false, threads: 99 },
+    });
+    expect(configured.speech.enabled).toBe(false);
+    expect(configured.speech.globalShortcut).toBe(false);
+    expect(configured.speech.threads).toBe(16);
   });
 
   it("requires a GGUF file in local mode", () => {
