@@ -35,6 +35,7 @@ desk-pet 是一只住在桌面上的 AI 橘猫，名字叫「团子」。平时�
 - 💬 **两种聊天姿势**：桌宠状态快速聊一句，或者展开完整会话
 - 🧶 **记得刚才聊过什么**：快捷对话和完整会话共享本地历史与上下文
 - ✨ **边想边说**：支持流式回答、停止生成和可折叠的思考内容
+- 🎙️ **按住就能说**：聊天按钮写入聊天草稿；全局 `F8` 可向当前前台输入框输入，流式文字显示在橘猫气泡中
 - 🛠️ **自己照顾 llama.cpp**：检测可执行文件并管理本地推理子进程
 - 📦 **模型不绑死**：支持推荐的 Hugging Face GGUF 和已有本地模型
 - 🍚 **自己找猫粮**：自动下载、缓存、断点续传，并在 ModelScope /
@@ -63,6 +64,7 @@ cd desk-pet
 - Windows 10/11 x64（当前主要验证环境）
 - 较新版本的 `llama` 或 `llama-server`
 - 足够放下 GGUF 模型的磁盘空间
+- 默认麦克风，以及约 450 MB 的本地语音模型空间（按需下载）
 - 自动下载模型时可访问模型仓库的网络
 
 Windows 可以通过 winget 安装 llama.cpp：
@@ -94,6 +96,7 @@ npm run dev
 日常相处方式也很简单：
 
 - 在桌宠下方输入一句话，进行快捷对话。
+- 按住聊天框里的麦克风按钮可写入聊天草稿；当 Quick Chat 或完整聊天输入框已有光标时，按住 `F8` 等同于按住该麦克风按钮。在其他应用的输入框中按住 `F8`，松开后识别结果会自动粘贴，识别过程显示在橘猫气泡中。
 - 点击桌宠或右上角箭头，展开完整会话。
 - 右键托盘图标，开始聊天、打开设置、重启模型或退出应用。
 - 在设置中随时换模型——团子可能认床，但不认模型。
@@ -121,8 +124,28 @@ llama-server `
 ```
 
 内置推荐模型不会把下载委托给 `llama serve -hf`，这样可以避开它无法读取系统代理时的
-`HTTPLIB failed: Could not establish connection`。模型缓存位于 Electron
-`userData/models/`；Windows 打包版默认路径是 `%APPDATA%\desk-pet\models`。
+`HTTPLIB failed: Could not establish connection`。模型缓存位于项目根目录的
+`models/`；打包运行时则位于可执行文件旁的 `models/`。从旧版本升级时，应用
+会在新目录不存在的情况下复制原有 `userData/models/` 缓存，避免重复下载。
+
+语音模型也使用同一个根目录，分别保存在 `models/speech/streaming-paraformer-bilingual-zh-en/`
+和 `models/speech/sense-voice-zh-en-ja-ko-yue-int8/`。首次使用会先征求确认，再通过
+内置 PowerShell 脚本从 Sherpa-ONNX 官方发布地址下载并调用系统 `tar` 解压。下载、解压、
+录音和识别均不使用 `userData` 或云端服务。开发者也可以提前运行：
+
+流式 Paraformer 明确加载并只保留 `encoder.int8.onnx` 与 `decoder.int8.onnx`；官方归档中
+附带但未使用的 FP32 副本会在安装或下次启动时自动清理。
+
+```powershell
+npm run models:speech
+```
+
+这套脚本流程参考了
+[opencode-stt/download-models.ps1](https://github.com/JorgeZY/opencode-stt/blob/main/scripts/download-models.ps1)
+与
+[download-streaming-model.ps1](https://github.com/JorgeZY/opencode-stt/blob/main/scripts/download-streaming-model.ps1)，
+但最终模型改为 Sherpa Node 可直接读取的 SenseVoice INT8 版本，因此不需要 Python 或
+`funasr-onnx`。
 
 ## 🧑‍💻 铲屎官开发区
 
@@ -145,7 +168,8 @@ React renderer
   ▼
 Electron main
   ├─ 配置、托盘、窗口与全局快捷键
-  └─ llama.cpp 子进程生命周期 + SSE 翻译
+  ├─ llama.cpp 子进程生命周期 + SSE 翻译
+  └─ F8 / 麦克风 + Sherpa-ONNX 双模型语音识别
           │ 127.0.0.1:18766
           ▼
       llama / llama-server
@@ -162,7 +186,9 @@ Electron main
 - 聊天请求只发往 `http://127.0.0.1:<port>`。
 - 对话历史保存在 Electron renderer 的本地存储中。
 - 配置保存在 Electron `userData/config.json`。
-- 自动下载只访问 ModelScope / Hugging Face 模型仓库，推理和聊天仍在本机进行。
+- GGUF 自动下载只访问 ModelScope / Hugging Face，语音模型只访问 sherpa-onnx 的 GitHub
+  Releases；推理、录音和聊天仍在本机进行。
+- 语音 PCM 只在录音会话期间保存在内存，不会写入文件或发送到云端。全局 `F8` 完成识别后会短暂使用系统剪贴板模拟粘贴，并在粘贴后恢复原剪贴板内容；应用内麦克风按钮不使用系统剪贴板。
 - 项目不需要 OpenAI 或其他云 API Key。
 - Electron renderer 启用了 `contextIsolation` 与 sandbox，不开放 Node 权限。
 

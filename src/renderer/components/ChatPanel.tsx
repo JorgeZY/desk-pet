@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChatEvent, ChatMessage, RuntimeState } from "../../shared/types";
+import type { ChatEvent, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
 import { readChatHistory, writeChatHistory } from "../chat-history";
 import { Pet, type PetMood } from "./Pet";
 import { RuntimeBadge } from "./RuntimeBadge";
+import { VoiceButton } from "./VoiceButton";
 
 interface ChatPanelProps {
   runtime: RuntimeState;
+  speech: SpeechState;
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onPrepareSpeech: () => Promise<void>;
+  onStartSpeech: () => Promise<string | undefined>;
+  onStopSpeech: (sessionId: string) => Promise<void>;
+  onCancelSpeech: (sessionId: string) => Promise<void>;
   onClose: () => void;
   onSettings: () => void;
   onStartRuntime: () => Promise<void>;
@@ -13,12 +21,18 @@ interface ChatPanelProps {
 
 export function ChatPanel({
   runtime,
+  speech,
+  draft,
+  onDraftChange,
+  onPrepareSpeech,
+  onStartSpeech,
+  onStopSpeech,
+  onCancelSpeech,
   onClose,
   onSettings,
   onStartRuntime,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(readChatHistory);
-  const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
   const assistantByRequest = useRef(new Map<string, string>());
@@ -78,6 +92,8 @@ export function ChatPanel({
   );
 
   const mood: PetMood = useMemo(() => {
+    if (speech.phase === "recording") return "listening";
+    if (speech.phase === "transcribing") return "transcribing";
     if (runtime.phase === "error") return "sad";
     if (
       runtime.phase === "starting" ||
@@ -87,10 +103,10 @@ export function ChatPanel({
       return "thinking";
     if (messages.at(-1)?.role === "assistant") return "talking";
     return "idle";
-  }, [activeRequest, messages, runtime.phase]);
+  }, [activeRequest, messages, runtime.phase, speech.phase]);
 
   const send = () => {
-    const text = input.trim();
+    const text = draft.trim();
     if (!text || activeRequest || runtime.phase !== "ready") return;
     const requestId = crypto.randomUUID();
     const user: ChatMessage = {
@@ -108,7 +124,7 @@ export function ChatPanel({
     const nextMessages = [...messages, user];
     assistantByRequest.current.set(requestId, assistant.id);
     setMessages([...nextMessages, assistant]);
-    setInput("");
+    onDraftChange("");
     setActiveRequest(requestId);
     window.desktopPet.startChat({
       requestId,
@@ -161,7 +177,7 @@ export function ChatPanel({
       <section className="chat-log" ref={scrollRef}>
         {messages.length === 0 ? (
           <div className="empty-chat">
-            <Pet mood={mood} phase={runtime.phase} compact />
+            <Pet mood={mood} compact />
             <h2>今天想聊点什么？</h2>
             <p></p>
             <div className="suggestion-grid">
@@ -173,7 +189,7 @@ export function ChatPanel({
                 <button
                   key={suggestion}
                   type="button"
-                  onClick={() => setInput(suggestion)}
+                  onClick={() => onDraftChange(suggestion)}
                 >
                   {suggestion}
                 </button>
@@ -245,6 +261,19 @@ export function ChatPanel({
         </section>
       )}
 
+      {(speech.phase === "recording" || speech.phase === "transcribing") && (
+        <section className={`voice-pet-indicator phase-${speech.phase}`} aria-live="polite">
+          <Pet
+            mood={speech.phase === "recording" ? "listening" : "transcribing"}
+            compact
+          />
+          <div>
+            <b>{speech.phase === "recording" ? "团子在认真听" : "团子正在转成文字"}</b>
+            <span>{speech.message}</span>
+          </div>
+        </section>
+      )}
+
       <footer className="composer">
         <div className="composer__toolbar">
           <button
@@ -269,15 +298,29 @@ export function ChatPanel({
         <div className="composer__input">
           <textarea
             rows={2}
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
+            value={draft}
+            onChange={(event) => onDraftChange(event.target.value)}
+            onFocus={() => window.desktopPet.setSpeechComposerFocused(true)}
+            onBlur={() => window.desktopPet.setSpeechComposerFocused(false)}
             onKeyDown={handleKeyDown}
             placeholder={
-              runtime.phase === "ready"
+              speech.phase === "recording"
+                ? "正在听你说话…"
+                : speech.phase === "transcribing"
+                  ? "团子正在整理语音…"
+                  : runtime.phase === "ready"
                 ? "和团子说点什么…"
                 : "等待本地模型就绪…"
             }
-            disabled={runtime.phase !== "ready"}
+            disabled={runtime.phase !== "ready" || speech.phase === "recording" || speech.phase === "transcribing"}
+          />
+          <VoiceButton
+            speech={speech}
+            compact
+            onPrepare={onPrepareSpeech}
+            onStart={onStartSpeech}
+            onStop={onStopSpeech}
+            onCancel={onCancelSpeech}
           />
           {activeRequest ? (
             <button
@@ -293,7 +336,7 @@ export function ChatPanel({
               className="send-button"
               type="button"
               onClick={send}
-              disabled={!input.trim() || runtime.phase !== "ready"}
+              disabled={!draft.trim() || runtime.phase !== "ready" || speech.phase === "recording" || speech.phase === "transcribing"}
               aria-label="发送"
             >
               ↑
@@ -301,7 +344,7 @@ export function ChatPanel({
           )}
         </div>
         <small className="privacy-note">
-          本地生成可能不准确，请核实重要信息
+          AI生成可能不准确，请核实重要信息
         </small>
       </footer>
     </main>

@@ -1,9 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatEvent, ChatMessage, RuntimeState } from "../../shared/types";
+import type { ChatEvent, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
 import { appendChatMessages, readChatHistory, updateChatMessage } from "../chat-history";
+import { VoiceButton } from "./VoiceButton";
 
 interface QuickChatProps {
   runtime: RuntimeState;
+  speech: SpeechState;
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onPrepareSpeech: () => Promise<void>;
+  onStartSpeech: () => Promise<string | undefined>;
+  onStopSpeech: (sessionId: string) => Promise<void>;
+  onCancelSpeech: (sessionId: string) => Promise<void>;
   onOpenChat: () => void;
   onStartRuntime: () => Promise<void>;
 }
@@ -17,14 +25,26 @@ function runtimeHint(runtime: RuntimeState): string {
   return "不用展开窗口，直接和我聊一句。";
 }
 
-export function QuickChat({ runtime, onOpenChat, onStartRuntime }: QuickChatProps) {
-  const [input, setInput] = useState("");
+export function QuickChat({
+  runtime,
+  speech,
+  draft,
+  onDraftChange,
+  onPrepareSpeech,
+  onStartSpeech,
+  onStopSpeech,
+  onCancelSpeech,
+  onOpenChat,
+  onStartRuntime,
+}: QuickChatProps) {
   const [reply, setReply] = useState("");
   const [starting, setStarting] = useState(false);
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
   const activeRequestRef = useRef<string | null>(null);
   const assistantIdRef = useRef<string | null>(null);
   const replyRef = useRef("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const shouldRestoreFocusRef = useRef(false);
 
   const changeActiveRequest = (requestId: string | null) => {
     activeRequestRef.current = requestId;
@@ -82,8 +102,16 @@ export function QuickChat({ runtime, onOpenChat, onStartRuntime }: QuickChatProp
     };
   }, []);
 
+  useEffect(() => {
+    if (activeRequest || !shouldRestoreFocusRef.current || runtime.phase !== "ready") return;
+
+    shouldRestoreFocusRef.current = false;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [activeRequest, runtime.phase]);
+
   const submit = () => {
-    const content = input.trim();
+    const content = draft.trim();
     if (!content || runtime.phase !== "ready" || activeRequestRef.current) return;
     const requestId = crypto.randomUUID();
     const user: ChatMessage = {
@@ -102,8 +130,9 @@ export function QuickChat({ runtime, onOpenChat, onStartRuntime }: QuickChatProp
     appendChatMessages([user, assistant]);
     assistantIdRef.current = assistant.id;
     replyRef.current = "";
+    shouldRestoreFocusRef.current = true;
     changeActiveRequest(requestId);
-    setInput("");
+    onDraftChange("");
     setReply("");
     window.desktopPet.startChat({
       requestId,
@@ -146,12 +175,14 @@ export function QuickChat({ runtime, onOpenChat, onStartRuntime }: QuickChatProp
 
   const isGenerating = activeRequest !== null;
   const ready = runtime.phase === "ready";
+  const speechBusy = speech.phase === "recording" || speech.phase === "transcribing";
+  const visibleReply = speechBusy ? speech.message : reply || runtimeHint(runtime);
 
   return (
     <section className={`quick-chat ${reply ? "quick-chat--has-reply" : ""}`}>
       <div className="quick-chat__message">
         <span className="quick-chat__avatar">团</span>
-        <p title={reply || runtimeHint(runtime)}>{reply || runtimeHint(runtime)}</p>
+        <p title={visibleReply}>{visibleReply}</p>
         <button type="button" onClick={openFullChat} aria-label="打开完整对话" title="打开完整对话">↗</button>
       </div>
 
@@ -164,16 +195,27 @@ export function QuickChat({ runtime, onOpenChat, onStartRuntime }: QuickChatProp
           }}
         >
           <input
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder={isGenerating ? "正在回答…" : "快速聊一句…"}
-            disabled={isGenerating}
+            ref={inputRef}
+            value={draft}
+            onChange={(event) => onDraftChange(event.target.value)}
+            onFocus={() => window.desktopPet.setSpeechComposerFocused(true)}
+            onBlur={() => window.desktopPet.setSpeechComposerFocused(false)}
+            placeholder={speech.phase === "recording" ? "正在听你说…" : isGenerating ? "正在回答…" : "快速聊一句…"}
+            disabled={speechBusy}
             aria-label="快捷对话"
+          />
+          <VoiceButton
+            speech={speech}
+            compact
+            onPrepare={onPrepareSpeech}
+            onStart={onStartSpeech}
+            onStop={onStopSpeech}
+            onCancel={onCancelSpeech}
           />
           <button
             type={isGenerating ? "button" : "submit"}
             onClick={isGenerating ? stop : undefined}
-            disabled={!isGenerating && !input.trim()}
+            disabled={speechBusy || (!isGenerating && !draft.trim())}
             aria-label={isGenerating ? "停止生成" : "发送"}
           >
             {isGenerating ? "■" : "↑"}

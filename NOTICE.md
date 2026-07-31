@@ -13,3 +13,11 @@ Runtime and model dependencies are obtained separately:
   downloading or redistributing weights.
 - Electron, React, Vite, and other npm dependencies retain their respective
   licenses.
+- The local speech flow is based on the architecture of
+  [JorgeZY/opencode-stt](https://github.com/JorgeZY/opencode-stt). No Python
+  runtime or clipboard automation from that project is bundled.
+- `sherpa-onnx-node` and its native runtime are Apache-2.0. `uiohook-napi` is
+  MIT and `node-cpal` is ISC; their notices remain with the npm packages.
+- Streaming Paraformer and SenseVoice weights are downloaded from the official
+  sherpa-onnx releases into `models/speech/`. Model weights retain their own
+  upstream terms and are not redistributed in this repository.

@@ -14,6 +14,9 @@
     "build": "npm run typecheck && npm run build:main && npm run build:renderer",
     "test": "vitest run --root .",
     "check": "npm run typecheck && npm test && npm run build",
+    "models:speech:streaming": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/download-streaming-model.ps1 -ModelRoot models",
+    "models:speech:final": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/download-models.ps1 -ModelRoot models",
+    "models:speech": "npm run models:speech:streaming && npm run models:speech:final",
     "start": "electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis"
@@ -28,8 +31,11 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "node-cpal": "^0.1.1",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "sherpa-onnx-node": "^1.13.4",
+    "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
@@ -50,11 +56,27 @@
     "productName": "desk-pet",
     "icon": "assets/app-icon.ico",
     "asar": true,
+    "asarUnpack": [
+      "node_modules/node-cpal/**/*",
+      "node_modules/uiohook-napi/**/*",
+      "node_modules/sherpa-onnx-node/**/*",
+      "node_modules/sherpa-onnx-win-x64/**/*"
+    ],
     "electronDist": "node_modules/electron/dist",
     "npmRebuild": false,
     "directories": {
       "output": "release"
     },
+    "extraResources": [
+      {
+        "from": "scripts",
+        "to": "scripts",
+        "filter": [
+          "download-models.ps1",
+          "download-streaming-model.ps1"
+        ]
+      }
+    ],
     "files": [
       "dist-electron/**/*",
       "dist-renderer/**/*",

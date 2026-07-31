@@ -80,7 +80,7 @@ export function Onboarding({ initialConfig, platform, onComplete }: OnboardingPr
       <section className="onboarding__body">
         {step === 0 && (
           <div className="welcome-step">
-            <Pet mood="idle" phase="stopped" compact />
+            <Pet mood="idle" compact />
             <div className="welcome-copy">
               <p>
                 团子是一只完全运行在你电脑上的 AI 桌宠。日常对话不会发送给云端服务，也不需要 API Key。

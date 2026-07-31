@@ -33,6 +33,18 @@ body,
   background: transparent;
 }
 
+#root {
+  opacity: 1;
+  transform: scale(1);
+  transform-origin: center;
+  transition: opacity 110ms ease, transform 140ms ease;
+}
+
+html.view-transitioning #root {
+  opacity: 0;
+  transform: scale(0.985);
+}
+
 button,
 input,
 textarea,
@@ -291,6 +303,11 @@ select {
   display: none;
 }
 
+.voice-waves,
+.transcribe-card {
+  display: none;
+}
+
 .mood-thinking .thought-dots {
   display: block;
 }
@@ -321,6 +338,64 @@ select {
   animation: happy-bounce 1.7s ease-in-out infinite;
 }
 
+.mood-listening .voice-waves {
+  display: block;
+}
+
+.mood-listening .voice-waves path {
+  animation: voice-wave 920ms ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.mood-listening .voice-waves path:nth-child(even) {
+  animation-delay: 160ms;
+}
+
+.mood-listening .pet-head {
+  animation: listen-tilt 1.4s ease-in-out infinite;
+}
+
+.mood-listening .pet-body {
+  animation: listen-breathe 900ms ease-in-out infinite;
+}
+
+.mood-listening .pet-tail {
+  animation-duration: 1.1s;
+}
+
+.mood-transcribing .transcribe-card {
+  display: block;
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: transcribe-card-float 1.3s ease-in-out infinite;
+}
+
+.mood-transcribing .transcribe-line {
+  fill: none;
+  stroke: #db7b52;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 40;
+  animation: transcribe-write 1.3s ease-in-out infinite;
+}
+
+.mood-transcribing .line-2 {
+  animation-delay: 160ms;
+}
+
+.mood-transcribing .line-3 {
+  animation-delay: 320ms;
+}
+
+.mood-transcribing .pet-eyes ellipse {
+  ry: 1.8;
+}
+
+.mood-transcribing .pet-head {
+  animation: transcribe-focus 1.25s ease-in-out infinite;
+}
+
 .mood-sleeping .pet-eyes ellipse,
 .mood-sad .pet-eyes ellipse {
   ry: 1.6;
@@ -340,33 +415,6 @@ select {
 
 .pet--compact {
   width: 170px;
-}
-
-.runtime-orb {
-  position: absolute;
-  z-index: 3;
-  top: 26%;
-  right: 12%;
-  width: 13px;
-  height: 13px;
-  background: #a1948f;
-  border: 3px solid #fff8ec;
-  border-radius: 50%;
-  box-shadow: 0 2px 7px rgba(72, 48, 41, 0.2);
-}
-
-.runtime-orb.phase-ready {
-  background: #51ad81;
-}
-
-.runtime-orb.phase-starting,
-.runtime-orb.phase-downloading {
-  background: #eaa65e;
-  animation: orb-pulse 1.2s infinite;
-}
-
-.runtime-orb.phase-error {
-  background: #cf6663;
 }
 
 @keyframes tail-wag {
@@ -401,6 +449,37 @@ select {
 
 @keyframes orb-pulse {
   50% { box-shadow: 0 0 0 6px rgba(234, 166, 94, 0.18); }
+}
+
+@keyframes voice-wave {
+  0%, 100% { opacity: 0.25; transform: scale(0.82); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+@keyframes listen-tilt {
+  0%, 100% { transform: rotate(-3deg) translateY(-2px); }
+  50% { transform: rotate(3deg) translateY(-5px); }
+}
+
+@keyframes listen-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.025, 0.985); }
+}
+
+@keyframes transcribe-card-float {
+  0%, 100% { transform: translateY(2px) rotate(1deg); }
+  50% { transform: translateY(-3px) rotate(-1deg); }
+}
+
+@keyframes transcribe-write {
+  0%, 18% { stroke-dashoffset: 40; opacity: 0.35; }
+  55%, 88% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: -40; opacity: 0.25; }
+}
+
+@keyframes transcribe-focus {
+  0%, 100% { transform: translateY(2px); }
+  50% { transform: translateY(-2px); }
 }
 
 /* Runtime status */
@@ -1068,6 +1147,48 @@ select {
   border-top: 1px solid var(--line);
 }
 
+.voice-pet-indicator {
+  display: flex;
+  min-height: 72px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 18px 0;
+  color: #6f554c;
+  background: linear-gradient(90deg, rgba(225, 247, 239, 0.92), rgba(255, 248, 235, 0.92));
+  border-top: 1px solid rgba(83, 166, 137, 0.18);
+}
+
+.voice-pet-indicator.phase-transcribing {
+  background: linear-gradient(90deg, rgba(255, 241, 217, 0.94), rgba(255, 248, 235, 0.92));
+  border-top-color: rgba(225, 157, 91, 0.2);
+}
+
+.voice-pet-indicator .pet {
+  width: 82px;
+  margin: -17px -3px -13px -8px;
+  pointer-events: none;
+}
+
+.voice-pet-indicator div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.voice-pet-indicator b {
+  font-size: 11px;
+}
+
+.voice-pet-indicator span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer__toolbar {
   display: flex;
   align-items: center;
@@ -1104,9 +1225,83 @@ select {
 
 .composer textarea {
   min-height: 65px;
-  padding: 11px 48px 10px 12px;
+  padding: 11px 86px 10px 12px;
   resize: none;
   font-size: 12px;
+}
+
+.voice-button {
+  position: relative;
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  overflow: hidden;
+  color: #8a5d4e;
+  background: #fff0e4;
+  border: 1px solid rgba(190, 113, 84, 0.18);
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 800;
+  user-select: none;
+  touch-action: none;
+}
+
+.voice-button--compact {
+  width: 31px;
+  min-width: 31px;
+  padding: 0;
+}
+
+.voice-button__icon {
+  color: #da7959;
+  font-size: 10px;
+}
+
+.voice-button.phase-recording {
+  color: #287c68;
+  background: #e1f7ef;
+  border-color: #9ddac6;
+  box-shadow: 0 0 0 3px rgba(88, 184, 154, 0.12);
+}
+
+.voice-button.phase-recording .voice-button__icon {
+  color: #3ca884;
+  animation: voice-recording-pulse 780ms ease-in-out infinite;
+}
+
+.voice-button.phase-transcribing {
+  background: #fff1d9;
+}
+
+.voice-button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.voice-button__level {
+  position: absolute;
+  right: 3px;
+  bottom: 4px;
+  width: 2px;
+  height: 20px;
+  background: #52b792;
+  border-radius: 2px;
+  transform-origin: center bottom;
+  transition: transform 60ms linear;
+}
+
+.composer__input > .voice-button {
+  position: absolute;
+  right: 45px;
+  bottom: 9px;
+}
+
+@keyframes voice-recording-pulse {
+  50% { transform: scale(1.45); opacity: 0.6; }
 }
 
 .send-button {
@@ -1212,6 +1407,60 @@ select {
   word-break: break-all;
 }
 
+.settings-value-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+
+.settings-value-row > div,
+.settings-info {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.settings-value-row span,
+.settings-info span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.settings-value-row strong,
+.settings-info strong {
+  overflow: hidden;
+  color: #56433d;
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.speech-settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 9px;
+}
+
+.settings-info {
+  justify-content: center;
+  padding: 9px 11px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.settings-info--path {
+  min-height: 50px;
+}
+
 .settings__footer {
   display: flex;
   flex: 0 0 auto;
@@ -1251,30 +1500,19 @@ select {
   margin-bottom: -2px;
 }
 
-.pet-drag-handle {
-  position: absolute;
-  z-index: 10;
-  top: 8px;
-  left: 50%;
-  display: flex;
-  width: 74px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  background: rgba(255, 249, 239, 0.78);
-  border: 1px solid rgba(87, 61, 53, 0.1);
-  border-radius: 999px;
-  box-shadow: 0 4px 14px rgba(68, 44, 38, 0.1);
-  transform: translateX(-50%);
-  -webkit-app-region: drag;
+.pet-stage .pet--window-drag {
+  cursor: pointer;
 }
 
-.pet-drag-handle i {
-  width: 4px;
-  height: 4px;
-  background: #b7a29b;
-  border-radius: 50%;
+.pet__drag-zone {
+  position: absolute;
+  z-index: 4;
+  right: 23%;
+  bottom: 3%;
+  left: 23%;
+  height: 47%;
+  cursor: grab;
+  -webkit-app-region: drag;
 }
 
 .pet-stage__actions {
@@ -1298,6 +1536,89 @@ select {
 .pet-stage .runtime-badge {
   background: rgba(255, 249, 239, 0.9);
   box-shadow: 0 3px 10px rgba(68, 44, 38, 0.08);
+}
+
+.global-speech-bubble {
+  position: fixed;
+  z-index: 100;
+  right: 14px;
+  bottom: 238px;
+  left: 14px;
+  display: flex;
+  min-height: 68px;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 13px;
+  color: #5f4a43;
+  background: rgba(255, 252, 246, 0.98);
+  border: 1px solid rgba(100, 71, 62, 0.12);
+  border-radius: 16px 16px 7px 16px;
+  box-shadow: 0 10px 30px rgba(71, 46, 40, 0.18);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+}
+
+.global-speech-bubble::after {
+  position: absolute;
+  right: 42px;
+  bottom: -8px;
+  width: 14px;
+  height: 14px;
+  content: "";
+  background: inherit;
+  border-right: inherit;
+  border-bottom: inherit;
+  transform: rotate(45deg);
+}
+
+.global-speech-bubble__status {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  margin-top: 3px;
+  background: #51ad8e;
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px rgba(81, 173, 142, 0.14);
+  animation: voice-recording-pulse 780ms ease-in-out infinite;
+}
+
+.global-speech-bubble.phase-transcribing .global-speech-bubble__status {
+  background: #e69a62;
+  box-shadow: 0 0 0 5px rgba(230, 154, 98, 0.14);
+}
+
+.global-speech-bubble.phase-done .global-speech-bubble__status {
+  background: #51ad8e;
+  animation: none;
+}
+
+.global-speech-bubble.phase-error .global-speech-bubble__status {
+  background: var(--red);
+  box-shadow: 0 0 0 5px rgba(196, 94, 93, 0.12);
+  animation: none;
+}
+
+.global-speech-bubble > div {
+  min-width: 0;
+}
+
+.global-speech-bubble b {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+}
+
+.global-speech-bubble p {
+  display: -webkit-box;
+  max-height: 48px;
+  margin: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.45;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .quick-chat {
@@ -1378,7 +1699,7 @@ select {
 
 .quick-chat__composer {
   display: grid;
-  grid-template-columns: 1fr 34px;
+  grid-template-columns: 1fr 34px 34px;
   gap: 6px;
 }
 
@@ -1399,6 +1720,17 @@ select {
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
+}
+
+.quick-chat__composer .voice-button {
+  min-height: 34px;
+  color: #8a5d4e;
+  background: #fff0e4;
+}
+
+.quick-chat__composer .voice-button.phase-recording {
+  color: #287c68;
+  background: #e1f7ef;
 }
 
 .quick-chat__composer button:disabled,
