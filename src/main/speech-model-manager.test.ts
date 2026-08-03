@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import {
+  discoverSpeechModels,
   resolveSpeechModelPaths,
   SpeechModelManager,
   type SpeechScriptInvocation,
@@ -92,5 +93,60 @@ describe("SpeechModelManager", () => {
       join(scriptDirectory, "download-models.ps1"),
     ]);
     expect(invocations.every((value) => value.modelRoot === directory && value.force)).toBe(true);
+  });
+
+  it("discovers and imports models from arbitrary nested folder names", async () => {
+    const directory = await temporaryDirectory();
+    const source = join(directory, "my-offline-model-backup");
+    const streaming = join(source, "anything", "realtime-files");
+    const final = join(source, "another-name", "final-files");
+    await Promise.all([fs.mkdir(streaming, { recursive: true }), fs.mkdir(final, { recursive: true })]);
+    await Promise.all([
+      fs.writeFile(join(streaming, "custom_encoder.onnx"), "fp32 encoder"),
+      fs.writeFile(join(streaming, "custom_encoder_int8.onnx"), "int8 encoder"),
+      fs.writeFile(join(streaming, "my_decoder_int8.onnx"), "int8 decoder"),
+      fs.writeFile(join(streaming, "tokens-preview.txt"), "stream tokens"),
+      fs.writeFile(join(final, "sensevoice-custom-int8.onnx"), "sense voice"),
+      fs.writeFile(join(final, "token.txt"), "final tokens"),
+    ]);
+
+    const discovered = await discoverSpeechModels(source);
+    expect(discovered.streaming.encoder).toBe(join(streaming, "custom_encoder_int8.onnx"));
+    expect(discovered.final.model).toBe(join(final, "sensevoice-custom-int8.onnx"));
+
+    const modelRoot = join(directory, "managed-models");
+    const manager = new SpeechModelManager(modelRoot, join(directory, "scripts"));
+    const paths = await manager.importFromDirectory(source);
+    await expect(fs.readFile(paths.streaming.encoder, "utf8")).resolves.toBe("int8 encoder");
+    await expect(fs.readFile(paths.streaming.decoder, "utf8")).resolves.toBe("int8 decoder");
+    await expect(fs.readFile(paths.streaming.tokens, "utf8")).resolves.toBe("stream tokens");
+    await expect(fs.readFile(paths.final.model, "utf8")).resolves.toBe("sense voice");
+    await expect(fs.readFile(paths.final.tokens, "utf8")).resolves.toBe("final tokens");
+    await expect(manager.isReady()).resolves.toBe(true);
+  });
+
+  it("rejects incomplete imports before replacing existing managed models", async () => {
+    const directory = await temporaryDirectory();
+    const modelRoot = join(directory, "managed-models");
+    const paths = resolveSpeechModelPaths(modelRoot);
+    await Promise.all([
+      fs.mkdir(paths.streaming.directory, { recursive: true }),
+      fs.mkdir(paths.final.directory, { recursive: true }),
+    ]);
+    await Promise.all([
+      fs.writeFile(paths.streaming.encoder, "existing encoder"),
+      fs.writeFile(paths.streaming.decoder, "existing decoder"),
+      fs.writeFile(paths.streaming.tokens, "existing tokens"),
+      fs.writeFile(paths.final.model, "existing model"),
+      fs.writeFile(paths.final.tokens, "existing final tokens"),
+    ]);
+    const incomplete = join(directory, "incomplete");
+    await fs.mkdir(incomplete, { recursive: true });
+    await fs.writeFile(join(incomplete, "encoder.onnx"), "missing decoder and tokens");
+
+    const manager = new SpeechModelManager(modelRoot, join(directory, "scripts"));
+    await expect(manager.importFromDirectory(incomplete)).rejects.toThrow("没有在所选目录中找到完整的");
+    await expect(fs.readFile(paths.streaming.encoder, "utf8")).resolves.toBe("existing encoder");
+    await expect(fs.readFile(paths.final.model, "utf8")).resolves.toBe("existing model");
   });
 });

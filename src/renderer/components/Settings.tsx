@@ -9,9 +9,10 @@ interface SettingsProps {
   onClose: () => void;
   onSave: (config: RuntimeConfig, restart: boolean) => Promise<void>;
   onPrepareSpeech: (force?: boolean) => Promise<void>;
+  onImportSpeech: () => Promise<void>;
 }
 
-export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPrepareSpeech }: SettingsProps) {
+export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPrepareSpeech, onImportSpeech }: SettingsProps) {
   const [config, setConfig] = useState(initialConfig);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -136,8 +137,16 @@ export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPr
             </div>
           )}
           <div className="button-row">
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={() => void onImportSpeech()}
+              disabled={speech.phase === "recording" || speech.phase === "transcribing" || speech.phase === "downloading" || speech.phase === "loading"}
+            >
+              导入本地模型
+            </button>
             {speech.phase === "not-installed" || speech.phase === "error" ? (
-              <button className="button button--secondary" type="button" onClick={() => void onPrepareSpeech(false)}>下载语音模型</button>
+              <button className="button button--quiet" type="button" onClick={() => void onPrepareSpeech(false)}>自动下载</button>
             ) : (
               <button className="button button--quiet" type="button" onClick={() => void onPrepareSpeech(true)} disabled={speech.phase !== "ready"}>重新下载模型</button>
             )}

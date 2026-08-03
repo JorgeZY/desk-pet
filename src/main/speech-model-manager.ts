@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { SpeechDownloadProgress, SpeechModelId } from "../shared/types";
 
 interface SpeechModelSpec {
@@ -50,6 +51,123 @@ export interface SpeechScriptInvocation {
 }
 
 export type SpeechScriptRunner = (invocation: SpeechScriptInvocation) => Promise<void>;
+
+export interface DiscoveredSpeechModels {
+  streaming: { encoder: string; decoder: string; tokens: string };
+  final: { model: string; tokens: string };
+}
+
+interface ScannedDirectory {
+  directory: string;
+  files: string[];
+}
+
+function modelScore(path: string, role: "encoder" | "decoder" | "final"): number {
+  const name = basename(path).toLowerCase();
+  let score = name.includes("int8") ? 100 : 0;
+  if (role === "final") {
+    if (name.includes("sensevoice") || name.includes("sense-voice")) score += 80;
+    if (name === "model.int8.onnx") score += 60;
+    else if (name === "model.onnx") score += 40;
+  } else if (name === `${role}.int8.onnx`) {
+    score += 60;
+  } else if (name === `${role}.onnx`) {
+    score += 40;
+  }
+  return score;
+}
+
+function bestFile(files: string[], role: "encoder" | "decoder" | "final"): string | undefined {
+  const candidates = files.filter((path) => {
+    const name = basename(path).toLowerCase();
+    if (!name.endsWith(".onnx")) return false;
+    if (role === "final") return !name.includes("encoder") && !name.includes("decoder");
+    return name.includes(role);
+  });
+  return candidates.sort((left, right) =>
+    modelScore(right, role) - modelScore(left, role) || left.localeCompare(right),
+  )[0];
+}
+
+function tokenFile(files: string[]): string | undefined {
+  return files
+    .filter((path) => /^tokens?.*\.txt$/iu.test(basename(path)))
+    .sort((left, right) => {
+      const leftExact = basename(left).toLowerCase() === "tokens.txt" ? 1 : 0;
+      const rightExact = basename(right).toLowerCase() === "tokens.txt" ? 1 : 0;
+      return rightExact - leftExact || left.localeCompare(right);
+    })[0];
+}
+
+async function scanDirectories(root: string): Promise<ScannedDirectory[]> {
+  const stat = await fs.stat(root).catch(() => undefined);
+  if (!stat?.isDirectory()) throw new Error(`导入目录不存在或不是文件夹：${root}`);
+  const found = new Map<string, string[]>();
+  let visited = 0;
+
+  const walk = async (directory: string, depth: number): Promise<void> => {
+    if (depth > 12) return;
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (++visited > 20_000) throw new Error("导入目录文件过多，请选择更靠近语音模型的文件夹。");
+      if (entry.isSymbolicLink()) continue;
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(path, depth + 1);
+      } else if (entry.isFile() && (/\.onnx$/iu.test(entry.name) || /^tokens?.*\.txt$/iu.test(entry.name))) {
+        const files = found.get(directory) ?? [];
+        files.push(path);
+        found.set(directory, files);
+      }
+    }
+  };
+
+  await walk(root, 0);
+  return [...found].map(([directory, files]) => ({ directory, files }));
+}
+
+export async function discoverSpeechModels(root: string): Promise<DiscoveredSpeechModels> {
+  const directories = await scanDirectories(root);
+  const streaming = directories
+    .map(({ directory, files }) => ({
+      directory,
+      encoder: bestFile(files, "encoder"),
+      decoder: bestFile(files, "decoder"),
+      tokens: tokenFile(files),
+    }))
+    .filter((value) => value.encoder && value.decoder && value.tokens)
+    .sort((left, right) => {
+      const leftScore = modelScore(left.encoder!, "encoder") + modelScore(left.decoder!, "decoder");
+      const rightScore = modelScore(right.encoder!, "encoder") + modelScore(right.decoder!, "decoder");
+      return rightScore - leftScore || left.directory.localeCompare(right.directory);
+    })[0];
+  const final = directories
+    .map(({ directory, files }) => ({
+      directory,
+      model: bestFile(files, "final"),
+      tokens: tokenFile(files),
+    }))
+    .filter((value) => value.model && value.tokens && value.directory !== streaming?.directory)
+    .sort((left, right) =>
+      modelScore(right.model!, "final") - modelScore(left.model!, "final") ||
+      left.directory.localeCompare(right.directory),
+    )[0];
+
+  const missing: string[] = [];
+  if (!streaming) missing.push("Paraformer encoder/decoder/tokens");
+  if (!final) missing.push("SenseVoice model/tokens");
+  if (missing.length) {
+    throw new Error(`没有在所选目录中找到完整的 ${missing.join(" 和 ")}。`);
+  }
+  return {
+    streaming: {
+      encoder: streaming.encoder!,
+      decoder: streaming.decoder!,
+      tokens: streaming.tokens!,
+    },
+    final: { model: final.model!, tokens: final.tokens! },
+  };
+}
 
 export function resolveSpeechModelPaths(modelDirectory: string): SpeechModelPaths {
   const root = join(modelDirectory, "speech");
@@ -166,6 +284,60 @@ export class SpeechModelManager {
     }
     return streamingReady &&
       (await hasRequiredFiles(this.paths.final.directory, SPEECH_MODELS[1].requiredFiles));
+  }
+
+  async importFromDirectory(sourceDirectory: string): Promise<SpeechModelPaths> {
+    await writableDirectory(this.modelDirectory);
+    const discovered = await discoverSpeechModels(sourceDirectory);
+    const stagingRoot = join(this.paths.root, `.import-${randomUUID()}`);
+    const stagedStreaming = join(stagingRoot, "streaming");
+    const stagedFinal = join(stagingRoot, "final");
+    const backupStreaming = `${this.paths.streaming.directory}.backup-${randomUUID()}`;
+    const backupFinal = `${this.paths.final.directory}.backup-${randomUUID()}`;
+    const replacements = [
+      { target: this.paths.streaming.directory, staged: stagedStreaming, backup: backupStreaming },
+      { target: this.paths.final.directory, staged: stagedFinal, backup: backupFinal },
+    ];
+
+    try {
+      await Promise.all([fs.mkdir(stagedStreaming, { recursive: true }), fs.mkdir(stagedFinal, { recursive: true })]);
+      await Promise.all([
+        fs.copyFile(discovered.streaming.encoder, join(stagedStreaming, "encoder.int8.onnx")),
+        fs.copyFile(discovered.streaming.decoder, join(stagedStreaming, "decoder.int8.onnx")),
+        fs.copyFile(discovered.streaming.tokens, join(stagedStreaming, "tokens.txt")),
+        fs.copyFile(discovered.final.model, join(stagedFinal, "model.int8.onnx")),
+        fs.copyFile(discovered.final.tokens, join(stagedFinal, "tokens.txt")),
+      ]);
+      const backedUp: typeof replacements = [];
+      const installed: typeof replacements = [];
+      try {
+        for (const replacement of replacements) {
+          if (await pathExists(replacement.target)) {
+            await fs.rename(replacement.target, replacement.backup);
+            backedUp.push(replacement);
+          }
+        }
+        for (const replacement of replacements) {
+          await fs.rename(replacement.staged, replacement.target);
+          installed.push(replacement);
+        }
+      } catch (error) {
+        for (const replacement of installed.reverse()) {
+          await fs.rm(replacement.target, { recursive: true, force: true }).catch(() => undefined);
+        }
+        for (const replacement of backedUp.reverse()) {
+          if (await pathExists(replacement.backup)) {
+            await fs.rename(replacement.backup, replacement.target);
+          }
+        }
+        throw error;
+      }
+      await Promise.all(replacements.map(({ backup }) => fs.rm(backup, { recursive: true, force: true })));
+      if (!(await this.isReady())) throw new Error("本地语音模型导入后校验失败。");
+      return this.paths;
+    } finally {
+      await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   async prepare(

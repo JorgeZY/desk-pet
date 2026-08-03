@@ -211,6 +211,26 @@ export class SpeechRuntime extends EventEmitter {
     }
   }
 
+  async importFromDirectory(sourceDirectory: string): Promise<SpeechState> {
+    if (this.active) throw new Error("请先结束当前录音，再导入语音模型。");
+    if (this.prepareController) throw new Error("语音模型正在下载，请稍后再导入。");
+    this.onlineRecognizer = undefined;
+    this.offlineRecognizer = undefined;
+    this.publish({ phase: "loading", message: "正在搜索并导入本地语音模型…", error: undefined, progress: undefined });
+    try {
+      await this.models.importFromDirectory(sourceDirectory);
+      if (!this.config.enabled) {
+        return this.publish({ phase: "not-installed", message: "本地语音模型已导入；启用语音后即可使用。" });
+      }
+      await this.loadRecognizers();
+      return this.publish({ phase: "ready", message: "本地语音模型已导入，可以开始说话。" });
+    } catch (error) {
+      const text = message(error);
+      this.publish({ phase: "error", message: "本地语音模型导入失败。", error: text });
+      throw error;
+    }
+  }
+
   private async loadRecognizers(): Promise<void> {
     if (this.onlineRecognizer && this.offlineRecognizer && this.cpal && this.sherpa) {
       this.publish({ phase: "ready", message: "按住麦克风或 F8 开始说话。", error: undefined });

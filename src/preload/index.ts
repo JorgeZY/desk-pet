@@ -18,6 +18,7 @@ const api: DesktopPetApi = {
   stopRuntime: () => ipcRenderer.invoke("runtime:stop"),
   restartRuntime: () => ipcRenderer.invoke("runtime:restart"),
   prepareSpeech: (force?: boolean) => ipcRenderer.invoke("speech:prepare", force),
+  importSpeechModels: () => ipcRenderer.invoke("speech:import"),
   startSpeech: () => ipcRenderer.invoke("speech:start"),
   stopSpeech: (sessionId: string) => ipcRenderer.invoke("speech:stop", sessionId),
   cancelSpeech: (sessionId: string) => ipcRenderer.invoke("speech:cancel", sessionId),

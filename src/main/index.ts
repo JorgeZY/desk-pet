@@ -321,6 +321,18 @@ function registerIpc(): void {
   ipcMain.handle("runtime:stop", () => runtime.stop());
   ipcMain.handle("runtime:restart", () => runtime.restart());
   ipcMain.handle("speech:prepare", (_event, force?: boolean) => speech.prepare(force === true));
+  ipcMain.handle("speech:import", async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: "选择包含 Paraformer 与 SenseVoice 的文件夹",
+      properties: ["openDirectory"],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    const directory = result.filePaths[0];
+    if (result.canceled || !directory) return null;
+    return speech.importFromDirectory(directory);
+  });
   ipcMain.handle("speech:start", () => speech.start("button"));
   ipcMain.handle("speech:stop", (_event, sessionId: string) => speech.stop(sessionId));
   ipcMain.handle("speech:cancel", (_event, sessionId: string) => speech.cancel(sessionId));
