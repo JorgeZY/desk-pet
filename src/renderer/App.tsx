@@ -105,6 +105,15 @@ export function App() {
     }
   };
 
+  const importSpeechModels = async () => {
+    try {
+      const state = await window.desktopPet.importSpeechModels();
+      if (state) setSpeech(state);
+    } catch (error) {
+      console.error("Failed to import local speech models:", error);
+    }
+  };
+
   useEffect(() => {
     const unsubscribeState = window.desktopPet.onSpeechState(setSpeech);
     const unsubscribeEvent = window.desktopPet.onSpeechEvent((event: SpeechEvent) => {
@@ -293,6 +302,7 @@ export function App() {
           runtime={runtime}
           speech={speech}
           onPrepareSpeech={prepareSpeech}
+          onImportSpeech={importSpeechModels}
           onClose={() => void transitionToView("pet")}
           onSave={saveSettings}
         />

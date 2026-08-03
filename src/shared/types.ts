@@ -153,6 +153,7 @@ export interface DesktopPetApi {
   stopRuntime(): Promise<RuntimeState>;
   restartRuntime(): Promise<RuntimeState>;
   prepareSpeech(force?: boolean): Promise<SpeechState>;
+  importSpeechModels(): Promise<SpeechState | null>;
   startSpeech(): Promise<SpeechStartResult | null>;
   stopSpeech(sessionId: string): Promise<SpeechState>;
   cancelSpeech(sessionId: string): Promise<SpeechState>;

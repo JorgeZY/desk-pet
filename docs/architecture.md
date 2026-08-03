@@ -74,6 +74,11 @@ ready
 `resources/scripts/` 执行。音频被重采样为 16 kHz 单声道，只在当前会话内保存在主进程内存。
 Paraformer 明确加载 INT8 encoder/decoder，并删除官方归档中未使用的 FP32 副本。
 
+除自动下载外，主进程提供本地目录导入。扫描器递归遍历用户选择的目录（跳过符号链接），
+按同目录的 encoder/decoder/tokens 结构识别 Paraformer，按 ONNX/tokens 结构识别 SenseVoice，
+不依赖源文件夹名称。候选文件优先采用 INT8 和 SenseVoice 特征名，随后复制到临时目录、
+完整校验并原子替换统一模型目录；失败时回滚，避免破坏已有模型。
+
 ```text
 not-installed → downloading → loading → ready
                                          └─ 按住按钮/F8 → recording
@@ -83,7 +88,7 @@ not-installed → downloading → loading → ready
 全局 F8 会以不激活窗口的方式显示桌宠，保持原应用输入焦点。Paraformer 临时稿实时显示在
 橘猫气泡中；SenseVoice 最终稿完成后，主进程短暂写入系统剪贴板并通过 `uiohook-napi`
 模拟 `Ctrl+V`，随后恢复原剪贴板内容。聊天框麦克风按钮仍只修改桌宠草稿。录音中使用
-竖耳、声波和呼吸动画；最终转换时使用闭眼与环绕光点动画。
+竖耳、声波和呼吸动画；最终转换时显示逐行写入的文字卡片。
 当 Quick Chat 或完整聊天的编辑框持有焦点时，renderer 通过 IPC 标记 composer focus；此时
 F8 会以 `button` 来源启动同一语音会话，直接更新聊天草稿，不进入全局剪贴板粘贴路径。
 

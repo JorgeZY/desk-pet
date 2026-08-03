@@ -136,6 +136,11 @@ llama-server `
 流式 Paraformer 明确加载并只保留 `encoder.int8.onnx` 与 `decoder.int8.onnx`；官方归档中
 附带但未使用的 FP32 副本会在安装或下次启动时自动清理。
 
+设置页也支持“导入本地模型”。选择一个包含语音模型的任意目录后，应用会递归搜索同目录的
+Paraformer encoder/decoder/tokens，以及 SenseVoice ONNX/tokens。源目录和上级文件夹无需
+固定命名；候选文件会优先选择带 `int8` 或 `sensevoice` 特征的 ONNX。验证通过后复制到统一的
+`models/speech/`，扫描或复制失败不会覆盖已有可用模型。
+
 ```powershell
 npm run models:speech
 ```
