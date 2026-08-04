@@ -26,6 +26,7 @@ const api: DesktopPetApi = {
   pickExecutable: () => ipcRenderer.invoke("dialog:pick-executable"),
   pickModel: () => ipcRenderer.invoke("dialog:pick-model"),
   setWindowMode: (mode: WindowMode) => ipcRenderer.invoke("window:set-mode", mode),
+  setPetWindowHeight: (height: number) => ipcRenderer.invoke("window:set-pet-height", height),
   hideWindow: () => ipcRenderer.invoke("window:hide"),
   openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url),
   startChat: (request: ChatRequest) => ipcRenderer.send("chat:start", request),
