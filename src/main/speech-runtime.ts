@@ -41,12 +41,12 @@ interface SherpaModule {
   LinearResampler: new (inputRate: number, outputRate: number) => LinearResampler;
 }
 
-interface CpalDevice {
+export interface CpalDevice {
   deviceId: string;
   name: string;
 }
 
-interface CpalInputConfig {
+export interface CpalInputConfig {
   sampleRate: number;
 }
 
@@ -85,6 +85,33 @@ export function warmCpalInput(
 ): void {
   const stream = createCpalInputStream(cpal, deviceId, sampleRate, () => undefined);
   cpal.closeStream(stream);
+}
+
+export interface OpenedCpalInput {
+  device: CpalDevice;
+  config: CpalInputConfig;
+  stream: CpalStream;
+}
+
+export function openDefaultCpalInput(
+  cpal: CpalModuleLike,
+  onData: (samples: Float32Array) => void,
+): OpenedCpalInput {
+  const open = (): OpenedCpalInput => {
+    const device = cpal.getDefaultInputDevice();
+    const config = cpal.getDefaultInputConfig(device.deviceId);
+    return {
+      device,
+      config,
+      stream: createCpalInputStream(cpal, device.deviceId, config.sampleRate, onData),
+    };
+  };
+
+  try {
+    return open();
+  } catch {
+    return open();
+  }
 }
 
 interface ActiveSpeechSession {
@@ -127,8 +154,6 @@ export class SpeechRuntime extends EventEmitter {
   private offlineRecognizer?: OfflineRecognizer;
   private active?: ActiveSpeechSession;
   private prepareController?: AbortController;
-  private inputDevice?: CpalDevice;
-  private inputConfig?: CpalInputConfig;
   private microphoneWarmup?: Promise<void>;
   private microphoneWarmed = false;
 
@@ -171,7 +196,6 @@ export class SpeechRuntime extends EventEmitter {
       this.onlineRecognizer = undefined;
       this.offlineRecognizer = undefined;
     }
-    if (modelDirectoryChanged) this.resetMicrophoneWarmup();
     if (!config.enabled) {
       if (this.active) void this.cancel(this.active.id);
       this.publish({ enabled: false, phase: "not-installed", message: "语音输入已关闭。", error: undefined });
@@ -311,13 +335,6 @@ export class SpeechRuntime extends EventEmitter {
     });
   }
 
-  private resetMicrophoneWarmup(): void {
-    this.inputDevice = undefined;
-    this.inputConfig = undefined;
-    this.microphoneWarmed = false;
-    this.microphoneWarmup = undefined;
-  }
-
   private ensureMicrophoneWarm(): Promise<void> {
     if (this.microphoneWarmed) return Promise.resolve();
     if (this.microphoneWarmup) return this.microphoneWarmup;
@@ -327,8 +344,6 @@ export class SpeechRuntime extends EventEmitter {
       const device = cpal.getDefaultInputDevice();
       const config = cpal.getDefaultInputConfig(device.deviceId);
       warmCpalInput(cpal, device.deviceId, config.sampleRate);
-      this.inputDevice = device;
-      this.inputConfig = config;
       this.microphoneWarmed = true;
     });
     this.microphoneWarmup = warmup.finally(() => {
@@ -352,36 +367,39 @@ export class SpeechRuntime extends EventEmitter {
       await this.loadRecognizers();
       if (!this.cpal || !this.sherpa || !this.onlineRecognizer) throw new Error("语音运行时尚未加载。");
       await this.ensureMicrophoneWarm();
-      const device = this.inputDevice ?? this.cpal.getDefaultInputDevice();
-      const nativeConfig = this.inputConfig ?? this.cpal.getDefaultInputConfig(device.deviceId);
+      const sessionId = randomUUID();
       const onlineStream = this.onlineRecognizer.createStream();
-      const session: Omit<ActiveSpeechSession, "stream"> = {
-        id: randomUUID(),
-        source,
-        chunks: [],
-        recording: true,
-        resampler: new this.sherpa.LinearResampler(nativeConfig.sampleRate, 16000),
-        onlineStream,
-        lastPartial: "",
-        lastMeterAt: 0,
-      };
-      const stream = createCpalInputStream(
+      const openedInput = openDefaultCpalInput(
         this.cpal,
-        device.deviceId,
-        nativeConfig.sampleRate,
-        (samples) => this.acceptSamples(session.id, samples),
+        (samples) => this.acceptSamples(sessionId, samples),
       );
-      this.active = { ...session, stream };
+      const { device, config: nativeConfig, stream } = openedInput;
+      try {
+        this.active = {
+          id: sessionId,
+          source,
+          chunks: [],
+          recording: true,
+          stream,
+          resampler: new this.sherpa.LinearResampler(nativeConfig.sampleRate, 16000),
+          onlineStream,
+          lastPartial: "",
+          lastMeterAt: 0,
+        };
+      } catch (error) {
+        this.cpal.closeStream(stream);
+        throw error;
+      }
       this.publish({
         phase: "recording",
         message: "正在听你说话…",
         inputDevice: device.name,
-        activeSessionId: session.id,
+        activeSessionId: sessionId,
         level: 0,
         error: undefined,
       });
-      this.publishEvent({ type: "started", sessionId: session.id, source });
-      return { sessionId: session.id };
+      this.publishEvent({ type: "started", sessionId, source });
+      return { sessionId };
     } catch (error) {
       const text = message(error);
       this.publish({ phase: "error", message: "无法开始录音。", error: text, activeSessionId: undefined });
