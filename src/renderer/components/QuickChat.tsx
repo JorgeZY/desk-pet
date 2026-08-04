@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChatEvent, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
-import { quickReplyWindowHeight } from "../../shared/pet-window";
+import { PET_WINDOW_BASE_HEIGHT, quickReplyWindowHeight } from "../../shared/pet-window";
 import { appendChatMessages, readChatHistory, updateChatMessage } from "../chat-history";
 import { VoiceButton } from "./VoiceButton";
 
@@ -24,6 +24,12 @@ function runtimeHint(runtime: RuntimeState): string {
   if (runtime.phase === "stopping") return "模型正在停止…";
   if (runtime.phase === "stopped") return "先唤醒本地模型，就能在这里聊一句。";
   return "不用展开窗口，直接和我聊一句。";
+}
+
+export function resetQuickChatWindowHeight(
+  setPetWindowHeight: (height: number) => Promise<void>,
+): void {
+  void setPetWindowHeight(PET_WINDOW_BASE_HEIGHT);
 }
 
 export function QuickChat({
@@ -189,6 +195,11 @@ export function QuickChat({
     lastWindowHeightRef.current = nextHeight;
     void window.desktopPet.setPetWindowHeight(nextHeight);
   }, [reply, visibleReply]);
+
+  useLayoutEffect(() => () => {
+    lastWindowHeightRef.current = PET_WINDOW_BASE_HEIGHT;
+    resetQuickChatWindowHeight(window.desktopPet.setPetWindowHeight);
+  }, []);
 
   return (
     <section className={`quick-chat ${reply ? "quick-chat--has-reply" : ""}`}>
