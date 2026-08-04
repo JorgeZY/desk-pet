@@ -7,6 +7,7 @@ describe("runtime config", () => {
     expect(config.modelMode).toBe("huggingface");
     expect(config.hfRepo).toBe("openbmb/MiniCPM5-1B-GGUF:Q4_K_M");
     expect(config.contextSize).toBe(8192);
+    expect(config.speech.modelDirectory).toBe("");
   });
 
   it("defaults to the orange-cat personality without overwriting a custom prompt", () => {
@@ -53,6 +54,13 @@ describe("runtime config", () => {
     expect(configured.speech.enabled).toBe(false);
     expect(configured.speech.globalShortcut).toBe(false);
     expect(configured.speech.threads).toBe(16);
+    expect(configured.speech.modelDirectory).toBe("");
+
+    const imported = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      speech: { ...DEFAULT_CONFIG.speech, modelDirectory: " D:\\speech-models " },
+    });
+    expect(imported.speech.modelDirectory).toBe("D:\\speech-models");
   });
 
   it("requires a GGUF file in local mode", () => {

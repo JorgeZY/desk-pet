@@ -32,6 +32,7 @@ export type ModelFetch = (input: string, init?: RequestInit) => Promise<Response
 export interface ResolveModelOptions {
   signal: AbortSignal;
   onProgress: (progress: ModelDownloadProgress) => void;
+  allowDownload?: boolean;
 }
 
 export function formatBytes(bytes: number): string {
@@ -121,12 +122,14 @@ export class ManagedModelDownloader {
       return null;
     }
 
-    await fs.mkdir(this.modelDirectory, { recursive: true });
     const targetPath = join(this.modelDirectory, MANAGED_MODEL.filename);
     const partialPath = `${targetPath}.part`;
     const targetSize = await this.fileSize(targetPath);
 
     if (targetSize >= this.minimumBytes) return targetPath;
+    if (options.allowDownload === false) return null;
+
+    await fs.mkdir(this.modelDirectory, { recursive: true });
     if (targetSize > 0) {
       if ((await this.fileSize(partialPath)) === 0) await fs.rename(targetPath, partialPath);
       else await fs.rm(targetPath, { force: true });

@@ -54,7 +54,7 @@ export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPr
         <section className="settings-section">
           <div className="section-heading"><span>01</span><div><b>本地模型</b><small>选择团子使用的模型</small></div></div>
           <div className="segmented segmented--small">
-            <button type="button" className={config.modelMode === "huggingface" ? "active" : ""} onClick={() => update("modelMode", "huggingface")}>Hugging Face</button>
+            <button type="button" className={config.modelMode === "huggingface" ? "active" : ""} onClick={() => update("modelMode", "huggingface")}>自动下载</button>
             <button type="button" className={config.modelMode === "local" ? "active" : ""} onClick={() => update("modelMode", "local")}>本地 GGUF</button>
           </div>
           {config.modelMode === "huggingface" ? (
@@ -67,7 +67,7 @@ export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPr
                   placeholder="owner/repo:quant"
                 />
               </label>
-              <p className="hint">内置默认模型支持镜像与断点续传，其他远程模型由本地运行时下载。</p>
+              <p className="hint">仅在你手工启动或保存并重启模型时下载；程序启动不会自动下载未缓存模型。</p>
             </>
           ) : (
             <div className="settings-value-row">
@@ -143,7 +143,7 @@ export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPr
               onClick={() => void onImportSpeech()}
               disabled={speech.phase === "recording" || speech.phase === "transcribing" || speech.phase === "downloading" || speech.phase === "loading"}
             >
-              导入本地模型
+              使用本地模型
             </button>
             {speech.phase === "not-installed" || speech.phase === "error" ? (
               <button className="button button--quiet" type="button" onClick={() => void onPrepareSpeech(false)}>自动下载</button>

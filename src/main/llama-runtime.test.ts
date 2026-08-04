@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "./config-store";
-import { buildLlamaCommand } from "./llama-runtime";
+import { buildLlamaCommand, LlamaRuntime } from "./llama-runtime";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("buildLlamaCommand", () => {
   it("uses the unified llama serve command and a replaceable HF model", () => {
@@ -27,5 +29,19 @@ describe("buildLlamaCommand", () => {
     expect(command.args[0]).toBe("-m");
     expect(command.args[1]).toBe("D:\\models\\any-local-model.gguf");
     expect(command.args).not.toContain("serve");
+  });
+
+  it("does not download an uncached remote model during automatic startup", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("not running"));
+    let allowDownload: boolean | undefined;
+    const runtime = new LlamaRuntime(DEFAULT_CONFIG, async (_modelId, options) => {
+      allowDownload = options.allowDownload;
+      return null;
+    });
+
+    await runtime.start(false);
+    await vi.waitFor(() => expect(runtime.snapshot.message).toContain("自动下载或导入本地 GGUF"));
+    expect(allowDownload).toBe(false);
+    expect(runtime.snapshot.phase).toBe("stopped");
   });
 });

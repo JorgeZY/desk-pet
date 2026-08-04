@@ -332,7 +332,10 @@ async function migrateLegacyUserData(): Promise<void> {
 function registerIpc(): void {
   ipcMain.handle("desktop-pet:get-bootstrap", () => bootstrap());
   ipcMain.handle("desktop-pet:save-config", async (_event, nextConfig: RuntimeConfig) => {
-    config = await configStore.write(nextConfig);
+    config = await configStore.write({
+      ...nextConfig,
+      speech: { ...nextConfig.speech, modelDirectory: config.speech.modelDirectory },
+    });
     runtime.updateConfig(config);
     speech.updateConfig(config.speech);
     configureSpeechShortcut();
@@ -342,7 +345,14 @@ function registerIpc(): void {
   ipcMain.handle("runtime:start", () => runtime.start());
   ipcMain.handle("runtime:stop", () => runtime.stop());
   ipcMain.handle("runtime:restart", () => runtime.restart());
-  ipcMain.handle("speech:prepare", (_event, force?: boolean) => speech.prepare(force === true));
+  ipcMain.handle("speech:prepare", async (_event, force?: boolean) => {
+    config = await configStore.write({
+      ...config,
+      speech: { ...config.speech, modelDirectory: "" },
+    });
+    speech.updateConfig(config.speech);
+    return speech.prepare(force === true);
+  });
   ipcMain.handle("speech:import", async () => {
     const options: Electron.OpenDialogOptions = {
       title: "选择包含 Paraformer 与 SenseVoice 的文件夹",
@@ -353,7 +363,13 @@ function registerIpc(): void {
       : await dialog.showOpenDialog(options);
     const directory = result.filePaths[0];
     if (result.canceled || !directory) return null;
-    return speech.importFromDirectory(directory);
+    const state = await speech.importFromDirectory(directory);
+    config = await configStore.write({
+      ...config,
+      speech: { ...config.speech, modelDirectory: directory },
+    });
+    speech.updateConfig(config.speech);
+    return state;
   });
   ipcMain.handle("speech:start", () => speech.start("button"));
   ipcMain.handle("speech:stop", (_event, sessionId: string) => speech.stop(sessionId));
@@ -529,6 +545,8 @@ async function initialize(): Promise<void> {
     new SpeechModelManager(
       modelDirectory,
       app.isPackaged ? join(process.resourcesPath, "scripts") : join(app.getAppPath(), "scripts"),
+      undefined,
+      config.speech.modelDirectory,
     ),
   );
   speech.on("state", sendSpeechState);
@@ -554,7 +572,7 @@ async function initialize(): Promise<void> {
   });
 
   if (config.setupComplete && config.autoStart) {
-    setTimeout(() => void runtime.start(), 700);
+    setTimeout(() => void runtime.start(false), 700);
   }
 }
 

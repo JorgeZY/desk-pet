@@ -147,8 +147,8 @@ export function Onboarding({ initialConfig, platform, onComplete }: OnboardingPr
                 className={config.modelMode === "huggingface" ? "active" : ""}
                 onClick={() => update("modelMode", "huggingface")}
               >
-                Hugging Face
-                <small>远程</small>
+                自动下载
+                <small>联网</small>
               </button>
               <button
                 type="button"
@@ -164,7 +164,7 @@ export function Onboarding({ initialConfig, platform, onComplete }: OnboardingPr
                 <div className="model-card">
                   <div className="model-card__icon"><img src="./app-icon.png" alt="" /></div>
                   <div>
-                    <b>当前远程模型</b>
+                    <b>准备下载的模型</b>
                     <span>{config.hfRepo}</span>
                   </div>
                   <strong>可切换</strong>
