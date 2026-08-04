@@ -8,6 +8,7 @@ export interface SpeechConfig {
   shortcut: "F8";
   threads: number;
   language: "auto";
+  modelDirectory: string;
 }
 
 export interface RuntimeConfig {

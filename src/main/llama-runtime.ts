@@ -101,7 +101,7 @@ export class LlamaRuntime extends EventEmitter {
     return `http://${this.config.host}:${this.config.port}`;
   }
 
-  async start(): Promise<RuntimeState> {
+  async start(allowDownload = true): Promise<RuntimeState> {
     if (this.state.phase === "ready" || this.state.phase === "starting" || this.state.phase === "downloading") {
       return this.snapshot;
     }
@@ -133,16 +133,19 @@ export class LlamaRuntime extends EventEmitter {
     if (launchConfig.modelMode === "huggingface" && this.resolveManagedModel) {
       this.downloadController = new AbortController();
       this.setState({
-        phase: "downloading",
+        phase: allowDownload ? "downloading" : "stopped",
         endpoint: this.endpoint,
-        message: "正在连接模型镜像",
-        lastLog: "应用会优先使用 ModelScope，失败后自动切换 Hugging Face。",
+        message: allowDownload ? "正在连接模型镜像" : "正在检查本地模型缓存",
+        lastLog: allowDownload
+          ? "应用会优先使用 ModelScope，失败后自动切换 Hugging Face。"
+          : undefined,
         updatedAt: Date.now(),
       });
       void this.prepareManagedModel(
         launchConfig,
         currentGeneration,
         this.downloadController,
+        allowDownload,
       );
       return this.snapshot;
     }
@@ -353,14 +356,24 @@ export class LlamaRuntime extends EventEmitter {
     config: RuntimeConfig,
     generation: number,
     controller: AbortController,
+    allowDownload: boolean,
   ): Promise<void> {
     try {
       const modelPath = await this.resolveManagedModel!(config.hfRepo, {
         signal: controller.signal,
         onProgress: (download) => this.updateDownloadState(generation, download),
+        allowDownload,
       });
       if (generation !== this.generation || controller.signal.aborted) return;
       this.downloadController = null;
+      if (!modelPath && !allowDownload) {
+        this.setState({
+          ...initialState(this.config),
+          message: "模型尚未准备，请选择自动下载或导入本地 GGUF。",
+          updatedAt: Date.now(),
+        });
+        return;
+      }
       this.launch(
         modelPath ? { ...config, modelMode: "local", modelPath } : config,
         generation,
