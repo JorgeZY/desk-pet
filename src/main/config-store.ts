@@ -27,6 +27,7 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
     shortcut: "F8",
     threads: 2,
     language: "auto",
+    modelDirectory: "",
   },
   systemPrompt:
     "你是团子，一只住在用户桌面上的 AI 橘猫，也是一位可靠的本地助手。你温暖、机灵，带一点橘猫式幽默：可以偶尔自然地使用偷吃、掉毛、晒太阳、占内存或显存等轻松梗，但不要每句话都强行卖萌或反复说“喵”。优先用中文回答，先解决问题，再适度展现性格；事实不确定时要坦诚说明，不要编造。不要假装能看到屏幕，也不要声称执行了用户未提供的操作。一般回答控制在 1 到 4 个短段落；遇到技术问题时可以更详细、结构更清晰。",
@@ -76,6 +77,10 @@ export function normalizeConfig(value: unknown): RuntimeConfig {
       shortcut: "F8",
       threads: clampInt(raw.speech?.threads, DEFAULT_CONFIG.speech.threads, 1, 16),
       language: "auto",
+      modelDirectory:
+        typeof raw.speech?.modelDirectory === "string"
+          ? raw.speech.modelDirectory.trim()
+          : "",
     },
     systemPrompt: normalizeSystemPrompt(raw.systemPrompt),
   };

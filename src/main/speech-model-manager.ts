@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { SpeechDownloadProgress, SpeechModelId } from "../shared/types";
 
 interface SpeechModelSpec {
@@ -189,6 +188,20 @@ export function resolveSpeechModelPaths(modelDirectory: string): SpeechModelPath
   };
 }
 
+function pathsFromDiscovery(root: string, discovered: DiscoveredSpeechModels): SpeechModelPaths {
+  return {
+    root,
+    streaming: {
+      directory: dirname(discovered.streaming.encoder),
+      ...discovered.streaming,
+    },
+    final: {
+      directory: dirname(discovered.final.model),
+      ...discovered.final,
+    },
+  };
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await fs.access(path);
@@ -260,84 +273,68 @@ export const runSpeechDownloadScript: SpeechScriptRunner = async ({
 };
 
 export class SpeechModelManager {
-  readonly paths: SpeechModelPaths;
+  private readonly managedPaths: SpeechModelPaths;
+  private activePaths: SpeechModelPaths;
 
   constructor(
     private readonly modelDirectory: string,
     private readonly scriptDirectory: string,
     private readonly runScript: SpeechScriptRunner = runSpeechDownloadScript,
+    private importedDirectory = "",
   ) {
-    this.paths = resolveSpeechModelPaths(modelDirectory);
+    this.managedPaths = resolveSpeechModelPaths(modelDirectory);
+    this.activePaths = this.managedPaths;
+  }
+
+  get paths(): SpeechModelPaths {
+    return this.activePaths;
+  }
+
+  get displayedDirectory(): string {
+    return this.importedDirectory || this.managedPaths.root;
+  }
+
+  setImportedDirectory(directory: string): void {
+    this.importedDirectory = directory.trim();
+    if (!this.importedDirectory) this.activePaths = this.managedPaths;
+  }
+
+  useManagedModels(): void {
+    this.setImportedDirectory("");
   }
 
   async isReady(): Promise<boolean> {
+    if (this.importedDirectory) {
+      try {
+        this.activePaths = pathsFromDiscovery(
+          this.importedDirectory,
+          await discoverSpeechModels(this.importedDirectory),
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    }
     const streamingReady = await hasRequiredFiles(
-      this.paths.streaming.directory,
+      this.managedPaths.streaming.directory,
       SPEECH_MODELS[0].requiredFiles,
     );
     if (streamingReady) {
       await Promise.all(
         UNUSED_STREAMING_FP32_FILES.map((file) =>
-          fs.rm(join(this.paths.streaming.directory, file), { force: true }),
+          fs.rm(join(this.managedPaths.streaming.directory, file), { force: true }),
         ),
       );
     }
     return streamingReady &&
-      (await hasRequiredFiles(this.paths.final.directory, SPEECH_MODELS[1].requiredFiles));
+      (await hasRequiredFiles(this.managedPaths.final.directory, SPEECH_MODELS[1].requiredFiles));
   }
 
   async importFromDirectory(sourceDirectory: string): Promise<SpeechModelPaths> {
-    await writableDirectory(this.modelDirectory);
     const discovered = await discoverSpeechModels(sourceDirectory);
-    const stagingRoot = join(this.paths.root, `.import-${randomUUID()}`);
-    const stagedStreaming = join(stagingRoot, "streaming");
-    const stagedFinal = join(stagingRoot, "final");
-    const backupStreaming = `${this.paths.streaming.directory}.backup-${randomUUID()}`;
-    const backupFinal = `${this.paths.final.directory}.backup-${randomUUID()}`;
-    const replacements = [
-      { target: this.paths.streaming.directory, staged: stagedStreaming, backup: backupStreaming },
-      { target: this.paths.final.directory, staged: stagedFinal, backup: backupFinal },
-    ];
-
-    try {
-      await Promise.all([fs.mkdir(stagedStreaming, { recursive: true }), fs.mkdir(stagedFinal, { recursive: true })]);
-      await Promise.all([
-        fs.copyFile(discovered.streaming.encoder, join(stagedStreaming, "encoder.int8.onnx")),
-        fs.copyFile(discovered.streaming.decoder, join(stagedStreaming, "decoder.int8.onnx")),
-        fs.copyFile(discovered.streaming.tokens, join(stagedStreaming, "tokens.txt")),
-        fs.copyFile(discovered.final.model, join(stagedFinal, "model.int8.onnx")),
-        fs.copyFile(discovered.final.tokens, join(stagedFinal, "tokens.txt")),
-      ]);
-      const backedUp: typeof replacements = [];
-      const installed: typeof replacements = [];
-      try {
-        for (const replacement of replacements) {
-          if (await pathExists(replacement.target)) {
-            await fs.rename(replacement.target, replacement.backup);
-            backedUp.push(replacement);
-          }
-        }
-        for (const replacement of replacements) {
-          await fs.rename(replacement.staged, replacement.target);
-          installed.push(replacement);
-        }
-      } catch (error) {
-        for (const replacement of installed.reverse()) {
-          await fs.rm(replacement.target, { recursive: true, force: true }).catch(() => undefined);
-        }
-        for (const replacement of backedUp.reverse()) {
-          if (await pathExists(replacement.backup)) {
-            await fs.rename(replacement.backup, replacement.target);
-          }
-        }
-        throw error;
-      }
-      await Promise.all(replacements.map(({ backup }) => fs.rm(backup, { recursive: true, force: true })));
-      if (!(await this.isReady())) throw new Error("本地语音模型导入后校验失败。");
-      return this.paths;
-    } finally {
-      await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
-    }
+    this.importedDirectory = sourceDirectory;
+    this.activePaths = pathsFromDiscovery(sourceDirectory, discovered);
+    return this.activePaths;
   }
 
   async prepare(
@@ -345,9 +342,10 @@ export class SpeechModelManager {
     onProgress: (progress: SpeechDownloadProgress) => void,
     force = false,
   ): Promise<SpeechModelPaths> {
+    this.useManagedModels();
     await writableDirectory(this.modelDirectory);
     for (const spec of SPEECH_MODELS) {
-      const target = join(this.paths.root, spec.directory);
+      const target = join(this.managedPaths.root, spec.directory);
       if (!force && (await hasRequiredFiles(target, spec.requiredFiles))) continue;
       onProgress({ model: spec.id, receivedBytes: 0 });
       await this.runScript({
@@ -362,6 +360,6 @@ export class SpeechModelManager {
       onProgress({ model: spec.id, receivedBytes: 1, totalBytes: 1, percent: 100 });
     }
     if (!(await this.isReady())) throw new Error("语音模型没有完整安装。请重新运行下载脚本。");
-    return this.paths;
+    return this.managedPaths;
   }
 }

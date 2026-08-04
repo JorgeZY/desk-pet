@@ -91,7 +91,7 @@ npm run dev
 1. 检测系统里的 `llama`，或者选择下载好的 `llama-server.exe`。
 2. 使用推荐的远程 GGUF，或者选择电脑里已有的 `.gguf` 模型。
 3. 根据设备调整上下文长度、CPU 线程与 GPU 卸载层数；不确定就先保持默认。
-4. 点击完成并唤醒模型。自动下载时，状态区域会显示“猫粮到哪了”。
+4. 选择“自动下载”或“本地 GGUF”，再点击完成并唤醒模型。自动下载时，状态区域会显示“猫粮到哪了”。
 
 日常相处方式也很简单：
 
@@ -106,6 +106,9 @@ npm run dev
 推荐模型通过 Electron 的 Chromium 网络栈下载，可以继承系统代理和 PAC 配置，并支持
 ModelScope / Hugging Face 回退与 `.part` 断点续传。其他 Hugging Face 标识会交给
 `llama.cpp -hf` 处理；网络受限时，建议先下载 GGUF，再切换到本地模式。
+
+程序启动时不会下载尚未缓存的 GGUF：自动启动只复用完整缓存或已经选择的本地 GGUF。
+联网下载只会在首次引导完成、手工启动或“保存并重启模型”等用户明确操作后发生。
 
 已经备好模型的话，可以在引导或设置中选择任意兼容文件，例如：
 
@@ -136,10 +139,11 @@ llama-server `
 流式 Paraformer 明确加载并只保留 `encoder.int8.onnx` 与 `decoder.int8.onnx`；官方归档中
 附带但未使用的 FP32 副本会在安装或下次启动时自动清理。
 
-设置页也支持“导入本地模型”。选择一个包含语音模型的任意目录后，应用会递归搜索同目录的
+设置页也支持“使用本地模型”。选择一个包含语音模型的任意目录后，应用会递归搜索同目录的
 Paraformer encoder/decoder/tokens，以及 SenseVoice ONNX/tokens。源目录和上级文件夹无需
-固定命名；候选文件会优先选择带 `int8` 或 `sensevoice` 特征的 ONNX。验证通过后复制到统一的
-`models/speech/`，扫描或复制失败不会覆盖已有可用模型。
+固定命名；候选文件会优先选择带 `int8` 或 `sensevoice` 特征的 ONNX。验证通过后直接读取所选
+目录中的文件并保存该位置，重启后继续复用，不会复制到 `models/speech/`。只有选择自动下载时，
+模型才会写入统一模型目录。
 
 ```powershell
 npm run models:speech

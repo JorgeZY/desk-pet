@@ -129,7 +129,7 @@ export class SpeechRuntime extends EventEmitter {
       enabled: config.enabled,
       phase: "not-installed",
       message: "语音模型尚未安装。",
-      modelDirectory: models.paths.root,
+      modelDirectory: models.displayedDirectory,
       updatedAt: Date.now(),
     };
   }
@@ -151,8 +151,10 @@ export class SpeechRuntime extends EventEmitter {
   updateConfig(config: SpeechConfig): void {
     const wasEnabled = this.config.enabled;
     const reload = config.threads !== this.config.threads || config.language !== this.config.language;
+    const modelDirectoryChanged = config.modelDirectory !== this.config.modelDirectory;
     this.config = config;
-    if (reload && !this.active) {
+    if (modelDirectoryChanged) this.models.setImportedDirectory(config.modelDirectory);
+    if ((reload || modelDirectoryChanged) && !this.active) {
       this.onlineRecognizer = undefined;
       this.offlineRecognizer = undefined;
     }
@@ -172,7 +174,13 @@ export class SpeechRuntime extends EventEmitter {
       return this.publish({ enabled: false, phase: "not-installed", message: "语音输入已关闭。" });
     }
     if (!(await this.models.isReady())) {
-      return this.publish({ phase: "not-installed", message: "首次使用需下载约 450 MB 语音模型。" });
+      return this.publish({
+        phase: "not-installed",
+        message: this.config.modelDirectory
+          ? "找不到已导入的语音模型，请重新选择目录或自动下载。"
+          : "请选择自动下载约 450 MB 语音模型，或导入已有模型。",
+        modelDirectory: this.models.displayedDirectory,
+      });
     }
     try {
       await this.loadRecognizers();
@@ -185,8 +193,14 @@ export class SpeechRuntime extends EventEmitter {
   async prepare(force = false): Promise<SpeechState> {
     if (!this.config.enabled) throw new Error("请先在设置中启用语音输入。");
     if (this.prepareController) return this.snapshot;
+    this.models.useManagedModels();
     this.prepareController = new AbortController();
-    this.publish({ phase: "downloading", message: "正在下载本地语音模型…", error: undefined });
+    this.publish({
+      phase: "downloading",
+      message: "正在下载本地语音模型…",
+      modelDirectory: this.models.displayedDirectory,
+      error: undefined,
+    });
     try {
       if (force) {
         this.onlineRecognizer = undefined;
@@ -220,10 +234,18 @@ export class SpeechRuntime extends EventEmitter {
     try {
       await this.models.importFromDirectory(sourceDirectory);
       if (!this.config.enabled) {
-        return this.publish({ phase: "not-installed", message: "本地语音模型已导入；启用语音后即可使用。" });
+        return this.publish({
+          phase: "not-installed",
+          message: "已连接本地语音模型；启用语音后即可使用。",
+          modelDirectory: this.models.displayedDirectory,
+        });
       }
       await this.loadRecognizers();
-      return this.publish({ phase: "ready", message: "本地语音模型已导入，可以开始说话。" });
+      return this.publish({
+        phase: "ready",
+        message: "已连接本地语音模型，可以开始说话。",
+        modelDirectory: this.models.displayedDirectory,
+      });
     } catch (error) {
       const text = message(error);
       this.publish({ phase: "error", message: "本地语音模型导入失败。", error: text });

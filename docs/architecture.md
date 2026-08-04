@@ -74,10 +74,11 @@ ready
 `resources/scripts/` 执行。音频被重采样为 16 kHz 单声道，只在当前会话内保存在主进程内存。
 Paraformer 明确加载 INT8 encoder/decoder，并删除官方归档中未使用的 FP32 副本。
 
-除自动下载外，主进程提供本地目录导入。扫描器递归遍历用户选择的目录（跳过符号链接），
+除自动下载外，主进程提供本地目录引用。扫描器递归遍历用户选择的目录（跳过符号链接），
 按同目录的 encoder/decoder/tokens 结构识别 Paraformer，按 ONNX/tokens 结构识别 SenseVoice，
-不依赖源文件夹名称。候选文件优先采用 INT8 和 SenseVoice 特征名，随后复制到临时目录、
-完整校验并原子替换统一模型目录；失败时回滚，避免破坏已有模型。
+不依赖源文件夹名称。候选文件优先采用 INT8 和 SenseVoice 特征名；验证后持久化外部根目录并
+直接使用扫描所得文件路径，不复制模型。重启时重新解析该目录；选择自动下载才切回统一的
+`models/speech` 路径。
 
 ```text
 not-installed → downloading → loading → ready
