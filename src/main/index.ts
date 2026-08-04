@@ -26,6 +26,7 @@ import type {
   SpeechState,
   WindowMode,
 } from "../shared/types";
+import { PET_WINDOW_BASE_HEIGHT, PET_WINDOW_MAX_HEIGHT } from "../shared/pet-window";
 import { ConfigStore } from "./config-store";
 import { pasteDictationText, resolveShortcutSpeechSource } from "./global-dictation";
 import { LlamaRuntime } from "./llama-runtime";
@@ -38,7 +39,7 @@ const execFileAsync = promisify(execFile);
 app.setName("desk-pet");
 
 const WINDOW_SIZES: Record<WindowMode, { width: number; height: number }> = {
-  pet: { width: 320, height: 390 },
+  pet: { width: 320, height: PET_WINDOW_BASE_HEIGHT },
   chat: { width: 440, height: 700 },
   settings: { width: 560, height: 740 },
   onboarding: { width: 560, height: 740 },
@@ -52,6 +53,7 @@ let config: RuntimeConfig;
 let runtime: LlamaRuntime;
 let speech: SpeechRuntime;
 let currentWindowMode: WindowMode = "pet";
+let petWindowHeight = PET_WINDOW_BASE_HEIGHT;
 let shortcutHook: typeof import("uiohook-napi").uIOhook | undefined;
 let shortcutHookStarted = false;
 let shortcutListenersRegistered = false;
@@ -101,8 +103,28 @@ function anchorWindow(window: BrowserWindow, width: number, height: number): voi
 function setWindowMode(mode: WindowMode): void {
   currentWindowMode = mode;
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const size = WINDOW_SIZES[mode];
+  const size = mode === "pet"
+    ? { ...WINDOW_SIZES.pet, height: petWindowHeight }
+    : WINDOW_SIZES[mode];
   anchorWindow(mainWindow, size.width, size.height);
+}
+
+function setPetWindowHeight(height: number): void {
+  if (!Number.isFinite(height)) return;
+  const requestedHeight = Math.round(height);
+  const displayHeight = mainWindow && !mainWindow.isDestroyed()
+    ? screen.getDisplayMatching(mainWindow.getBounds()).workArea.height
+    : PET_WINDOW_MAX_HEIGHT;
+  const availableHeight = Math.max(PET_WINDOW_BASE_HEIGHT, displayHeight - 36);
+  const nextHeight = Math.min(
+    Math.max(requestedHeight, PET_WINDOW_BASE_HEIGHT),
+    PET_WINDOW_MAX_HEIGHT,
+    availableHeight,
+  );
+  petWindowHeight = nextHeight;
+  if (!mainWindow || mainWindow.isDestroyed() || currentWindowMode !== "pet") return;
+  if (mainWindow.getBounds().height === nextHeight) return;
+  anchorWindow(mainWindow, WINDOW_SIZES.pet.width, nextHeight);
 }
 
 function showWindow(mode?: WindowMode): void {
@@ -350,6 +372,7 @@ function registerIpc(): void {
     pickFile("选择 llama.cpp GGUF 模型", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
   );
   ipcMain.handle("window:set-mode", (_event, mode: WindowMode) => setWindowMode(mode));
+  ipcMain.handle("window:set-pet-height", (_event, height: number) => setPetWindowHeight(height));
   ipcMain.handle("window:hide", () => mainWindow?.hide());
   ipcMain.handle("app:open-external", async (_event, url: string) => {
     const parsed = new URL(url);

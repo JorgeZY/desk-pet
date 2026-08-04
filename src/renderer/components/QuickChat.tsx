@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChatEvent, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
+import { quickReplyWindowHeight } from "../../shared/pet-window";
 import { appendChatMessages, readChatHistory, updateChatMessage } from "../chat-history";
 import { VoiceButton } from "./VoiceButton";
 
@@ -44,7 +45,9 @@ export function QuickChat({
   const assistantIdRef = useRef<string | null>(null);
   const replyRef = useRef("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const replyElementRef = useRef<HTMLParagraphElement>(null);
   const shouldRestoreFocusRef = useRef(false);
+  const lastWindowHeightRef = useRef(0);
 
   const changeActiveRequest = (requestId: string | null) => {
     activeRequestRef.current = requestId;
@@ -178,11 +181,20 @@ export function QuickChat({
   const speechBusy = speech.phase === "recording" || speech.phase === "transcribing";
   const visibleReply = speechBusy ? speech.message : reply || runtimeHint(runtime);
 
+  useLayoutEffect(() => {
+    const replyElement = replyElementRef.current;
+    if (!replyElement) return;
+    const nextHeight = quickReplyWindowHeight(replyElement.scrollHeight, Boolean(reply));
+    if (nextHeight === lastWindowHeightRef.current) return;
+    lastWindowHeightRef.current = nextHeight;
+    void window.desktopPet.setPetWindowHeight(nextHeight);
+  }, [reply, visibleReply]);
+
   return (
     <section className={`quick-chat ${reply ? "quick-chat--has-reply" : ""}`}>
       <div className="quick-chat__message">
         <span className="quick-chat__avatar">团</span>
-        <p title={visibleReply}>{visibleReply}</p>
+        <p ref={replyElementRef} title={visibleReply} aria-live="polite">{visibleReply}</p>
         <button type="button" onClick={openFullChat} aria-label="打开完整对话" title="打开完整对话">↗</button>
       </div>
 
