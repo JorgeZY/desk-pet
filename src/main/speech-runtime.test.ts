@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createCpalInputStream,
+  warmCpalInput,
   type CpalModuleLike,
 } from "./speech-runtime";
 
@@ -23,5 +24,22 @@ describe("node-cpal compatibility", () => {
       { sampleRate: 48000, channels: 1, format: "f32" },
       onData,
     );
+  });
+
+  it("opens and immediately closes a microphone stream during prewarm", () => {
+    const handle = { streamId: "warmup" };
+    const createStream = vi.fn(() => handle);
+    const closeStream = vi.fn();
+    const cpal: CpalModuleLike = {
+      getDefaultInputDevice: () => ({ deviceId: "mic", name: "Test mic" }),
+      getDefaultInputConfig: () => ({ sampleRate: 48000 }),
+      createStream,
+      closeStream,
+    };
+
+    warmCpalInput(cpal, "mic", 48000);
+
+    expect(createStream).toHaveBeenCalledOnce();
+    expect(closeStream).toHaveBeenCalledWith(handle);
   });
 });
