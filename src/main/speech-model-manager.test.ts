@@ -147,6 +147,9 @@ describe("SpeechModelManager", () => {
     expect(manager.paths.streaming.directory).toBe(streaming);
     expect(manager.paths.final.directory).toBe(final);
     await expect(fs.access(modelRoot)).rejects.toThrow();
+
+    await fs.rm(source, { recursive: true, force: true });
+    await expect(manager.isReady()).resolves.toBe(true);
   });
 
   it("rejects incomplete imports without touching existing managed models", async () => {

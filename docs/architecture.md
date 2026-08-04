@@ -73,6 +73,8 @@ ready
 `download-models.ps1`；脚本使用 `Invoke-WebRequest` 和系统 `tar`，打包后从
 `resources/scripts/` 执行。音频被重采样为 16 kHz 单声道，只在当前会话内保存在主进程内存。
 Paraformer 明确加载 INT8 encoder/decoder，并删除官方归档中未使用的 FP32 副本。
+识别器就绪后会打开并立即关闭一次默认麦克风流，缓存设备与采样率但不长期占用麦克风；
+模型目录的扫描结果也会缓存到路径变化或重新导入为止，避免 F8 按下阶段重复扫描。
 
 除自动下载外，主进程提供本地目录引用。扫描器递归遍历用户选择的目录（跳过符号链接），
 按同目录的 encoder/decoder/tokens 结构识别 Paraformer，按 ONNX/tokens 结构识别 SenseVoice，

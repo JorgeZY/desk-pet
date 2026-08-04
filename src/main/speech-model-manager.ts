@@ -275,6 +275,7 @@ export const runSpeechDownloadScript: SpeechScriptRunner = async ({
 export class SpeechModelManager {
   private readonly managedPaths: SpeechModelPaths;
   private activePaths: SpeechModelPaths;
+  private ready = false;
 
   constructor(
     private readonly modelDirectory: string,
@@ -295,22 +296,29 @@ export class SpeechModelManager {
   }
 
   setImportedDirectory(directory: string): void {
-    this.importedDirectory = directory.trim();
+    const nextDirectory = directory.trim();
+    if (nextDirectory === this.importedDirectory) return;
+    this.importedDirectory = nextDirectory;
+    this.ready = false;
     if (!this.importedDirectory) this.activePaths = this.managedPaths;
   }
 
   useManagedModels(): void {
-    this.setImportedDirectory("");
+    this.importedDirectory = "";
+    this.activePaths = this.managedPaths;
+    this.ready = false;
   }
 
   async isReady(): Promise<boolean> {
+    if (this.ready) return true;
     if (this.importedDirectory) {
       try {
         this.activePaths = pathsFromDiscovery(
           this.importedDirectory,
           await discoverSpeechModels(this.importedDirectory),
         );
-        return true;
+        this.ready = true;
+        return this.ready;
       } catch {
         return false;
       }
@@ -326,14 +334,16 @@ export class SpeechModelManager {
         ),
       );
     }
-    return streamingReady &&
+    this.ready = streamingReady &&
       (await hasRequiredFiles(this.managedPaths.final.directory, SPEECH_MODELS[1].requiredFiles));
+    return this.ready;
   }
 
   async importFromDirectory(sourceDirectory: string): Promise<SpeechModelPaths> {
     const discovered = await discoverSpeechModels(sourceDirectory);
     this.importedDirectory = sourceDirectory;
     this.activePaths = pathsFromDiscovery(sourceDirectory, discovered);
+    this.ready = true;
     return this.activePaths;
   }
 

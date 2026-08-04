@@ -78,6 +78,15 @@ export function createCpalInputStream(
   );
 }
 
+export function warmCpalInput(
+  cpal: CpalModuleLike,
+  deviceId: string,
+  sampleRate: number,
+): void {
+  const stream = createCpalInputStream(cpal, deviceId, sampleRate, () => undefined);
+  cpal.closeStream(stream);
+}
+
 interface ActiveSpeechSession {
   id: string;
   source: SpeechSessionSource;
@@ -118,6 +127,10 @@ export class SpeechRuntime extends EventEmitter {
   private offlineRecognizer?: OfflineRecognizer;
   private active?: ActiveSpeechSession;
   private prepareController?: AbortController;
+  private inputDevice?: CpalDevice;
+  private inputConfig?: CpalInputConfig;
+  private microphoneWarmup?: Promise<void>;
+  private microphoneWarmed = false;
 
   constructor(
     config: SpeechConfig,
@@ -158,6 +171,7 @@ export class SpeechRuntime extends EventEmitter {
       this.onlineRecognizer = undefined;
       this.offlineRecognizer = undefined;
     }
+    if (modelDirectoryChanged) this.resetMicrophoneWarmup();
     if (!config.enabled) {
       if (this.active) void this.cancel(this.active.id);
       this.publish({ enabled: false, phase: "not-installed", message: "语音输入已关闭。", error: undefined });
@@ -256,6 +270,7 @@ export class SpeechRuntime extends EventEmitter {
   private async loadRecognizers(): Promise<void> {
     if (this.onlineRecognizer && this.offlineRecognizer && this.cpal && this.sherpa) {
       this.publish({ phase: "ready", message: "按住麦克风或 F8 开始说话。", error: undefined });
+      void this.ensureMicrophoneWarm().catch(() => undefined);
       return;
     }
     this.publish({ phase: "loading", message: "正在加载本地语音模型…", error: undefined });
@@ -291,6 +306,35 @@ export class SpeechRuntime extends EventEmitter {
     this.sherpa = sherpa;
     this.cpal = cpal;
     this.publish({ phase: "ready", message: "按住麦克风或 F8 开始说话。", error: undefined });
+    void this.ensureMicrophoneWarm().catch((error) => {
+      console.warn("Could not prewarm the default microphone:", error);
+    });
+  }
+
+  private resetMicrophoneWarmup(): void {
+    this.inputDevice = undefined;
+    this.inputConfig = undefined;
+    this.microphoneWarmed = false;
+    this.microphoneWarmup = undefined;
+  }
+
+  private ensureMicrophoneWarm(): Promise<void> {
+    if (this.microphoneWarmed) return Promise.resolve();
+    if (this.microphoneWarmup) return this.microphoneWarmup;
+    if (!this.cpal) return Promise.reject(new Error("麦克风运行时尚未加载。"));
+    const cpal = this.cpal;
+    const warmup = Promise.resolve().then(() => {
+      const device = cpal.getDefaultInputDevice();
+      const config = cpal.getDefaultInputConfig(device.deviceId);
+      warmCpalInput(cpal, device.deviceId, config.sampleRate);
+      this.inputDevice = device;
+      this.inputConfig = config;
+      this.microphoneWarmed = true;
+    });
+    this.microphoneWarmup = warmup.finally(() => {
+      this.microphoneWarmup = undefined;
+    });
+    return this.microphoneWarmup;
   }
 
   requestSetup(): void {
@@ -307,8 +351,9 @@ export class SpeechRuntime extends EventEmitter {
     try {
       await this.loadRecognizers();
       if (!this.cpal || !this.sherpa || !this.onlineRecognizer) throw new Error("语音运行时尚未加载。");
-      const device = this.cpal.getDefaultInputDevice();
-      const nativeConfig = this.cpal.getDefaultInputConfig(device.deviceId);
+      await this.ensureMicrophoneWarm();
+      const device = this.inputDevice ?? this.cpal.getDefaultInputDevice();
+      const nativeConfig = this.inputConfig ?? this.cpal.getDefaultInputConfig(device.deviceId);
       const onlineStream = this.onlineRecognizer.createStream();
       const session: Omit<ActiveSpeechSession, "stream"> = {
         id: randomUUID(),
