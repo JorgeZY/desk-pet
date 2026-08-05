@@ -41,6 +41,8 @@ interface SherpaModule {
   LinearResampler: new (inputRate: number, outputRate: number) => LinearResampler;
 }
 
+export type { SherpaModule };
+
 export interface CpalDevice {
   deviceId: string;
   name: string;
@@ -145,6 +147,11 @@ function validTranscript(text: string): boolean {
   return text.length >= 2 && /[\p{L}\p{N}]/u.test(text);
 }
 
+export interface SpeechRuntimeModules {
+  sherpa?: SherpaModule;
+  cpal?: CpalModuleLike;
+}
+
 export class SpeechRuntime extends EventEmitter {
   private state: SpeechState;
   private config: SpeechConfig;
@@ -156,12 +163,15 @@ export class SpeechRuntime extends EventEmitter {
   private prepareController?: AbortController;
   private microphoneWarmup?: Promise<void>;
   private microphoneWarmed = false;
+  private readonly modules: SpeechRuntimeModules;
 
   constructor(
     config: SpeechConfig,
     private readonly models: SpeechModelManager,
+    modules: SpeechRuntimeModules = {},
   ) {
     super();
+    this.modules = modules;
     this.config = config;
     this.state = {
       enabled: config.enabled,
@@ -298,8 +308,8 @@ export class SpeechRuntime extends EventEmitter {
       return;
     }
     this.publish({ phase: "loading", message: "正在加载本地语音模型…", error: undefined });
-    const sherpa = require("sherpa-onnx-node") as SherpaModule;
-    const cpal = require("node-cpal") as CpalModuleLike;
+    const sherpa = this.modules.sherpa ?? (require("sherpa-onnx-node") as SherpaModule);
+    const cpal = this.modules.cpal ?? (require("node-cpal") as CpalModuleLike);
     const paths = this.models.paths;
     this.onlineRecognizer = new sherpa.OnlineRecognizer({
       featConfig: { sampleRate: 16000, featureDim: 80 },
@@ -368,12 +378,27 @@ export class SpeechRuntime extends EventEmitter {
       if (!this.cpal || !this.sherpa || !this.onlineRecognizer) throw new Error("语音运行时尚未加载。");
       await this.ensureMicrophoneWarm();
       const sessionId = randomUUID();
-      const onlineStream = this.onlineRecognizer.createStream();
+      // Publish the recording UI state synchronously before the per-session native
+      // allocations. The cpal createStream call (and on slower machines the
+      // sherpa stream + LinearResampler) can still take up to ~1s after the warm,
+      // and the user's perceived "recording started" should not have to wait for
+      // the audio driver to finish negotiating the new stream. Samples that
+      // arrive before `this.active` is assigned below are dropped by
+      // `acceptSamples`, which is acceptable for the initial audio buffer.
+      this.publish({
+        phase: "recording",
+        message: "正在听你说话…",
+        activeSessionId: sessionId,
+        level: 0,
+        error: undefined,
+      });
+      this.publishEvent({ type: "started", sessionId, source });
       const openedInput = openDefaultCpalInput(
         this.cpal,
         (samples) => this.acceptSamples(sessionId, samples),
       );
       const { device, config: nativeConfig, stream } = openedInput;
+      const onlineStream = this.onlineRecognizer.createStream();
       try {
         this.active = {
           id: sessionId,
@@ -390,15 +415,7 @@ export class SpeechRuntime extends EventEmitter {
         this.cpal.closeStream(stream);
         throw error;
       }
-      this.publish({
-        phase: "recording",
-        message: "正在听你说话…",
-        inputDevice: device.name,
-        activeSessionId: sessionId,
-        level: 0,
-        error: undefined,
-      });
-      this.publishEvent({ type: "started", sessionId, source });
+      this.publish({ inputDevice: device.name });
       return { sessionId };
     } catch (error) {
       const text = message(error);
