@@ -53,7 +53,7 @@ export function App() {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     root.classList.add("view-transitioning");
     try {
-      await new Promise((resolve) => setTimeout(resolve, reducedMotion ? 0 : 110));
+      await new Promise((resolve) => setTimeout(resolve, reducedMotion ? 0 : 165));
       await window.desktopPet.setWindowMode(nextView);
       setView(nextView);
       await new Promise<void>((resolve) => {

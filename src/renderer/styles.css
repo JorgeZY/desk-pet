@@ -7,16 +7,17 @@
   --ink: #3f302d;
   --muted: #85726c;
   --faint: #aa9892;
-  --paper: rgba(255, 251, 245, 0.98);
-  --paper-solid: #fffbf5;
-  --line: rgba(86, 58, 50, 0.12);
+  --paper: rgba(255, 252, 247, 0.985);
+  --paper-solid: #fffcf7;
+  --line: rgba(86, 58, 50, 0.1);
   --peach: #ec8d62;
   --peach-dark: #ce6d4c;
   --peach-soft: #ffead9;
   --cream: #fff3df;
   --green: #3f9973;
   --red: #c45e5d;
-  --shadow: 0 22px 70px rgba(74, 46, 39, 0.24), 0 3px 12px rgba(74, 46, 39, 0.1);
+  --shadow: 0 2px 6px rgba(74, 46, 39, 0.09), 0 1px 2px rgba(74, 46, 39, 0.04);
+  --shadow-soft: 0 5px 16px rgba(74, 46, 39, 0.08);
 }
 
 * {
@@ -35,14 +36,17 @@ body,
 
 #root {
   opacity: 1;
-  transform: scale(1);
+  transform: translateY(0);
   transform-origin: center;
-  transition: opacity 110ms ease, transform 140ms ease;
+  transition:
+    opacity 160ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
 }
 
 html.view-transitioning #root {
   opacity: 0;
-  transform: scale(0.985);
+  transform: translateY(3px);
 }
 
 button,
@@ -90,15 +94,16 @@ select:focus-visible {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: calc(100% - 16px);
-  height: calc(100% - 16px);
-  margin: 8px;
+  width: calc(100% - 20px);
+  height: calc(100% - 20px);
+  margin: 10px;
   overflow: hidden;
   background:
-    radial-gradient(circle at 93% 0%, rgba(255, 219, 184, 0.66), transparent 28%),
+    radial-gradient(circle at 94% 0%, rgba(255, 222, 191, 0.48), transparent 31%),
+    linear-gradient(165deg, rgba(255, 255, 255, 0.42), transparent 38%),
     var(--paper);
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  border-radius: 24px;
+  border: 1px solid rgba(103, 72, 62, 0.1);
+  border-radius: 22px;
   box-shadow: var(--shadow);
 }
 
@@ -133,7 +138,7 @@ p {
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
-  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, border-color 160ms ease;
 }
 
 .button:hover:not(:disabled) {
@@ -148,7 +153,11 @@ p {
 .button--primary {
   color: white;
   background: linear-gradient(135deg, #f19b70, #d96f50);
-  box-shadow: 0 7px 18px rgba(212, 105, 76, 0.25);
+  box-shadow: 0 4px 12px rgba(212, 105, 76, 0.2);
+}
+
+.button--primary:hover:not(:disabled) {
+  box-shadow: 0 6px 16px rgba(212, 105, 76, 0.24);
 }
 
 .button--secondary {
@@ -201,10 +210,25 @@ select {
   width: 100%;
   min-height: 40px;
   padding: 9px 12px;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(93, 66, 58, 0.14);
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(93, 66, 58, 0.12);
   border-radius: 11px;
   box-shadow: inset 0 1px 1px rgba(84, 58, 51, 0.03);
+}
+
+input:hover,
+textarea:hover,
+select:hover {
+  border-color: rgba(213, 111, 78, 0.24);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(213, 111, 78, 0.38);
+  box-shadow: 0 0 0 3px rgba(236, 141, 98, 0.1);
+  outline: none;
 }
 
 textarea {
@@ -482,8 +506,8 @@ select {
 }
 
 @keyframes idle-ground {
-  0%, 100% { opacity: 0.12; transform: scaleX(1); transform-origin: center; }
-  50% { opacity: 0.15; transform: scaleX(1.025); transform-origin: center; }
+  0%, 100% { opacity: 0.08; transform: scaleX(1); transform-origin: center; }
+  50% { opacity: 0.11; transform: scaleX(1.025); transform-origin: center; }
 }
 
 @keyframes blink {
@@ -921,6 +945,7 @@ select {
   justify-content: space-between;
   min-height: 72px;
   padding: 24px 20px 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), transparent);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1029,11 +1054,14 @@ select {
   cursor: pointer;
   font-size: 11px;
   text-align: left;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
 }
 
 .suggestion-grid button:hover {
   color: var(--peach-dark);
+  background: rgba(255, 251, 245, 0.9);
   border-color: rgba(216, 112, 78, 0.24);
+  transform: translateY(-1px);
 }
 
 .message {
@@ -1067,7 +1095,7 @@ select {
   background: rgba(255, 255, 255, 0.76);
   border: 1px solid var(--line);
   border-radius: 6px 14px 14px 14px;
-  box-shadow: 0 3px 12px rgba(74, 48, 41, 0.04);
+  box-shadow: 0 2px 8px rgba(74, 48, 41, 0.035);
   font-size: 12px;
   line-height: 1.62;
 }
@@ -1555,8 +1583,8 @@ select {
   left: 18px;
   height: 80px;
   content: "";
-  background: radial-gradient(ellipse, rgba(88, 56, 47, 0.16), transparent 68%);
-  filter: blur(8px);
+  background: radial-gradient(ellipse, rgba(88, 56, 47, 0.13), transparent 70%);
+  filter: blur(6px);
 }
 
 .pet-stage .pet {
@@ -1593,13 +1621,13 @@ select {
   height: 27px;
   background: rgba(255, 249, 239, 0.88);
   border: 1px solid rgba(87, 61, 53, 0.1);
-  box-shadow: 0 3px 10px rgba(68, 44, 38, 0.08);
+  box-shadow: 0 2px 7px rgba(68, 44, 38, 0.07);
   font-size: 12px;
 }
 
 .pet-stage .runtime-badge {
   background: rgba(255, 249, 239, 0.9);
-  box-shadow: 0 3px 10px rgba(68, 44, 38, 0.08);
+  box-shadow: 0 2px 7px rgba(68, 44, 38, 0.07);
 }
 
 .global-speech-bubble {
@@ -1617,7 +1645,7 @@ select {
   background: rgba(255, 252, 246, 0.98);
   border: 1px solid rgba(100, 71, 62, 0.12);
   border-radius: 16px 16px 7px 16px;
-  box-shadow: 0 10px 30px rgba(71, 46, 40, 0.18);
+  box-shadow: 0 7px 20px rgba(71, 46, 40, 0.13);
   backdrop-filter: blur(14px);
   pointer-events: none;
 }
@@ -1699,14 +1727,14 @@ select {
   background: linear-gradient(145deg, rgba(255, 254, 250, 0.98), rgba(255, 246, 235, 0.96));
   border: 1px solid rgba(117, 77, 63, 0.12);
   border-radius: 14px 14px 14px 6px;
-  box-shadow: 0 8px 22px rgba(71, 46, 40, 0.14);
+  box-shadow: 0 6px 18px rgba(71, 46, 40, 0.11);
   backdrop-filter: blur(12px);
   transition: border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .quick-chat--has-reply {
   border-color: rgba(226, 133, 91, 0.2);
-  box-shadow: 0 12px 32px rgba(71, 46, 40, 0.18), inset 0 1px rgba(255, 255, 255, 0.75);
+  box-shadow: 0 8px 22px rgba(71, 46, 40, 0.13), inset 0 1px rgba(255, 255, 255, 0.75);
 }
 
 .quick-chat::after {

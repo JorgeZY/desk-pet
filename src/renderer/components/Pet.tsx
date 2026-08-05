@@ -21,7 +21,6 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
   const furId = `fur-${id}`;
   const bellyId = `belly-${id}`;
   const collarId = `collar-${id}`;
-  const shadowId = `shadow-${id}`;
 
   return (
     <button
@@ -46,12 +45,9 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
             <stop offset="0" stopColor="#65c2aa" />
             <stop offset="1" stopColor="#3f987f" />
           </linearGradient>
-          <filter id={shadowId} x="-30%" y="-30%" width="160%" height="180%">
-            <feDropShadow dx="0" dy="9" stdDeviation="8" floodColor="#673b31" floodOpacity=".18" />
-          </filter>
         </defs>
 
-        <g className="pet-tail" filter={`url(#${shadowId})`}>
+        <g className="pet-tail">
           <path
             d="M195 174c38 2 49-24 32-38-11-9-23-3-20 8"
             fill="none"
@@ -65,8 +61,8 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
           </g>
         </g>
 
-        <ellipse className="pet-ground" cx="130" cy="216" rx="76" ry="11" fill="#593d35" opacity=".13" />
-        <g className="pet-body" filter={`url(#${shadowId})`}>
+        <ellipse className="pet-ground" cx="130" cy="216" rx="76" ry="10" fill="#593d35" opacity=".1" />
+        <g className="pet-body">
           <path
             d="M76 128c-11 19-14 47-6 70 8 24 35 30 60 30s52-6 60-30c8-23 5-51-6-70Z"
             fill={`url(#${furId})`}
@@ -82,7 +78,7 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
           </g>
         </g>
 
-        <g className="pet-head" filter={`url(#${shadowId})`}>
+        <g className="pet-head">
           <g className="pet-ear pet-ear--left">
             <path d="m68 71 8-48 37 30Z" fill={`url(#${furId})`} />
             <path d="m78 57 3-22 18 16Z" fill="#df7b74" opacity=".72" />
