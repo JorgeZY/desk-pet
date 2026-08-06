@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "./config-store";
-import { buildLlamaCommand, LlamaRuntime } from "./llama-runtime";
+import { buildChatCompletionMessages, buildLlamaCommand, LlamaRuntime } from "./llama-runtime";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -25,10 +25,35 @@ describe("buildLlamaCommand", () => {
       executable: "C:\\tools\\llama-server.exe",
       modelMode: "local",
       modelPath: "D:\\models\\any-local-model.gguf",
+      mmprojPath: "D:\\models\\vision-mmproj.gguf",
     });
     expect(command.args[0]).toBe("-m");
     expect(command.args[1]).toBe("D:\\models\\any-local-model.gguf");
     expect(command.args).not.toContain("serve");
+    expect(command.args).toContain("--mmproj");
+    expect(command.args).toContain("D:\\models\\vision-mmproj.gguf");
+  });
+
+  it("converts attached images to OpenAI-compatible image_url content", async () => {
+    const messages = await buildChatCompletionMessages(
+      DEFAULT_CONFIG,
+      [{
+        id: "user-image",
+        role: "user",
+        content: "这是什么？",
+        images: [{ path: "D:\\images\\cat.png", name: "cat.png", mimeType: "image/png" }],
+        createdAt: 1,
+      }],
+      async () => Buffer.from([1, 2, 3]),
+    );
+
+    expect(messages[1]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "这是什么？" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AQID" } },
+      ],
+    });
   });
 
   it("does not download an uncached remote model during automatic startup", async () => {

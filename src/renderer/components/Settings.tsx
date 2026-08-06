@@ -25,6 +25,11 @@ export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPr
     if (result) update("modelPath", result.path);
   };
 
+  const pickMmproj = async () => {
+    const result = await window.desktopPet.pickMmproj();
+    if (result) update("mmprojPath", result.path);
+  };
+
   const save = async (restart: boolean) => {
     setBusy(true);
     setError("");
@@ -75,10 +80,23 @@ export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPr
               <button className="button button--quiet" type="button" onClick={pickModel}>选择</button>
             </div>
           )}
+          <div className="settings-value-row">
+            <div>
+              <span>视觉投影模型（可选）</span>
+              <strong title={config.mmprojPath}>{config.mmprojPath || "未启用视觉功能"}</strong>
+            </div>
+            <div className="settings-value-actions">
+              {config.mmprojPath && (
+                <button className="button button--quiet" type="button" onClick={() => update("mmprojPath", "")}>清除</button>
+              )}
+              <button className="button button--quiet" type="button" onClick={pickMmproj}>选择 mmproj</button>
+            </div>
+          </div>
+          <p className="hint">选择与主模型匹配的 mmproj GGUF 后，重启模型即可在聊天中发送图片。</p>
         </section>
 
         <section className="settings-section">
-          <div className="section-heading"><span>02</span><div><b>性能</b><small>修改后需重启模型</small></div></div>
+          <div className="section-heading"><span>02</span><div><b>模型参数</b><small>运行参数与常用采样设置</small></div></div>
           <div className="metric-grid metric-grid--three">
             <label><span>上下文</span><input type="number" min={512} max={131072} step={512} value={config.contextSize} onChange={(event) => update("contextSize", Number(event.target.value))} /></label>
             <label><span>GPU 层数</span><input type="number" min={0} max={999} value={config.gpuLayers} onChange={(event) => update("gpuLayers", Number(event.target.value))} /></label>
@@ -88,6 +106,12 @@ export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPr
             <label><span>最大输出</span><input type="number" min={32} max={8192} value={config.maxTokens} onChange={(event) => update("maxTokens", Number(event.target.value))} /></label>
             <label><span>温度</span><input type="number" min={0} max={2} step={0.1} value={config.temperature} onChange={(event) => update("temperature", Number(event.target.value))} /></label>
             <label><span>端口</span><input type="number" min={1024} max={65535} value={config.port} onChange={(event) => update("port", Number(event.target.value))} /></label>
+          </div>
+          <div className="metric-grid metric-grid--four">
+            <label><span>Top K</span><input type="number" min={0} max={1000} value={config.topK} onChange={(event) => update("topK", Number(event.target.value))} /></label>
+            <label><span>Top P</span><input type="number" min={0} max={1} step={0.05} value={config.topP} onChange={(event) => update("topP", Number(event.target.value))} /></label>
+            <label><span>Min P</span><input type="number" min={0} max={1} step={0.01} value={config.minP} onChange={(event) => update("minP", Number(event.target.value))} /></label>
+            <label><span>重复惩罚</span><input type="number" min={0} max={2} step={0.05} value={config.repeatPenalty} onChange={(event) => update("repeatPenalty", Number(event.target.value))} /></label>
           </div>
         </section>
 

@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChatEvent, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
+import type { ChatEvent, ChatImage, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
 import { readChatHistory, writeChatHistory } from "../chat-history";
 import { Pet, type PetMood } from "./Pet";
 import { RuntimeBadge } from "./RuntimeBadge";
 import { VoiceButton } from "./VoiceButton";
+import { ImageAttachButton, ImageAttachmentTray } from "./ImageAttachments";
 
 interface ChatPanelProps {
   runtime: RuntimeState;
   speech: SpeechState;
   draft: string;
+  images: ChatImage[];
   onDraftChange: (value: string) => void;
+  onImagesChange: (images: ChatImage[]) => void;
+  visionEnabled: boolean;
   onPrepareSpeech: () => Promise<void>;
   onStartSpeech: () => Promise<string | undefined>;
   onStopSpeech: (sessionId: string) => Promise<void>;
@@ -23,7 +27,10 @@ export function ChatPanel({
   runtime,
   speech,
   draft,
+  images,
   onDraftChange,
+  onImagesChange,
+  visionEnabled,
   onPrepareSpeech,
   onStartSpeech,
   onStopSpeech,
@@ -35,6 +42,7 @@ export function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>(readChatHistory);
   const [thinking, setThinking] = useState(false);
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState("");
   const assistantByRequest = useRef(new Map<string, string>());
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -107,12 +115,13 @@ export function ChatPanel({
 
   const send = () => {
     const text = draft.trim();
-    if (!text || activeRequest || runtime.phase !== "ready") return;
+    if ((!text && !images.length) || activeRequest || runtime.phase !== "ready") return;
     const requestId = crypto.randomUUID();
     const user: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
       content: text,
+      images: images.length ? images : undefined,
       createdAt: Date.now(),
     };
     const assistant: ChatMessage = {
@@ -125,6 +134,8 @@ export function ChatPanel({
     assistantByRequest.current.set(requestId, assistant.id);
     setMessages([...nextMessages, assistant]);
     onDraftChange("");
+    onImagesChange([]);
+    setAttachmentError("");
     setActiveRequest(requestId);
     window.desktopPet.startChat({
       requestId,
@@ -132,6 +143,12 @@ export function ChatPanel({
       thinking,
     });
   };
+
+  const removeImage = (index: number) => {
+    onImagesChange(images.filter((_image, imageIndex) => imageIndex !== index));
+  };
+
+  const speechBusy = speech.phase === "recording" || speech.phase === "transcribing";
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -206,13 +223,14 @@ export function ChatPanel({
                 <span className="message-avatar">团</span>
               )}
               <div className="message-content">
+                <ImageAttachmentTray images={message.images ?? []} />
                 {message.reasoning && (
                   <details className="reasoning">
                     <summary>团子的思考</summary>
                     <p>{message.reasoning}</p>
                   </details>
                 )}
-                <p className={!message.content ? "typing-dots" : ""}>
+                {(message.content || message.role === "assistant") && <p className={!message.content ? "typing-dots" : ""}>
                   {message.content || (
                     <>
                       <i />
@@ -220,7 +238,7 @@ export function ChatPanel({
                       <i />
                     </>
                   )}
-                </p>
+                </p>}
               </div>
             </article>
           ))
@@ -276,15 +294,23 @@ export function ChatPanel({
 
       <footer className="composer">
         <div className="composer__toolbar">
-          <button
-            type="button"
-            className={`thinking-toggle ${thinking ? "active" : ""}`}
-            onClick={() => setThinking((value) => !value)}
-            title="深度思考模式（需要当前模型支持）"
-          >
-            <span>✦</span>
-            {thinking ? "深度思考" : "快速回答"}
-          </button>
+          <div className="composer__tools">
+            <button
+              type="button"
+              className={`thinking-toggle ${thinking ? "active" : ""}`}
+              onClick={() => setThinking((value) => !value)}
+              title="深度思考模式（需要当前模型支持）"
+            >
+              <span>✦</span>
+              {thinking ? "深度思考" : "快速回答"}
+            </button>
+            <ImageAttachButton
+              images={images}
+              disabled={!visionEnabled || runtime.phase !== "ready" || Boolean(activeRequest) || speechBusy}
+              onChange={onImagesChange}
+              onError={setAttachmentError}
+            />
+          </div>
           {messages.length > 0 && !activeRequest && (
             <button
               className="text-button"
@@ -295,6 +321,8 @@ export function ChatPanel({
             </button>
           )}
         </div>
+        <ImageAttachmentTray images={images} onRemove={removeImage} />
+        {attachmentError && <p className="composer__error">{attachmentError}</p>}
         <div className="composer__input">
           <textarea
             rows={2}
@@ -312,7 +340,7 @@ export function ChatPanel({
                 ? "和团子说点什么…"
                 : "等待本地模型就绪…"
             }
-            disabled={runtime.phase !== "ready" || speech.phase === "recording" || speech.phase === "transcribing"}
+            disabled={runtime.phase !== "ready" || speechBusy}
           />
           <VoiceButton
             speech={speech}
@@ -336,7 +364,7 @@ export function ChatPanel({
               className="send-button"
               type="button"
               onClick={send}
-              disabled={!draft.trim() || runtime.phase !== "ready" || speech.phase === "recording" || speech.phase === "transcribing"}
+              disabled={(!draft.trim() && !images.length) || runtime.phase !== "ready" || speechBusy}
               aria-label="发送"
             >
               ↑

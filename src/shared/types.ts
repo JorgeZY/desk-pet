@@ -17,6 +17,7 @@ export interface RuntimeConfig {
   modelMode: ModelMode;
   hfRepo: string;
   modelPath: string;
+  mmprojPath: string;
   host: "127.0.0.1";
   port: number;
   contextSize: number;
@@ -24,6 +25,10 @@ export interface RuntimeConfig {
   threads: number;
   maxTokens: number;
   temperature: number;
+  topK: number;
+  topP: number;
+  minP: number;
+  repeatPenalty: number;
   autoStart: boolean;
   systemPrompt: string;
   speech: SpeechConfig;
@@ -48,6 +53,7 @@ export interface ModelDownloadProgress {
 
 export interface RuntimeState {
   phase: RuntimePhase;
+  visionEnabled: boolean;
   pid?: number;
   endpoint: string;
   message: string;
@@ -117,8 +123,18 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  images?: ChatImage[];
   reasoning?: string;
   createdAt: number;
+}
+
+export type ChatImageMimeType = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+
+export interface ChatImage {
+  path: string;
+  name: string;
+  mimeType: ChatImageMimeType;
+  previewUrl?: string;
 }
 
 export interface ChatRequest {
@@ -161,6 +177,8 @@ export interface DesktopPetApi {
   setSpeechComposerFocused(focused: boolean): void;
   pickExecutable(): Promise<FilePickResult | null>;
   pickModel(): Promise<FilePickResult | null>;
+  pickMmproj(): Promise<FilePickResult | null>;
+  pickChatImages(): Promise<ChatImage[]>;
   setWindowMode(mode: WindowMode): Promise<void>;
   setPetWindowHeight(height: number): Promise<void>;
   hideWindow(): Promise<void>;

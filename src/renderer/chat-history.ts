@@ -9,6 +9,17 @@ export interface ChatHistoryStorage {
   setItem(key: string, value: string): void;
 }
 
+function withoutImagePreviews(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    ...(message.images
+      ? {
+          images: message.images.map(({ path, name, mimeType }) => ({ path, name, mimeType })),
+        }
+      : {}),
+  }));
+}
+
 export function readChatHistory(storage: ChatHistoryStorage = localStorage): ChatMessage[] {
   try {
     const saved = storage.getItem(CHAT_HISTORY_KEY) ?? storage.getItem(LEGACY_CHAT_HISTORY_KEY);
@@ -23,7 +34,7 @@ export function writeChatHistory(
   messages: ChatMessage[],
   storage: ChatHistoryStorage = localStorage,
 ): ChatMessage[] {
-  const trimmed = messages.slice(-CHAT_HISTORY_LIMIT);
+  const trimmed = withoutImagePreviews(messages.slice(-CHAT_HISTORY_LIMIT));
   try {
     storage.setItem(CHAT_HISTORY_KEY, JSON.stringify(trimmed));
   } catch {

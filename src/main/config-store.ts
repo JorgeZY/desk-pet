@@ -13,6 +13,7 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
   modelMode: "huggingface",
   hfRepo: "openbmb/MiniCPM5-1B-GGUF:Q4_K_M",
   modelPath: "",
+  mmprojPath: "",
   host: "127.0.0.1",
   port: 18766,
   contextSize: 8192,
@@ -20,6 +21,10 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
   threads: Math.max(2, cpus().length - 1),
   maxTokens: 512,
   temperature: 0.7,
+  topK: 40,
+  topP: 0.95,
+  minP: 0.05,
+  repeatPenalty: 1.0,
   autoStart: true,
   speech: {
     enabled: true,
@@ -60,6 +65,7 @@ export function normalizeConfig(value: unknown): RuntimeConfig {
         ? raw.hfRepo.trim()
         : DEFAULT_CONFIG.hfRepo,
     modelPath: typeof raw.modelPath === "string" ? raw.modelPath.trim() : "",
+    mmprojPath: typeof raw.mmprojPath === "string" ? raw.mmprojPath.trim() : "",
     host: "127.0.0.1",
     port: clampInt(raw.port, DEFAULT_CONFIG.port, 1024, 65535),
     contextSize: clampInt(raw.contextSize, DEFAULT_CONFIG.contextSize, 512, 131072),
@@ -69,6 +75,13 @@ export function normalizeConfig(value: unknown): RuntimeConfig {
     temperature: Math.min(
       2,
       Math.max(0, asFiniteNumber(raw.temperature, DEFAULT_CONFIG.temperature)),
+    ),
+    topK: clampInt(raw.topK, DEFAULT_CONFIG.topK, 0, 1000),
+    topP: Math.min(1, Math.max(0, asFiniteNumber(raw.topP, DEFAULT_CONFIG.topP))),
+    minP: Math.min(1, Math.max(0, asFiniteNumber(raw.minP, DEFAULT_CONFIG.minP))),
+    repeatPenalty: Math.min(
+      2,
+      Math.max(0, asFiniteNumber(raw.repeatPenalty, DEFAULT_CONFIG.repeatPenalty)),
     ),
     autoStart: raw.autoStart !== false,
     speech: {
@@ -97,6 +110,9 @@ export function validateConfig(config: RuntimeConfig): string[] {
     if (config.modelPath && !config.modelPath.toLowerCase().endsWith(".gguf")) {
       errors.push("本地模型必须是 .gguf 文件。");
     }
+  }
+  if (config.mmprojPath && !config.mmprojPath.toLowerCase().endsWith(".gguf")) {
+    errors.push("视觉投影模型必须是 .gguf 文件。");
   }
   return errors;
 }

@@ -15,9 +15,11 @@ import {
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { promisify } from "node:util";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import type {
   BootstrapData,
+  ChatImage,
+  ChatImageMimeType,
   ChatRequest,
   FilePickResult,
   ProbeResult,
@@ -266,6 +268,48 @@ async function pickFile(
   return { path, name: basename(path) };
 }
 
+const CHAT_IMAGE_MIME_TYPES: Record<string, ChatImageMimeType> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+async function pickChatImages(): Promise<ChatImage[]> {
+  const options: Electron.OpenDialogOptions = {
+    title: "选择要发送给视觉模型的图片",
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "webp", "gif"] }],
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled) return [];
+  if (result.filePaths.length > 4) throw new Error("一次最多选择 4 张图片。");
+
+  return Promise.all(result.filePaths.map(async (path): Promise<ChatImage> => {
+    const name = basename(path);
+    const mimeType = CHAT_IMAGE_MIME_TYPES[extname(path).toLowerCase()];
+    if (!mimeType) throw new Error(`不支持图片格式：${name}`);
+    const stats = await fs.stat(path);
+    if (stats.size > 10 * 1024 * 1024) throw new Error(`图片 ${name} 超过 10 MB。`);
+
+    let preview = nativeImage.createFromPath(path);
+    if (preview.isEmpty()) throw new Error(`无法读取图片：${name}`);
+    const size = preview.getSize();
+    const scale = Math.min(1, 512 / size.width, 512 / size.height);
+    if (scale < 1) {
+      preview = preview.resize({
+        width: Math.max(1, Math.round(size.width * scale)),
+        height: Math.max(1, Math.round(size.height * scale)),
+        quality: "good",
+      });
+    }
+    return { path, name, mimeType, previewUrl: preview.toDataURL() };
+  }));
+}
+
 async function probeExecutable(requested?: string): Promise<ProbeResult> {
   const candidates = requested?.trim() ? [requested.trim()] : ["llama", "llama-server"];
   let lastError = "未找到 llama.cpp。";
@@ -387,6 +431,10 @@ function registerIpc(): void {
   ipcMain.handle("dialog:pick-model", () =>
     pickFile("选择 llama.cpp GGUF 模型", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
   );
+  ipcMain.handle("dialog:pick-mmproj", () =>
+    pickFile("选择视觉投影模型（mmproj）", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
+  );
+  ipcMain.handle("dialog:pick-chat-images", () => pickChatImages());
   ipcMain.handle("window:set-mode", (_event, mode: WindowMode) => setWindowMode(mode));
   ipcMain.handle("window:set-pet-height", (_event, height: number) => setPetWindowHeight(height));
   ipcMain.handle("window:hide", () => mainWindow?.hide());

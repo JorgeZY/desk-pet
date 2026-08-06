@@ -67,4 +67,24 @@ describe("chat history", () => {
       reasoning: "思考",
     });
   });
+
+  it("persists image paths without large preview data", () => {
+    const storage = new MemoryStorage();
+    appendChatMessages([{
+      ...message(1),
+      images: [{
+        path: "D:\\images\\cat.png",
+        name: "cat.png",
+        mimeType: "image/png",
+        previewUrl: "data:image/png;base64,large-preview",
+      }],
+    }], storage);
+
+    expect(readChatHistory(storage)[0]?.images).toEqual([{
+      path: "D:\\images\\cat.png",
+      name: "cat.png",
+      mimeType: "image/png",
+    }]);
+    expect(storage.getItem(CHAT_HISTORY_KEY)).not.toContain("large-preview");
+  });
 });
