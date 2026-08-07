@@ -1446,8 +1446,12 @@ select {
 }
 
 .thinking-toggle span {
+  display: inline-flex;
   min-width: 55px;
   padding: 4px 7px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
   color: #958078;
   border-radius: 6px;
   font-size: 9px;
@@ -1457,10 +1461,22 @@ select {
   transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease;
 }
 
-.thinking-toggle span.active {
-  color: #7c4a37;
-  background: #fff8f1;
-  box-shadow: 0 1px 4px rgba(98, 57, 43, 0.16);
+.thinking-toggle__option svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+}
+
+.thinking-toggle__option--quick.active {
+  color: #39705f;
+  background: #e8f5ef;
+  box-shadow: 0 1px 4px rgba(58, 112, 95, 0.16);
+}
+
+.thinking-toggle__option--deep.active {
+  color: #8a5d2f;
+  background: #fff0d8;
+  box-shadow: 0 1px 4px rgba(138, 93, 47, 0.16);
 }
 
 .composer__input {
@@ -2015,8 +2031,9 @@ select {
 
 .quick-chat__composer .voice-button {
   min-height: 34px;
-  color: #8a5d4e;
-  background: #fff0e4;
+  color: #916655;
+  background: rgba(255, 240, 228, 0.88);
+  border: 1px solid rgba(218, 118, 82, 0.12);
 }
 
 .quick-chat__composer .image-attach-button--compact {
@@ -2025,15 +2042,21 @@ select {
   min-height: 34px;
   padding: 0;
   justify-content: center;
-  color: #8a746c;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(108, 75, 65, 0.1);
+  color: #916655;
+  background: rgba(255, 240, 228, 0.88);
+  border: 1px solid rgba(218, 118, 82, 0.12);
 }
 
 .quick-chat__composer .image-attach-button--compact:hover:not(:disabled) {
-  color: #7c4a37;
-  background: rgba(255, 248, 241, 0.94);
-  border-color: rgba(218, 118, 82, 0.18);
+  color: #794b3c;
+  background: rgba(252, 226, 211, 0.94);
+  border-color: rgba(218, 118, 82, 0.2);
+}
+
+.quick-chat__composer .image-attach-button--compact .image-attach-button__icon {
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.65;
 }
 
 .quick-chat__composer .voice-button.phase-recording {

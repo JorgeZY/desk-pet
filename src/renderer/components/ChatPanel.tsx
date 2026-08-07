@@ -304,8 +304,18 @@ export function ChatPanel({
               aria-label={thinking ? "当前为深度思考，点击切换到快速回答" : "当前为快速回答，点击切换到深度思考"}
               title="深度思考模式（需要当前模型支持）"
             >
-              <span className={!thinking ? "active" : ""}>快速回答</span>
-              <span className={thinking ? "active" : ""}>深度思考</span>
+              <span className={`thinking-toggle__option thinking-toggle__option--quick ${!thinking ? "active" : ""}`}>
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M9.2 1.7 3.8 8.5h3.7l-.7 5.8 5.4-7H8.5l.7-5.6Z" />
+                </svg>
+                快速回答
+              </span>
+              <span className={`thinking-toggle__option thinking-toggle__option--deep ${thinking ? "active" : ""}`}>
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 1.7c.5 3.3 1.8 4.6 5.1 5.1-3.3.5-4.6 1.8-5.1 5.1-.5-3.3-1.8-4.6-5.1-5.1C6.2 6.3 7.5 5 8 1.7Zm4.4 9c.2 1.2.7 1.7 1.9 1.9-1.2.2-1.7.7-1.9 1.9-.2-1.2-.7-1.7-1.9-1.9 1.2-.2 1.7-.7 1.9-1.9Z" />
+                </svg>
+                深度思考
+              </span>
             </button>
             <ImageAttachButton
               images={images}
