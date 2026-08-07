@@ -18,6 +18,9 @@
   --red: #c45e5d;
   --shadow: 0 2px 6px rgba(74, 46, 39, 0.09), 0 1px 2px rgba(74, 46, 39, 0.04);
   --shadow-soft: 0 5px 16px rgba(74, 46, 39, 0.08);
+  --motion-fast: 140ms;
+  --motion-normal: 220ms;
+  --ease-soft-spring: cubic-bezier(0.34, 1.32, 0.64, 1);
 }
 
 * {
@@ -139,11 +142,16 @@ p {
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
-  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, border-color 160ms ease;
+  transition: transform var(--motion-normal) var(--ease-soft-spring), box-shadow 160ms ease, background 160ms ease, border-color 160ms ease;
 }
 
 .button:hover:not(:disabled) {
   transform: translateY(-1px);
+}
+
+.button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 90ms;
 }
 
 .button:disabled {
@@ -179,6 +187,15 @@ p {
   cursor: pointer;
   font-size: 12px;
   font-weight: 700;
+  transition: color var(--motion-fast) ease, transform var(--motion-normal) var(--ease-soft-spring);
+}
+
+.text-button:hover:not(:disabled) {
+  color: #ad553a;
+}
+
+.text-button:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
 .align-left {
@@ -215,6 +232,7 @@ select {
   border: 1px solid rgba(93, 66, 58, 0.12);
   border-radius: 11px;
   box-shadow: inset 0 1px 1px rgba(84, 58, 51, 0.03);
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 180ms ease;
 }
 
 input:hover,
@@ -272,6 +290,7 @@ select {
   border-radius: 10px;
   font-size: 11px;
   line-height: 1.45;
+  animation: notice-arrive 220ms var(--ease-soft-spring);
 }
 
 /* Pet illustration */
@@ -586,6 +605,7 @@ select {
   font-size: 10px;
   font-weight: 800;
   white-space: nowrap;
+  transition: color 180ms ease, background 180ms ease, border-color 180ms ease, transform var(--motion-normal) var(--ease-soft-spring);
 }
 
 .runtime-badge i {
@@ -593,6 +613,7 @@ select {
   height: 7px;
   background: #a1948f;
   border-radius: 50%;
+  transition: background 180ms ease, box-shadow 180ms ease, transform var(--motion-normal) var(--ease-soft-spring);
 }
 
 .runtime-badge.phase-ready {
@@ -602,6 +623,7 @@ select {
 
 .runtime-badge.phase-ready i {
   background: #47a577;
+  box-shadow: 0 0 0 3px rgba(71, 165, 119, 0.1);
 }
 
 .runtime-badge.phase-starting,
@@ -666,11 +688,14 @@ select {
   height: 4px;
   background: rgba(81, 58, 51, 0.1);
   border-radius: 99px;
-  transition: background 200ms ease;
+  transform: scaleY(1);
+  transition: background 200ms ease, transform var(--motion-normal) var(--ease-soft-spring), box-shadow 180ms ease;
 }
 
 .step-track span.active {
   background: linear-gradient(90deg, #f2a479, #db7654);
+  box-shadow: 0 2px 5px rgba(218, 118, 84, 0.18);
+  transform: scaleY(1.35);
 }
 
 .onboarding__body {
@@ -723,6 +748,13 @@ select {
   background: rgba(255, 255, 255, 0.58);
   border: 1px solid var(--line);
   border-radius: 12px;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 180ms ease;
+}
+
+.feature-list li:hover {
+  background: rgba(255, 253, 249, 0.84);
+  border-color: rgba(216, 112, 78, 0.16);
+  box-shadow: 0 3px 10px rgba(74, 46, 39, 0.05);
 }
 
 .feature-list b {
@@ -773,6 +805,10 @@ select {
   padding: 11px 13px;
   border-radius: 11px;
   font-size: 11px;
+  transition:
+    color var(--motion-normal) ease,
+    background var(--motion-normal) ease,
+    border-color var(--motion-normal) ease;
 }
 
 .probe-result.success,
@@ -815,12 +851,18 @@ select {
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
+  transition: color 160ms ease, background 160ms ease, box-shadow 180ms ease, transform var(--motion-normal) var(--ease-soft-spring);
+}
+
+.segmented button:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .segmented button.active {
   color: var(--ink);
   background: rgba(255, 255, 255, 0.88);
   box-shadow: 0 3px 12px rgba(77, 50, 42, 0.08);
+  animation: control-select-pop 240ms var(--ease-soft-spring);
 }
 
 .segmented small {
@@ -841,6 +883,12 @@ select {
   border: 1px solid rgba(213, 118, 82, 0.18);
   border-radius: 14px;
   box-shadow: 0 5px 18px rgba(81, 53, 45, 0.05);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.model-card:hover {
+  border-color: rgba(213, 118, 82, 0.26);
+  box-shadow: 0 7px 20px rgba(81, 53, 45, 0.07);
 }
 
 .model-card__icon,
@@ -922,6 +970,12 @@ select {
   background: rgba(255, 255, 255, 0.56);
   border: 1px solid var(--line);
   border-radius: 12px;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 180ms ease;
+}
+
+.switch-row:hover {
+  background: rgba(255, 253, 249, 0.72);
+  border-color: rgba(216, 112, 78, 0.16);
 }
 
 .switch-row > div {
@@ -943,6 +997,15 @@ select {
   width: 36px;
   min-height: auto;
   accent-color: var(--peach-dark);
+  transition: transform var(--motion-normal) var(--ease-soft-spring);
+}
+
+.switch-row input:active:not(:disabled) {
+  transform: scale(0.88);
+}
+
+.switch-row input:checked {
+  animation: control-select-pop 240ms var(--ease-soft-spring);
 }
 
 /* Shared panel header */
@@ -1009,6 +1072,7 @@ select {
   cursor: pointer;
   font-size: 15px;
   line-height: 1;
+  transition: color 150ms ease, background 150ms ease, box-shadow 180ms ease, transform var(--motion-normal) var(--ease-soft-spring);
 }
 
 .icon-button {
@@ -1020,6 +1084,13 @@ select {
 .mini-icon-button:hover {
   color: var(--peach-dark);
   background: var(--peach-soft);
+  transform: translateY(-1px) scale(1.03);
+}
+
+.icon-button:active,
+.mini-icon-button:active {
+  transform: scale(0.9);
+  transition-duration: 90ms;
 }
 
 /* Chat */
@@ -1081,6 +1152,11 @@ select {
   background: rgba(255, 251, 245, 0.9);
   border-color: rgba(216, 112, 78, 0.24);
   transform: translateY(-1px);
+}
+
+.suggestion-grid button:active {
+  transform: translateY(0) scale(0.985);
+  transition-duration: 90ms;
 }
 
 .message {
@@ -1154,6 +1230,13 @@ select {
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(99, 70, 62, 0.12);
   border-radius: 9px;
+  animation: attachment-arrive 220ms var(--ease-soft-spring);
+  transition: border-color 160ms ease, box-shadow 180ms ease;
+}
+
+.image-attachment:hover {
+  border-color: rgba(216, 112, 78, 0.24);
+  box-shadow: 0 3px 10px rgba(74, 46, 39, 0.08);
 }
 
 .image-attachment img {
@@ -1195,6 +1278,16 @@ select {
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
+  transition: background 140ms ease, transform var(--motion-normal) var(--ease-soft-spring);
+}
+
+.image-attachment > button:hover {
+  background: rgba(183, 76, 55, 0.88);
+  transform: scale(1.08);
+}
+
+.image-attachment > button:active {
+  transform: scale(0.88);
 }
 
 .message--user .image-attachment-tray {
@@ -1210,6 +1303,11 @@ select {
 .reasoning summary {
   cursor: pointer;
   font-weight: 700;
+  transition: color var(--motion-fast) ease;
+}
+
+.reasoning summary:hover {
+  color: var(--peach-dark);
 }
 
 .reasoning p {
@@ -1259,6 +1357,7 @@ select {
   background: #fff2df;
   border: 1px solid #f0dbc0;
   border-radius: 12px;
+  animation: notice-arrive 220ms var(--ease-soft-spring);
 }
 
 .runtime-notice--error {
@@ -1396,12 +1495,19 @@ select {
   border: 1px solid rgba(108, 75, 65, 0.08);
   border-radius: 7px;
   cursor: pointer;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease, transform var(--motion-normal) var(--ease-soft-spring);
 }
 
 .image-attach-button:hover:not(:disabled) {
   color: #7c4a37;
   background: rgba(239, 153, 111, 0.14);
   border-color: rgba(218, 118, 82, 0.18);
+  transform: translateY(-1px);
+}
+
+.image-attach-button:active:not(:disabled) {
+  transform: scale(0.9);
+  transition-duration: 90ms;
 }
 
 .image-attach-button:disabled {
@@ -1596,6 +1702,11 @@ select {
   font-weight: 800;
   user-select: none;
   touch-action: none;
+  transition:
+    color var(--motion-normal) ease,
+    background var(--motion-normal) ease,
+    border-color var(--motion-normal) ease,
+    box-shadow var(--motion-normal) ease;
 }
 
 .voice-button--compact {
@@ -1667,6 +1778,17 @@ select {
   cursor: pointer;
   font-size: 18px;
   font-weight: 800;
+  transition: filter 150ms ease, box-shadow 180ms ease, transform var(--motion-normal) var(--ease-soft-spring);
+}
+
+.send-button:hover:not(:disabled) {
+  box-shadow: 0 5px 13px rgba(201, 92, 62, 0.24);
+  transform: translateY(-1px) scale(1.03);
+}
+
+.send-button:active:not(:disabled) {
+  transform: scale(0.9);
+  transition-duration: 90ms;
 }
 
 .send-button:disabled {
@@ -1755,6 +1877,10 @@ select {
   border-radius: 8px;
   font-size: 9px;
   word-break: break-all;
+  transition:
+    color var(--motion-normal) ease,
+    background var(--motion-normal) ease,
+    border-color var(--motion-normal) ease;
 }
 
 .settings-value-row {
@@ -1765,6 +1891,12 @@ select {
   background: rgba(255, 255, 255, 0.58);
   border: 1px solid var(--line);
   border-radius: 11px;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 180ms ease;
+}
+
+.settings-value-row:hover {
+  background: rgba(255, 253, 249, 0.72);
+  border-color: rgba(216, 112, 78, 0.16);
 }
 
 .settings-value-row > div,
@@ -1805,6 +1937,12 @@ select {
   background: rgba(255, 255, 255, 0.5);
   border: 1px solid var(--line);
   border-radius: 10px;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.settings-info:hover {
+  background: rgba(255, 253, 249, 0.68);
+  border-color: rgba(216, 112, 78, 0.14);
 }
 
 .settings-info--path {
@@ -1908,6 +2046,7 @@ select {
   box-shadow: 0 7px 20px rgba(71, 46, 40, 0.13);
   backdrop-filter: blur(14px);
   pointer-events: none;
+  animation: speech-bubble-arrive 240ms var(--ease-soft-spring);
 }
 
 .global-speech-bubble::after {
@@ -1989,6 +2128,7 @@ select {
   border-radius: 14px 14px 14px 6px;
   box-shadow: 0 6px 18px rgba(71, 46, 40, 0.11);
   backdrop-filter: blur(12px);
+  animation: quick-chat-arrive 240ms var(--ease-soft-spring);
   transition: border-color 180ms ease, box-shadow 180ms ease;
 }
 
@@ -2075,6 +2215,18 @@ select {
   border-radius: 8px;
   cursor: pointer;
   font-size: 12px;
+  transition:
+    transform var(--motion-fast) var(--ease-soft-spring),
+    background var(--motion-fast) ease;
+}
+
+.quick-chat__message button:hover {
+  background: #f9ded1;
+  transform: translateY(-1px);
+}
+
+.quick-chat__message button:active {
+  transform: scale(0.94);
 }
 
 .quick-chat__composer {
@@ -2135,6 +2287,16 @@ select {
   padding: 0;
   margin: 0;
   justify-self: center;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease, box-shadow 180ms ease, transform var(--motion-normal) var(--ease-soft-spring);
+}
+
+.quick-chat__composer > button:not(.voice-button):hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.03);
+}
+
+.quick-chat__composer > button:not(.voice-button):active:not(:disabled) {
+  transform: scale(0.9);
+  transition-duration: 90ms;
 }
 
 .quick-chat__composer .voice-button {
@@ -2219,6 +2381,32 @@ select {
   color: var(--red);
   font-size: 12px;
   line-height: 1.6;
+}
+
+@keyframes control-select-pop {
+  0% { transform: scale(0.96); }
+  60% { transform: scale(1.025); }
+  100% { transform: scale(1); }
+}
+
+@keyframes attachment-arrive {
+  0% { opacity: 0; transform: translateY(3px) scale(0.94); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes notice-arrive {
+  0% { opacity: 0; transform: translateY(-3px) scale(0.985); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes speech-bubble-arrive {
+  0% { opacity: 0; transform: translateY(5px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes quick-chat-arrive {
+  0% { opacity: 0; transform: translateY(4px) scale(0.985); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @media (prefers-reduced-motion: reduce) {
