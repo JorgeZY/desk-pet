@@ -91,6 +91,11 @@ describe("LlamaRuntime local HTTP integration", () => {
     expect(requestPayload).toMatchObject({
       model: "desk-pet-model",
       stream: true,
+      temperature: DEFAULT_CONFIG.temperature,
+      top_k: DEFAULT_CONFIG.topK,
+      top_p: DEFAULT_CONFIG.topP,
+      min_p: DEFAULT_CONFIG.minP,
+      repeat_penalty: DEFAULT_CONFIG.repeatPenalty,
       chat_template_kwargs: { enable_thinking: true },
     });
   });

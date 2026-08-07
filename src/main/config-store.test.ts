@@ -7,6 +7,11 @@ describe("runtime config", () => {
     expect(config.modelMode).toBe("huggingface");
     expect(config.hfRepo).toBe("openbmb/MiniCPM5-1B-GGUF:Q4_K_M");
     expect(config.contextSize).toBe(8192);
+    expect(config.mmprojPath).toBe("");
+    expect(config.topK).toBe(40);
+    expect(config.topP).toBe(0.95);
+    expect(config.minP).toBe(0.05);
+    expect(config.repeatPenalty).toBe(1);
     expect(config.speech.modelDirectory).toBe("");
   });
 
@@ -34,11 +39,19 @@ describe("runtime config", () => {
       port: 1,
       contextSize: 999_999,
       temperature: -4,
+      topK: 9_999,
+      topP: -1,
+      minP: 4,
+      repeatPenalty: -3,
       threads: 0,
     });
     expect(config.port).toBe(1024);
     expect(config.contextSize).toBe(131072);
     expect(config.temperature).toBe(0);
+    expect(config.topK).toBe(1000);
+    expect(config.topP).toBe(0);
+    expect(config.minP).toBe(1);
+    expect(config.repeatPenalty).toBe(0);
     expect(config.threads).toBe(1);
     expect(config.speech.threads).toBe(2);
   });
@@ -81,5 +94,11 @@ describe("runtime config", () => {
       hfRepo: "someone/another-model:Q4_K_M",
     });
     expect(validateConfig(config)).toEqual([]);
+  });
+
+  it("accepts an optional GGUF mmproj and rejects other file types", () => {
+    expect(validateConfig(normalizeConfig({ ...DEFAULT_CONFIG, mmprojPath: "vision-mmproj.gguf" }))).toEqual([]);
+    expect(validateConfig(normalizeConfig({ ...DEFAULT_CONFIG, mmprojPath: "vision-mmproj.bin" })))
+      .toContain("视觉投影模型必须是 .gguf 文件。");
   });
 });

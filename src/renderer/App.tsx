@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   BootstrapData,
+  ChatImage,
   RuntimeConfig,
   RuntimeState,
   SpeechEvent,
@@ -27,6 +28,7 @@ export function App() {
   const [view, setView] = useState<WindowMode>("pet");
   const [fatalError, setFatalError] = useState("");
   const [draft, setDraft] = useState("");
+  const [draftImages, setDraftImages] = useState<ChatImage[]>([]);
   const draftRef = useRef("");
   const speechBaseDraftRef = useRef("");
   const activeSpeechRef = useRef<string | null>(null);
@@ -201,6 +203,7 @@ export function App() {
     setBootstrap(data);
     setRuntime(data.runtime);
     setSpeech(data.speech);
+    if (!data.config.mmprojPath) setDraftImages([]);
     if (restart) setRuntime(await window.desktopPet.restartRuntime());
     await transitionToView("pet");
   };
@@ -280,7 +283,10 @@ export function App() {
           runtime={runtime}
           speech={speech}
           draft={draft}
+          images={draftImages}
           onDraftChange={updateDraft}
+          onImagesChange={setDraftImages}
+          visionEnabled={runtime.visionEnabled}
           onPrepareSpeech={prepareSpeech}
           onStartSpeech={startSpeech}
           onStopSpeech={stopSpeech}
@@ -323,7 +329,10 @@ export function App() {
           runtime={runtime}
           speech={speech}
           draft={draft}
+          images={draftImages}
           onDraftChange={updateDraft}
+          onImagesChange={setDraftImages}
+          visionEnabled={runtime.visionEnabled}
           onPrepareSpeech={prepareSpeech}
           onStartSpeech={startSpeech}
           onStopSpeech={stopSpeech}

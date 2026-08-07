@@ -1,14 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { ChatEvent, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
-import { PET_WINDOW_BASE_HEIGHT, quickReplyWindowHeight } from "../../shared/pet-window";
+import type { ChatEvent, ChatImage, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
+import { PET_WINDOW_BASE_HEIGHT, PET_WINDOW_MAX_HEIGHT, quickReplyWindowHeight } from "../../shared/pet-window";
 import { appendChatMessages, readChatHistory, updateChatMessage } from "../chat-history";
 import { VoiceButton } from "./VoiceButton";
+import { ImageAttachButton, ImageAttachmentTray } from "./ImageAttachments";
 
 interface QuickChatProps {
   runtime: RuntimeState;
   speech: SpeechState;
   draft: string;
+  images: ChatImage[];
   onDraftChange: (value: string) => void;
+  onImagesChange: (images: ChatImage[]) => void;
+  visionEnabled: boolean;
   onPrepareSpeech: () => Promise<void>;
   onStartSpeech: () => Promise<string | undefined>;
   onStopSpeech: (sessionId: string) => Promise<void>;
@@ -36,7 +40,10 @@ export function QuickChat({
   runtime,
   speech,
   draft,
+  images,
   onDraftChange,
+  onImagesChange,
+  visionEnabled,
   onPrepareSpeech,
   onStartSpeech,
   onStopSpeech,
@@ -47,6 +54,7 @@ export function QuickChat({
   const [reply, setReply] = useState("");
   const [starting, setStarting] = useState(false);
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState("");
   const activeRequestRef = useRef<string | null>(null);
   const assistantIdRef = useRef<string | null>(null);
   const replyRef = useRef("");
@@ -69,6 +77,7 @@ export function QuickChat({
   useEffect(() => {
     const unsubscribe = window.desktopPet.onChatEvent((event: ChatEvent) => {
       if (event.requestId !== activeRequestRef.current) return;
+      if (event.type === "warning") setAttachmentError(event.message);
       if (event.type === "delta") {
         const nextReply = replyRef.current + event.text;
         replyRef.current = nextReply;
@@ -121,12 +130,13 @@ export function QuickChat({
 
   const submit = () => {
     const content = draft.trim();
-    if (!content || runtime.phase !== "ready" || activeRequestRef.current) return;
+    if ((!content && !images.length) || runtime.phase !== "ready" || activeRequestRef.current) return;
     const requestId = crypto.randomUUID();
     const user: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
       content,
+      images: images.length ? images : undefined,
       createdAt: Date.now(),
     };
     const assistant: ChatMessage = {
@@ -142,6 +152,8 @@ export function QuickChat({
     shouldRestoreFocusRef.current = true;
     changeActiveRequest(requestId);
     onDraftChange("");
+    onImagesChange([]);
+    setAttachmentError("");
     setReply("");
     window.desktopPet.startChat({
       requestId,
@@ -187,14 +199,22 @@ export function QuickChat({
   const speechBusy = speech.phase === "recording" || speech.phase === "transcribing";
   const visibleReply = speechBusy ? speech.message : reply || runtimeHint(runtime);
 
+  const removeImage = (index: number) => {
+    onImagesChange(images.filter((_image, imageIndex) => imageIndex !== index));
+  };
+
   useLayoutEffect(() => {
     const replyElement = replyElementRef.current;
     if (!replyElement) return;
-    const nextHeight = quickReplyWindowHeight(replyElement.scrollHeight, Boolean(reply));
+    const contentHeight = quickReplyWindowHeight(replyElement.scrollHeight, Boolean(reply));
+    const nextHeight = Math.min(
+      PET_WINDOW_MAX_HEIGHT,
+      contentHeight + (images.length || attachmentError ? 48 : 0),
+    );
     if (nextHeight === lastWindowHeightRef.current) return;
     lastWindowHeightRef.current = nextHeight;
     void window.desktopPet.setPetWindowHeight(nextHeight);
-  }, [reply, visibleReply]);
+  }, [attachmentError, images.length, reply, visibleReply]);
 
   useLayoutEffect(() => () => {
     lastWindowHeightRef.current = PET_WINDOW_BASE_HEIGHT;
@@ -210,40 +230,51 @@ export function QuickChat({
       </div>
 
       {ready ? (
-        <form
-          className="quick-chat__composer"
-          onSubmit={(event) => {
-            event.preventDefault();
-            submit();
-          }}
-        >
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(event) => onDraftChange(event.target.value)}
-            onFocus={() => window.desktopPet.setSpeechComposerFocused(true)}
-            onBlur={() => window.desktopPet.setSpeechComposerFocused(false)}
-            placeholder={speech.phase === "recording" ? "正在听你说…" : isGenerating ? "正在回答…" : "快速聊一句…"}
-            disabled={speechBusy}
-            aria-label="快捷对话"
-          />
-          <VoiceButton
-            speech={speech}
-            compact
-            onPrepare={onPrepareSpeech}
-            onStart={onStartSpeech}
-            onStop={onStopSpeech}
-            onCancel={onCancelSpeech}
-          />
-          <button
-            type={isGenerating ? "button" : "submit"}
-            onClick={isGenerating ? stop : undefined}
-            disabled={speechBusy || (!isGenerating && !draft.trim())}
-            aria-label={isGenerating ? "停止生成" : "发送"}
+        <>
+          <ImageAttachmentTray images={images} onRemove={removeImage} compact />
+          {attachmentError && <p className="quick-chat__error">{attachmentError}</p>}
+          <form
+            className="quick-chat__composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submit();
+            }}
           >
-            {isGenerating ? "■" : "↑"}
-          </button>
-        </form>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(event) => onDraftChange(event.target.value)}
+              onFocus={() => window.desktopPet.setSpeechComposerFocused(true)}
+              onBlur={() => window.desktopPet.setSpeechComposerFocused(false)}
+              placeholder={speech.phase === "recording" ? "正在听你说…" : isGenerating ? "正在回答…" : "快速聊一句…"}
+              disabled={speechBusy}
+              aria-label="快捷对话"
+            />
+            <ImageAttachButton
+              images={images}
+              compact
+              disabled={!visionEnabled || isGenerating || speechBusy}
+              onChange={onImagesChange}
+              onError={setAttachmentError}
+            />
+            <VoiceButton
+              speech={speech}
+              compact
+              onPrepare={onPrepareSpeech}
+              onStart={onStartSpeech}
+              onStop={onStopSpeech}
+              onCancel={onCancelSpeech}
+            />
+            <button
+              type={isGenerating ? "button" : "submit"}
+              onClick={isGenerating ? stop : undefined}
+              disabled={speechBusy || (!isGenerating && !draft.trim() && !images.length)}
+              aria-label={isGenerating ? "停止生成" : "发送"}
+            >
+              {isGenerating ? "■" : "↑"}
+            </button>
+          </form>
+        </>
       ) : (
         <button
           className="quick-chat__wake"

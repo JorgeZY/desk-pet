@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChatEvent, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
+import type { ChatEvent, ChatImage, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
 import { readChatHistory, writeChatHistory } from "../chat-history";
 import { Pet, type PetMood } from "./Pet";
 import { RuntimeBadge } from "./RuntimeBadge";
 import { VoiceButton } from "./VoiceButton";
+import { ImageAttachButton, ImageAttachmentTray } from "./ImageAttachments";
 
 interface ChatPanelProps {
   runtime: RuntimeState;
   speech: SpeechState;
   draft: string;
+  images: ChatImage[];
   onDraftChange: (value: string) => void;
+  onImagesChange: (images: ChatImage[]) => void;
+  visionEnabled: boolean;
   onPrepareSpeech: () => Promise<void>;
   onStartSpeech: () => Promise<string | undefined>;
   onStopSpeech: (sessionId: string) => Promise<void>;
@@ -23,7 +27,10 @@ export function ChatPanel({
   runtime,
   speech,
   draft,
+  images,
   onDraftChange,
+  onImagesChange,
+  visionEnabled,
   onPrepareSpeech,
   onStartSpeech,
   onStopSpeech,
@@ -35,6 +42,7 @@ export function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>(readChatHistory);
   const [thinking, setThinking] = useState(false);
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState("");
   const assistantByRequest = useRef(new Map<string, string>());
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -51,6 +59,7 @@ export function ChatPanel({
       window.desktopPet.onChatEvent((event: ChatEvent) => {
         const assistantId = assistantByRequest.current.get(event.requestId);
         if (!assistantId) return;
+        if (event.type === "warning") setAttachmentError(event.message);
         if (event.type === "delta" || event.type === "reasoning") {
           setMessages((current) =>
             current.map((message) =>
@@ -107,12 +116,13 @@ export function ChatPanel({
 
   const send = () => {
     const text = draft.trim();
-    if (!text || activeRequest || runtime.phase !== "ready") return;
+    if ((!text && !images.length) || activeRequest || runtime.phase !== "ready") return;
     const requestId = crypto.randomUUID();
     const user: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
       content: text,
+      images: images.length ? images : undefined,
       createdAt: Date.now(),
     };
     const assistant: ChatMessage = {
@@ -125,6 +135,8 @@ export function ChatPanel({
     assistantByRequest.current.set(requestId, assistant.id);
     setMessages([...nextMessages, assistant]);
     onDraftChange("");
+    onImagesChange([]);
+    setAttachmentError("");
     setActiveRequest(requestId);
     window.desktopPet.startChat({
       requestId,
@@ -132,6 +144,12 @@ export function ChatPanel({
       thinking,
     });
   };
+
+  const removeImage = (index: number) => {
+    onImagesChange(images.filter((_image, imageIndex) => imageIndex !== index));
+  };
+
+  const speechBusy = speech.phase === "recording" || speech.phase === "transcribing";
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -206,13 +224,14 @@ export function ChatPanel({
                 <span className="message-avatar">团</span>
               )}
               <div className="message-content">
+                <ImageAttachmentTray images={message.images ?? []} />
                 {message.reasoning && (
                   <details className="reasoning">
                     <summary>团子的思考</summary>
                     <p>{message.reasoning}</p>
                   </details>
                 )}
-                <p className={!message.content ? "typing-dots" : ""}>
+                {(message.content || message.role === "assistant") && <p className={!message.content ? "typing-dots" : ""}>
                   {message.content || (
                     <>
                       <i />
@@ -220,7 +239,7 @@ export function ChatPanel({
                       <i />
                     </>
                   )}
-                </p>
+                </p>}
               </div>
             </article>
           ))
@@ -276,15 +295,34 @@ export function ChatPanel({
 
       <footer className="composer">
         <div className="composer__toolbar">
-          <button
-            type="button"
-            className={`thinking-toggle ${thinking ? "active" : ""}`}
-            onClick={() => setThinking((value) => !value)}
-            title="深度思考模式（需要当前模型支持）"
-          >
-            <span>✦</span>
-            {thinking ? "深度思考" : "快速回答"}
-          </button>
+          <div className="composer__tools">
+            <button
+              type="button"
+              className="thinking-toggle"
+              onClick={() => setThinking((value) => !value)}
+              aria-pressed={thinking}
+              aria-label={thinking ? "当前为深度思考，点击切换到快速回答" : "当前为快速回答，点击切换到深度思考"}
+            >
+              <span className={`thinking-toggle__option thinking-toggle__option--quick ${!thinking ? "active" : ""}`}>
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M9.2 1.7 3.8 8.5h3.7l-.7 5.8 5.4-7H8.5l.7-5.6Z" />
+                </svg>
+                快速回答
+              </span>
+              <span className={`thinking-toggle__option thinking-toggle__option--deep ${thinking ? "active" : ""}`}>
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 1.7c.5 3.3 1.8 4.6 5.1 5.1-3.3.5-4.6 1.8-5.1 5.1-.5-3.3-1.8-4.6-5.1-5.1C6.2 6.3 7.5 5 8 1.7Zm4.4 9c.2 1.2.7 1.7 1.9 1.9-1.2.2-1.7.7-1.9 1.9-.2-1.2-.7-1.7-1.9-1.9 1.2-.2 1.7-.7 1.9-1.9Z" />
+                </svg>
+                深度思考
+              </span>
+            </button>
+            <ImageAttachButton
+              images={images}
+              disabled={!visionEnabled || runtime.phase !== "ready" || Boolean(activeRequest) || speechBusy}
+              onChange={onImagesChange}
+              onError={setAttachmentError}
+            />
+          </div>
           {messages.length > 0 && !activeRequest && (
             <button
               className="text-button"
@@ -295,6 +333,8 @@ export function ChatPanel({
             </button>
           )}
         </div>
+        <ImageAttachmentTray images={images} onRemove={removeImage} />
+        {attachmentError && <p className="composer__error">{attachmentError}</p>}
         <div className="composer__input">
           <textarea
             rows={2}
@@ -312,7 +352,7 @@ export function ChatPanel({
                 ? "和团子说点什么…"
                 : "等待本地模型就绪…"
             }
-            disabled={runtime.phase !== "ready" || speech.phase === "recording" || speech.phase === "transcribing"}
+            disabled={runtime.phase !== "ready" || speechBusy}
           />
           <VoiceButton
             speech={speech}
@@ -336,7 +376,7 @@ export function ChatPanel({
               className="send-button"
               type="button"
               onClick={send}
-              disabled={!draft.trim() || runtime.phase !== "ready" || speech.phase === "recording" || speech.phase === "transcribing"}
+              disabled={(!draft.trim() && !images.length) || runtime.phase !== "ready" || speechBusy}
               aria-label="发送"
             >
               ↑

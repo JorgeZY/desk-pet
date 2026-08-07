@@ -1,9 +1,11 @@
 import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { basename, dirname, isAbsolute, win32 } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
   ChatEvent,
+  ChatImageMimeType,
+  ChatMessage,
   ChatRequest,
   ModelDownloadProgress,
   RuntimeConfig,
@@ -13,6 +15,132 @@ import { formatBytes, type ResolveModelOptions } from "./model-downloader";
 import { SseDecoder } from "./sse";
 
 const MODEL_ALIAS = "desk-pet-model";
+const MAX_CHAT_REQUEST_IMAGES = 4;
+const MAX_CHAT_REQUEST_IMAGE_BYTES = 10 * 1024 * 1024;
+const SUPPORTED_IMAGE_MIME_TYPES = new Set<ChatImageMimeType>([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+]);
+
+type ApiMessageContent =
+  | string
+  | Array<
+      | { type: "text"; text: string }
+      | { type: "image_url"; image_url: { url: string } }
+    >;
+
+interface ApiChatMessage {
+  role: "system" | ChatMessage["role"];
+  content: ApiMessageContent;
+}
+
+type ImageReader = (path: string) => Promise<Uint8Array>;
+type ImageSizer = (path: string) => Promise<number>;
+
+interface BuildChatCompletionOptions {
+  visionEnabled?: boolean;
+  readImage?: ImageReader;
+  getImageSize?: ImageSizer;
+  onWarning?: (message: string) => void;
+}
+
+export async function buildChatCompletionMessages(
+  config: RuntimeConfig,
+  messages: ChatMessage[],
+  options: BuildChatCompletionOptions = {},
+): Promise<ApiChatMessage[]> {
+  const recentMessages = messages.slice(-20);
+  const converted: ApiChatMessage[] = recentMessages.map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
+  const visionEnabled = options.visionEnabled ?? Boolean(config.mmprojPath);
+  if (!visionEnabled) {
+    return [{ role: "system", content: config.systemPrompt }, ...converted];
+  }
+
+  const readImage = options.readImage ?? fs.readFile;
+  const getImageSize = options.getImageSize ?? (async (path: string) => (await fs.stat(path)).size);
+  const warnings = new Set<string>();
+  const warn = (message: string): void => {
+    if (warnings.has(message)) return;
+    warnings.add(message);
+    options.onWarning?.(message);
+  };
+  let requestImageCount = 0;
+  let requestImageBytes = 0;
+
+  // Start with the newest turns so the current prompt wins when history contains many images.
+  for (let messageIndex = recentMessages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = recentMessages[messageIndex];
+    const images = message.images ?? [];
+    if (!images.length) continue;
+
+    const content: Exclude<ApiMessageContent, string> = [];
+    if (message.content.trim()) content.push({ type: "text", text: message.content });
+
+    for (const image of images) {
+      if (requestImageCount >= MAX_CHAT_REQUEST_IMAGES) {
+        warn("为保护内存，本次请求仅发送最近 4 张图片，较早图片已跳过。");
+        break;
+      }
+      if (!SUPPORTED_IMAGE_MIME_TYPES.has(image.mimeType)) {
+        warn(`图片 ${image.name} 的格式不受支持，已跳过。`);
+        continue;
+      }
+
+      let declaredBytes: number;
+      try {
+        declaredBytes = await getImageSize(image.path);
+      } catch {
+        warn(`历史图片 ${image.name} 已不可用，已跳过。`);
+        continue;
+      }
+      if (declaredBytes > MAX_CHAT_REQUEST_IMAGE_BYTES) {
+        warn(`图片 ${image.name} 超过 10 MB，已跳过。`);
+        continue;
+      }
+      if (requestImageBytes + declaredBytes > MAX_CHAT_REQUEST_IMAGE_BYTES) {
+        warn("为保护内存，本次请求图片合计不超过 10 MB，较早图片已跳过。");
+        continue;
+      }
+
+      let bytes: Uint8Array;
+      try {
+        bytes = await readImage(image.path);
+      } catch {
+        warn(`历史图片 ${image.name} 已不可用，已跳过。`);
+        continue;
+      }
+      const effectiveBytes = Math.max(declaredBytes, bytes.byteLength);
+      if (effectiveBytes > MAX_CHAT_REQUEST_IMAGE_BYTES) {
+        warn(`图片 ${image.name} 超过 10 MB，已跳过。`);
+        continue;
+      }
+      if (requestImageBytes + effectiveBytes > MAX_CHAT_REQUEST_IMAGE_BYTES) {
+        warn("为保护内存，本次请求图片合计不超过 10 MB，较早图片已跳过。");
+        continue;
+      }
+
+      content.push({
+        type: "image_url",
+        image_url: {
+          url: `data:${image.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+        },
+      });
+      requestImageCount += 1;
+      requestImageBytes += effectiveBytes;
+    }
+
+    if (content.some((item) => item.type === "image_url")) {
+      converted[messageIndex] = { role: message.role, content };
+    }
+  }
+
+  return [{ role: "system", content: config.systemPrompt }, ...converted];
+}
 
 export interface LlamaCommand {
   command: string;
@@ -34,6 +162,7 @@ export function buildLlamaCommand(config: RuntimeConfig): LlamaCommand {
   } else {
     args.push("-m", config.modelPath);
   }
+  if (config.mmprojPath) args.push("--mmproj", config.mmprojPath);
 
   args.push(
     "--host",
@@ -60,6 +189,7 @@ export function buildLlamaCommand(config: RuntimeConfig): LlamaCommand {
 
 const initialState = (config: RuntimeConfig): RuntimeState => ({
   phase: "stopped",
+  visionEnabled: false,
   endpoint: `http://${config.host}:${config.port}`,
   message: "本地模型尚未启动",
   updatedAt: Date.now(),
@@ -112,6 +242,9 @@ export class LlamaRuntime extends EventEmitter {
     ) {
       return this.fail("找不到本地 GGUF 模型，请在设置中重新选择模型文件。");
     }
+    if (this.config.mmprojPath && !existsSync(this.config.mmprojPath)) {
+      return this.fail("找不到视觉投影模型，请在设置中重新选择 mmproj GGUF 文件。");
+    }
     if (isAbsolute(this.config.executable) && !existsSync(this.config.executable)) {
       return this.fail("找不到 llama.cpp 可执行文件，请在设置中重新选择。");
     }
@@ -119,6 +252,7 @@ export class LlamaRuntime extends EventEmitter {
     if (await this.isHealthy(600)) {
       this.setState({
         phase: "ready",
+        visionEnabled: Boolean(this.config.mmprojPath),
         endpoint: this.endpoint,
         message: "已连接当前端口上的 llama.cpp 服务",
         externallyManaged: true,
@@ -134,6 +268,7 @@ export class LlamaRuntime extends EventEmitter {
       this.downloadController = new AbortController();
       this.setState({
         phase: allowDownload ? "downloading" : "stopped",
+        visionEnabled: false,
         endpoint: this.endpoint,
         message: allowDownload ? "正在连接模型镜像" : "正在检查本地模型缓存",
         lastLog: allowDownload
@@ -172,6 +307,7 @@ export class LlamaRuntime extends EventEmitter {
     this.setState({
       ...this.state,
       phase: "stopping",
+      visionEnabled: false,
       message: "正在停止本地模型",
       updatedAt: Date.now(),
     });
@@ -210,23 +346,24 @@ export class LlamaRuntime extends EventEmitter {
     emit({ requestId: request.requestId, type: "start" });
 
     try {
+      const messages = await buildChatCompletionMessages(this.config, request.messages, {
+        visionEnabled: this.state.visionEnabled,
+        onWarning: (message) => emit({ requestId: request.requestId, type: "warning", message }),
+      });
       const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
           model: MODEL_ALIAS,
-          messages: [
-            { role: "system", content: this.config.systemPrompt },
-            ...request.messages.slice(-20).map((message) => ({
-              role: message.role,
-              content: message.content,
-            })),
-          ],
+          messages,
           stream: true,
           max_tokens: this.config.maxTokens,
-          temperature: request.thinking ? 0.9 : this.config.temperature,
-          top_p: 0.95,
+          temperature: this.config.temperature,
+          top_k: this.config.topK,
+          top_p: this.config.topP,
+          min_p: this.config.minP,
+          repeat_penalty: this.config.repeatPenalty,
           chat_template_kwargs: { enable_thinking: request.thinking },
         }),
       });
@@ -301,6 +438,7 @@ export class LlamaRuntime extends EventEmitter {
         this.setState({
           ...this.state,
           phase: "ready",
+          visionEnabled: Boolean(this.config.mmprojPath),
           pid: this.child.pid,
           endpoint: this.endpoint,
           message: "本地模型已就绪",
@@ -338,6 +476,7 @@ export class LlamaRuntime extends EventEmitter {
     this.setState({
       ...this.state,
       phase: "error",
+      visionEnabled: false,
       endpoint: this.endpoint,
       message: "本地模型启动失败",
       error: message,
@@ -411,6 +550,7 @@ export class LlamaRuntime extends EventEmitter {
     const { command, args } = buildLlamaCommand(config);
     this.setState({
       phase: "starting",
+      visionEnabled: false,
       endpoint: this.endpoint,
       message:
         config.modelMode === "huggingface"

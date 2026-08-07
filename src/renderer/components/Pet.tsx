@@ -62,9 +62,10 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
         </g>
 
         <ellipse className="pet-ground" cx="130" cy="216" rx="76" ry="10" fill="#593d35" opacity=".1" />
+        <g className="pet-character">
         <g className="pet-body">
           <path
-            d="M76 128c-11 19-14 47-6 70 8 24 35 30 60 30s52-6 60-30c8-23 5-51-6-70Z"
+            d="M91 125c-15 17-28 47-21 73 8 24 35 30 60 30s52-6 60-30c7-26-6-56-21-73-11 8-24 12-39 12s-28-4-39-12Z"
             fill={`url(#${furId})`}
           />
           <path d="M78 150c8-13 20-20 29-22-7 18-9 48-2 78-18-4-29-17-31-33-1-8 1-16 4-23Z" fill="#ffd09a" opacity=".34" />
@@ -130,6 +131,7 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
             <circle cx="130" cy="151" r="6" fill="#f2bd55" stroke="#c88730" strokeWidth="1.5" />
             <circle cx="128" cy="149" r="1.5" fill="#fff2b9" opacity=".9" />
           </g>
+        </g>
         </g>
 
         <g className="thought-dots" fill="#fff">
