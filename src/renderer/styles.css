@@ -1366,7 +1366,7 @@ select {
 .composer__tools {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
 }
 
 .image-attach-button {
@@ -1431,26 +1431,36 @@ select {
 }
 
 .thinking-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 7px;
-  color: var(--muted);
-  background: transparent;
-  border-radius: 7px;
+  display: inline-grid;
+  padding: 2px;
+  grid-template-columns: repeat(2, auto);
+  color: #8a746c;
+  background: rgba(116, 88, 78, 0.09);
+  border: 1px solid rgba(108, 75, 65, 0.13);
+  border-radius: 9px;
   cursor: pointer;
-  font-size: 9px;
-  font-weight: 700;
 }
 
-.thinking-toggle.active {
-  color: #8a5d2f;
-  background: #fff0d8;
+.thinking-toggle:hover:not(:disabled) {
+  border-color: rgba(218, 118, 82, 0.28);
 }
 
 .thinking-toggle span {
-  color: var(--peach);
-  font-size: 11px;
+  min-width: 55px;
+  padding: 4px 7px;
+  color: #958078;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1.25;
+  text-align: center;
+  transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.thinking-toggle span.active {
+  color: #7c4a37;
+  background: #fff8f1;
+  box-shadow: 0 1px 4px rgba(98, 57, 43, 0.16);
 }
 
 .composer__input {

@@ -298,12 +298,14 @@ export function ChatPanel({
           <div className="composer__tools">
             <button
               type="button"
-              className={`thinking-toggle ${thinking ? "active" : ""}`}
+              className="thinking-toggle"
               onClick={() => setThinking((value) => !value)}
+              aria-pressed={thinking}
+              aria-label={thinking ? "当前为深度思考，点击切换到快速回答" : "当前为快速回答，点击切换到深度思考"}
               title="深度思考模式（需要当前模型支持）"
             >
-              <span>✦</span>
-              {thinking ? "深度思考" : "快速回答"}
+              <span className={!thinking ? "active" : ""}>快速回答</span>
+              <span className={thinking ? "active" : ""}>深度思考</span>
             </button>
             <ImageAttachButton
               images={images}
