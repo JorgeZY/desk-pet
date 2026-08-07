@@ -111,9 +111,10 @@ select:focus-visible {
   position: absolute;
   z-index: 20;
   top: 0;
-  left: 56px;
-  right: 56px;
-  height: 22px;
+  left: 12px;
+  right: 12px;
+  height: 26px;
+  cursor: grab;
   -webkit-app-region: drag;
 }
 
@@ -631,6 +632,9 @@ select {
   align-items: flex-start;
   justify-content: space-between;
   padding: 34px 28px 12px;
+  cursor: grab;
+  user-select: none;
+  -webkit-app-region: drag;
 }
 
 .onboarding__header h1,
@@ -952,6 +956,16 @@ select {
   padding: 24px 20px 12px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), transparent);
   border-bottom: 1px solid var(--line);
+  cursor: grab;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.panel-header:active,
+.window-drag-strip:active,
+.onboarding__header:active,
+.quick-chat__message:active {
+  cursor: grabbing;
 }
 
 .brand-lockup {
@@ -1777,6 +1791,7 @@ select {
   align-items: center;
   justify-content: flex-end;
   overflow: hidden;
+  -webkit-app-region: drag;
 }
 
 .pet-stage::after {
@@ -1818,6 +1833,7 @@ select {
   display: flex;
   align-items: center;
   gap: 6px;
+  -webkit-app-region: no-drag;
 }
 
 .mini-icon-button {
@@ -1960,6 +1976,9 @@ select {
   grid-template-columns: 25px 1fr 25px;
   align-items: center;
   gap: 7px;
+  cursor: grab;
+  user-select: none;
+  -webkit-app-region: drag;
 }
 
 .quick-chat--has-reply .quick-chat__message {
@@ -2023,6 +2042,7 @@ select {
   grid-template-columns: 1fr 34px 34px 34px;
   gap: 6px;
   align-items: center;
+  -webkit-app-region: no-drag;
 }
 
 .settings-value-row > .settings-value-actions {
@@ -2035,6 +2055,7 @@ select {
 
 .quick-chat > .image-attachment-tray {
   margin: 0;
+  -webkit-app-region: no-drag;
 }
 
 .image-attachment-tray--compact .image-attachment {
