@@ -1371,18 +1371,16 @@ select {
 .image-attach-button {
   position: relative;
   display: inline-flex;
-  width: auto;
+  width: 28px;
   height: 27px;
-  padding: 0 9px;
+  padding: 0;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
   color: #795c52;
   background: rgba(255, 255, 255, 0.74);
   border: 1px solid rgba(108, 75, 65, 0.16);
   border-radius: 7px;
   cursor: pointer;
-  font-size: 9px;
-  font-weight: 750;
 }
 
 .image-attach-button:hover:not(:disabled) {
@@ -1418,10 +1416,6 @@ select {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.8;
-}
-
-.image-attach-button__label {
-  line-height: 1;
 }
 
 .composer > .image-attachment-tray {
