@@ -1377,17 +1377,17 @@ select {
   padding: 0;
   align-items: center;
   justify-content: center;
-  color: #795c52;
-  background: rgba(255, 255, 255, 0.74);
-  border: 1px solid rgba(108, 75, 65, 0.16);
+  color: #8a746c;
+  background: rgba(116, 88, 78, 0.07);
+  border: 1px solid rgba(108, 75, 65, 0.08);
   border-radius: 7px;
   cursor: pointer;
 }
 
 .image-attach-button:hover:not(:disabled) {
-  color: var(--peach-dark);
-  background: var(--peach-soft);
-  border-color: rgba(218, 118, 82, 0.28);
+  color: #7c4a37;
+  background: rgba(239, 153, 111, 0.14);
+  border-color: rgba(218, 118, 82, 0.18);
 }
 
 .image-attach-button:disabled {
