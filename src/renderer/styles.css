@@ -1431,6 +1431,7 @@ select {
 }
 
 .thinking-toggle {
+  position: relative;
   display: inline-grid;
   padding: 2px;
   grid-template-columns: repeat(2, auto);
@@ -1439,6 +1440,28 @@ select {
   border: 1px solid rgba(108, 75, 65, 0.13);
   border-radius: 9px;
   cursor: pointer;
+  isolation: isolate;
+}
+
+.thinking-toggle::before {
+  position: absolute;
+  z-index: 0;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  background: #e8f5ef;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(58, 112, 95, 0.16);
+  content: "";
+  transform: translateX(0);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease, box-shadow 160ms ease;
+}
+
+.thinking-toggle[aria-pressed="true"]::before {
+  background: #fff0d8;
+  box-shadow: 0 1px 4px rgba(138, 93, 47, 0.16);
+  transform: translateX(100%);
 }
 
 .thinking-toggle:hover:not(:disabled) {
@@ -1446,6 +1469,8 @@ select {
 }
 
 .thinking-toggle span {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   min-width: 55px;
   padding: 4px 7px;
@@ -1458,25 +1483,36 @@ select {
   font-weight: 750;
   line-height: 1.25;
   text-align: center;
-  transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+  transition: color 140ms ease;
 }
 
 .thinking-toggle__option svg {
   width: 10px;
   height: 10px;
   fill: currentColor;
+  opacity: 0.62;
+  transform: scale(0.9);
+  transition: opacity 160ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .thinking-toggle__option--quick.active {
   color: #39705f;
-  background: #e8f5ef;
-  box-shadow: 0 1px 4px rgba(58, 112, 95, 0.16);
 }
 
 .thinking-toggle__option--deep.active {
   color: #8a5d2f;
-  background: #fff0d8;
-  box-shadow: 0 1px 4px rgba(138, 93, 47, 0.16);
+}
+
+.thinking-toggle__option.active svg {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-toggle::before,
+  .thinking-toggle__option svg {
+    transition: none;
+  }
 }
 
 .composer__input {
@@ -1986,6 +2022,7 @@ select {
   display: grid;
   grid-template-columns: 1fr 34px 34px 34px;
   gap: 6px;
+  align-items: center;
 }
 
 .settings-value-row > .settings-value-actions {
@@ -2029,18 +2066,27 @@ select {
   font-weight: 800;
 }
 
-.quick-chat__composer .voice-button {
+.quick-chat__composer > button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
   min-height: 34px;
+  padding: 0;
+  margin: 0;
+  justify-self: center;
+}
+
+.quick-chat__composer .voice-button {
   color: #916655;
   background: rgba(255, 240, 228, 0.88);
   border: 1px solid rgba(218, 118, 82, 0.12);
 }
 
+.quick-chat__composer .voice-button__icon {
+  font-size: 12px;
+}
+
 .quick-chat__composer .image-attach-button--compact {
-  width: 34px;
-  height: 34px;
-  min-height: 34px;
-  padding: 0;
   justify-content: center;
   color: #916655;
   background: rgba(255, 240, 228, 0.88);
