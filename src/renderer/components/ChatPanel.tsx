@@ -302,9 +302,6 @@ export function ChatPanel({
               onClick={() => setThinking((value) => !value)}
               aria-pressed={thinking}
               aria-label={thinking ? "当前为深度思考，点击切换到快速回答" : "当前为快速回答，点击切换到深度思考"}
-              title={thinking
-                ? "当前：深度思考。点击切换到快速回答"
-                : "当前：快速回答。点击切换到深度思考（需要模型支持）"}
             >
               <span className={`thinking-toggle__option thinking-toggle__option--quick ${!thinking ? "active" : ""}`}>
                 <svg viewBox="0 0 16 16" aria-hidden="true">
