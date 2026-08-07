@@ -1360,6 +1360,7 @@ select {
   align-items: center;
   justify-content: space-between;
   min-height: 27px;
+  margin-bottom: 7px;
 }
 
 .composer__tools {
