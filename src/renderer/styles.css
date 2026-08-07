@@ -313,14 +313,11 @@ select {
   overflow: visible;
 }
 
-.pet:not(.mood-idle):hover .pet-head {
-  transform: translateY(-3px) rotate(-1deg);
+.pet:active .pet-character {
+  transform: scale(0.985);
 }
 
-.pet:active .pet-body {
-  transform: scale(0.98);
-}
-
+.pet-character,
 .pet-head,
 .pet-body,
 .pet-tail {
@@ -413,7 +410,7 @@ select {
   animation: talk 420ms ease-in-out infinite;
 }
 
-.mood-talking .pet-body {
+.mood-talking .pet-character {
   animation: happy-bounce 1.7s ease-in-out infinite;
 }
 
@@ -431,12 +428,9 @@ select {
   animation-delay: 160ms;
 }
 
-.mood-listening .pet-head {
-  animation: listen-tilt 1.4s ease-in-out infinite;
-}
-
-.mood-listening .pet-body {
-  animation: listen-breathe 900ms ease-in-out infinite;
+/* Keep speech motion on one silhouette so the head and shoulders cannot separate. */
+.mood-listening .pet-character {
+  animation: listen-bob 1.4s ease-in-out infinite;
 }
 
 .mood-listening .pet-tail {
@@ -471,7 +465,7 @@ select {
   ry: 1.8;
 }
 
-.mood-transcribing .pet-head {
+.mood-transcribing .pet-character {
   animation: transcribe-focus 1.25s ease-in-out infinite;
 }
 
@@ -503,8 +497,8 @@ select {
 }
 
 @keyframes idle-breathe {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.012, 1.018) translateY(-1px); }
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(1.018) translateY(-1px); }
 }
 
 @keyframes idle-look {
@@ -564,14 +558,9 @@ select {
   50% { opacity: 1; transform: scale(1.08); }
 }
 
-@keyframes listen-tilt {
-  0%, 100% { transform: rotate(-3deg) translateY(-2px); }
-  50% { transform: rotate(3deg) translateY(-5px); }
-}
-
-@keyframes listen-breathe {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.025, 0.985); }
+@keyframes listen-bob {
+  0%, 100% { transform: translateY(0) rotate(-0.8deg); }
+  50% { transform: translateY(-2px) rotate(0.8deg); }
 }
 
 @keyframes transcribe-card-float {
