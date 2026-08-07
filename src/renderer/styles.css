@@ -1455,6 +1455,7 @@ select {
   border-radius: 9px;
   cursor: pointer;
   isolation: isolate;
+  transition: border-color 160ms ease, transform 100ms ease;
 }
 
 .thinking-toggle::before {
@@ -1464,22 +1465,26 @@ select {
   bottom: 2px;
   left: 2px;
   width: calc(50% - 2px);
-  background: #e8f5ef;
+  background: #dcf3e8;
   border-radius: 6px;
-  box-shadow: 0 1px 4px rgba(58, 112, 95, 0.16);
+  box-shadow: 0 2px 6px rgba(58, 112, 95, 0.2), inset 0 1px rgba(255, 255, 255, 0.72);
   content: "";
   transform: translateX(0);
-  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease, box-shadow 160ms ease;
+  transition: transform 280ms cubic-bezier(0.34, 1.56, 0.64, 1), background 180ms ease, box-shadow 180ms ease;
 }
 
 .thinking-toggle[aria-pressed="true"]::before {
-  background: #fff0d8;
-  box-shadow: 0 1px 4px rgba(138, 93, 47, 0.16);
+  background: #ffe8bd;
+  box-shadow: 0 2px 6px rgba(168, 105, 42, 0.2), inset 0 1px rgba(255, 255, 255, 0.72);
   transform: translateX(100%);
 }
 
 .thinking-toggle:hover:not(:disabled) {
   border-color: rgba(218, 118, 82, 0.28);
+}
+
+.thinking-toggle:active:not(:disabled) {
+  transform: scale(0.985);
 }
 
 .thinking-toggle span {
@@ -1522,10 +1527,43 @@ select {
   transform: scale(1.08);
 }
 
+.thinking-toggle__option.active {
+  animation: thinking-option-pop 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.thinking-toggle__option--quick.active svg {
+  animation: thinking-quick-icon-pop 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.thinking-toggle__option--deep.active svg {
+  animation: thinking-deep-icon-pop 360ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes thinking-option-pop {
+  0% { transform: translateY(0) scale(0.96); }
+  55% { transform: translateY(-1px) scale(1.03); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+@keyframes thinking-quick-icon-pop {
+  0% { opacity: 0.45; transform: rotate(-16deg) scale(0.65); }
+  65% { opacity: 1; transform: rotate(4deg) scale(1.24); }
+  100% { opacity: 1; transform: rotate(0) scale(1.08); }
+}
+
+@keyframes thinking-deep-icon-pop {
+  0% { opacity: 0.4; transform: rotate(-24deg) scale(0.55); }
+  65% { opacity: 1; transform: rotate(10deg) scale(1.28); }
+  100% { opacity: 1; transform: rotate(0) scale(1.08); }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .thinking-toggle,
   .thinking-toggle::before,
+  .thinking-toggle__option,
   .thinking-toggle__option svg {
     transition: none;
+    animation: none;
   }
 }
 
