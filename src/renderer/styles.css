@@ -2025,9 +2025,15 @@ select {
   min-height: 34px;
   padding: 0;
   justify-content: center;
-  color: #8a5d4e;
-  background: #fff0e4;
-  border: 0;
+  color: #8a746c;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(108, 75, 65, 0.1);
+}
+
+.quick-chat__composer .image-attach-button--compact:hover:not(:disabled) {
+  color: #7c4a37;
+  background: rgba(255, 248, 241, 0.94);
+  border-color: rgba(218, 118, 82, 0.18);
 }
 
 .quick-chat__composer .voice-button.phase-recording {
