@@ -1370,20 +1370,25 @@ select {
 
 .image-attach-button {
   position: relative;
-  display: inline-grid;
-  width: 28px;
+  display: inline-flex;
+  width: auto;
   height: 27px;
-  place-items: center;
-  color: var(--muted);
-  background: transparent;
+  padding: 0 9px;
+  align-items: center;
+  gap: 5px;
+  color: #795c52;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(108, 75, 65, 0.16);
   border-radius: 7px;
   cursor: pointer;
-  font-size: 15px;
+  font-size: 9px;
+  font-weight: 750;
 }
 
 .image-attach-button:hover:not(:disabled) {
   color: var(--peach-dark);
   background: var(--peach-soft);
+  border-color: rgba(218, 118, 82, 0.28);
 }
 
 .image-attach-button:disabled {
@@ -1403,6 +1408,20 @@ select {
   background: var(--peach-dark);
   border-radius: 99px;
   font-size: 7px;
+}
+
+.image-attach-button__icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.image-attach-button__label {
+  line-height: 1;
 }
 
 .composer > .image-attachment-tray {
@@ -1999,9 +2018,11 @@ select {
   width: 34px;
   height: 34px;
   min-height: 34px;
+  padding: 0;
+  justify-content: center;
   color: #8a5d4e;
   background: #fff0e4;
-  font-size: 15px;
+  border: 0;
 }
 
 .quick-chat__composer .voice-button.phase-recording {

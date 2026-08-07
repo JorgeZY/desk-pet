@@ -145,6 +145,7 @@ export interface ChatRequest {
 
 export type ChatEvent =
   | { requestId: string; type: "start" }
+  | { requestId: string; type: "warning"; message: string }
   | { requestId: string; type: "delta"; text: string }
   | { requestId: string; type: "reasoning"; text: string }
   | { requestId: string; type: "done"; timings?: Record<string, unknown> }

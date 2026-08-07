@@ -288,12 +288,16 @@ async function pickChatImages(): Promise<ChatImage[]> {
   if (result.canceled) return [];
   if (result.filePaths.length > 4) throw new Error("一次最多选择 4 张图片。");
 
-  return Promise.all(result.filePaths.map(async (path): Promise<ChatImage> => {
+  const images: ChatImage[] = [];
+  let totalBytes = 0;
+  for (const path of result.filePaths) {
     const name = basename(path);
     const mimeType = CHAT_IMAGE_MIME_TYPES[extname(path).toLowerCase()];
     if (!mimeType) throw new Error(`不支持图片格式：${name}`);
     const stats = await fs.stat(path);
     if (stats.size > 10 * 1024 * 1024) throw new Error(`图片 ${name} 超过 10 MB。`);
+    totalBytes += stats.size;
+    if (totalBytes > 10 * 1024 * 1024) throw new Error("所选图片合计不能超过 10 MB。");
 
     let preview = nativeImage.createFromPath(path);
     if (preview.isEmpty()) throw new Error(`无法读取图片：${name}`);
@@ -306,8 +310,9 @@ async function pickChatImages(): Promise<ChatImage[]> {
         quality: "good",
       });
     }
-    return { path, name, mimeType, previewUrl: preview.toDataURL() };
-  }));
+    images.push({ path, name, mimeType, previewUrl: preview.toDataURL() });
+  }
+  return images;
 }
 
 async function probeExecutable(requested?: string): Promise<ProbeResult> {

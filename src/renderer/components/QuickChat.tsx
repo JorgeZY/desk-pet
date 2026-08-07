@@ -77,6 +77,7 @@ export function QuickChat({
   useEffect(() => {
     const unsubscribe = window.desktopPet.onChatEvent((event: ChatEvent) => {
       if (event.requestId !== activeRequestRef.current) return;
+      if (event.type === "warning") setAttachmentError(event.message);
       if (event.type === "delta") {
         const nextReply = replyRef.current + event.text;
         replyRef.current = nextReply;

@@ -59,6 +59,7 @@ export function ChatPanel({
       window.desktopPet.onChatEvent((event: ChatEvent) => {
         const assistantId = assistantByRequest.current.get(event.requestId);
         if (!assistantId) return;
+        if (event.type === "warning") setAttachmentError(event.message);
         if (event.type === "delta" || event.type === "reasoning") {
           setMessages((current) =>
             current.map((message) =>
