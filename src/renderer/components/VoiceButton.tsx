@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { SpeechState } from "../../shared/types";
+import { PixelIcon } from "./PixelIcon";
 
 interface VoiceButtonProps {
   speech: SpeechState;
@@ -94,7 +95,7 @@ export function VoiceButton({
         }
       }}
     >
-      <span className="voice-button__icon" aria-hidden="true">●</span>
+      <PixelIcon name="mic" className="voice-button__icon" />
       {!compact && <span>{label}</span>}
       {speech.phase === "recording" && (
         <i className="voice-button__level" style={{ transform: `scaleY(${0.25 + (speech.level ?? 0) * 0.75})` }} />

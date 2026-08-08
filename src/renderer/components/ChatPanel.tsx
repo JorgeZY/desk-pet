@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatEvent, ChatImage, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
 import { readChatHistory, writeChatHistory } from "../chat-history";
 import { Pet, type PetMood } from "./Pet";
 import { RuntimeBadge } from "./RuntimeBadge";
 import { VoiceButton } from "./VoiceButton";
 import { ImageAttachButton, ImageAttachmentTray } from "./ImageAttachments";
+import { PixelIcon } from "./PixelIcon";
 
 interface ChatPanelProps {
   runtime: RuntimeState;
@@ -23,6 +24,39 @@ interface ChatPanelProps {
   onStartRuntime: () => Promise<void>;
 }
 
+interface ThinkingToggleProps {
+  onChange: (thinking: boolean) => void;
+}
+
+const ThinkingToggle = memo(function ThinkingToggle({ onChange }: ThinkingToggleProps) {
+  const [thinking, setThinking] = useState(false);
+
+  const toggle = () => {
+    const nextThinking = !thinking;
+    setThinking(nextThinking);
+    onChange(nextThinking);
+  };
+
+  return (
+    <button
+      type="button"
+      className="thinking-toggle"
+      onClick={toggle}
+      aria-pressed={thinking}
+      aria-label={thinking ? "当前为深度思考，点击切换到快速回答" : "当前为快速回答，点击切换到深度思考"}
+    >
+      <span className={`thinking-toggle__option thinking-toggle__option--quick ${!thinking ? "active" : ""}`}>
+        <PixelIcon name="bolt" />
+        快速回答
+      </span>
+      <span className={`thinking-toggle__option thinking-toggle__option--deep ${thinking ? "active" : ""}`}>
+        <PixelIcon name="sparkle" />
+        深度思考
+      </span>
+    </button>
+  );
+});
+
 export function ChatPanel({
   runtime,
   speech,
@@ -40,11 +74,15 @@ export function ChatPanel({
   onStartRuntime,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(readChatHistory);
-  const [thinking, setThinking] = useState(false);
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState("");
   const assistantByRequest = useRef(new Map<string, string>());
   const scrollRef = useRef<HTMLDivElement>(null);
+  const thinkingRef = useRef(false);
+
+  const handleThinkingChange = useCallback((thinking: boolean) => {
+    thinkingRef.current = thinking;
+  }, []);
 
   useEffect(() => {
     writeChatHistory(messages);
@@ -106,11 +144,12 @@ export function ChatPanel({
     if (runtime.phase === "error") return "sad";
     if (
       runtime.phase === "starting" ||
-      runtime.phase === "downloading" ||
-      activeRequest
+      runtime.phase === "downloading"
     )
       return "thinking";
-    if (messages.at(-1)?.role === "assistant") return "talking";
+    if (activeRequest) {
+      return messages.at(-1)?.content.trim() ? "talking" : "thinking";
+    }
     return "idle";
   }, [activeRequest, messages, runtime.phase, speech.phase]);
 
@@ -141,7 +180,7 @@ export function ChatPanel({
     window.desktopPet.startChat({
       requestId,
       messages: nextMessages,
-      thinking,
+      thinking: thinkingRef.current,
     });
   };
 
@@ -179,7 +218,7 @@ export function ChatPanel({
             onClick={onSettings}
             aria-label="设置"
           >
-            ⚙
+            <PixelIcon name="settings" />
           </button>
           <button
             className="icon-button"
@@ -187,7 +226,7 @@ export function ChatPanel({
             onClick={onClose}
             aria-label="收起"
           >
-            ×
+            <PixelIcon name="close" />
           </button>
         </div>
       </header>
@@ -296,26 +335,7 @@ export function ChatPanel({
       <footer className="composer">
         <div className="composer__toolbar">
           <div className="composer__tools">
-            <button
-              type="button"
-              className="thinking-toggle"
-              onClick={() => setThinking((value) => !value)}
-              aria-pressed={thinking}
-              aria-label={thinking ? "当前为深度思考，点击切换到快速回答" : "当前为快速回答，点击切换到深度思考"}
-            >
-              <span className={`thinking-toggle__option thinking-toggle__option--quick ${!thinking ? "active" : ""}`}>
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M9.2 1.7 3.8 8.5h3.7l-.7 5.8 5.4-7H8.5l.7-5.6Z" />
-                </svg>
-                快速回答
-              </span>
-              <span className={`thinking-toggle__option thinking-toggle__option--deep ${thinking ? "active" : ""}`}>
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M8 1.7c.5 3.3 1.8 4.6 5.1 5.1-3.3.5-4.6 1.8-5.1 5.1-.5-3.3-1.8-4.6-5.1-5.1C6.2 6.3 7.5 5 8 1.7Zm4.4 9c.2 1.2.7 1.7 1.9 1.9-1.2.2-1.7.7-1.9 1.9-.2-1.2-.7-1.7-1.9-1.9 1.2-.2 1.7-.7 1.9-1.9Z" />
-                </svg>
-                深度思考
-              </span>
-            </button>
+            <ThinkingToggle onChange={handleThinkingChange} />
             <ImageAttachButton
               images={images}
               disabled={!visionEnabled || runtime.phase !== "ready" || Boolean(activeRequest) || speechBusy}
@@ -369,7 +389,7 @@ export function ChatPanel({
               onClick={() => window.desktopPet.abortChat(activeRequest)}
               aria-label="停止生成"
             >
-              ■
+              <PixelIcon name="stop" />
             </button>
           ) : (
             <button
@@ -379,7 +399,7 @@ export function ChatPanel({
               disabled={(!draft.trim() && !images.length) || runtime.phase !== "ready" || speechBusy}
               aria-label="发送"
             >
-              ↑
+              <PixelIcon name="arrow-up" />
             </button>
           )}
         </div>

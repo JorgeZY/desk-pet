@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatEvent, ChatImage, ChatMessage, RuntimeState, SpeechState } from "../../shared/types";
 import { PET_WINDOW_BASE_HEIGHT, PET_WINDOW_MAX_HEIGHT, quickReplyWindowHeight } from "../../shared/pet-window";
 import { appendChatMessages, readChatHistory, updateChatMessage } from "../chat-history";
 import { VoiceButton } from "./VoiceButton";
 import { ImageAttachButton, ImageAttachmentTray } from "./ImageAttachments";
+import { PixelIcon } from "./PixelIcon";
 
 interface QuickChatProps {
   runtime: RuntimeState;
@@ -19,6 +20,7 @@ interface QuickChatProps {
   onCancelSpeech: (sessionId: string) => Promise<void>;
   onOpenChat: () => void;
   onStartRuntime: () => Promise<void>;
+  onPetMoodChange?: (mood: "thinking" | "talking" | null) => void;
 }
 
 function runtimeHint(runtime: RuntimeState): string {
@@ -50,6 +52,7 @@ export function QuickChat({
   onCancelSpeech,
   onOpenChat,
   onStartRuntime,
+  onPetMoodChange,
 }: QuickChatProps) {
   const [reply, setReply] = useState("");
   const [starting, setStarting] = useState(false);
@@ -61,7 +64,7 @@ export function QuickChat({
   const inputRef = useRef<HTMLInputElement>(null);
   const replyElementRef = useRef<HTMLParagraphElement>(null);
   const shouldRestoreFocusRef = useRef(false);
-  const lastWindowHeightRef = useRef(0);
+  const lastWindowHeightRef = useRef(PET_WINDOW_BASE_HEIGHT);
 
   const changeActiveRequest = (requestId: string | null) => {
     activeRequestRef.current = requestId;
@@ -83,8 +86,10 @@ export function QuickChat({
         replyRef.current = nextReply;
         setReply(nextReply);
         saveAssistantReply(nextReply);
+        onPetMoodChange?.("talking");
       }
       if (event.type === "reasoning") {
+        onPetMoodChange?.("thinking");
         const assistantId = assistantIdRef.current;
         if (assistantId) {
           updateChatMessage(assistantId, (message) => ({
@@ -100,6 +105,7 @@ export function QuickChat({
         setReply(finalReply);
         saveAssistantReply(finalReply);
         changeActiveRequest(null);
+        onPetMoodChange?.(null);
       }
       if (event.type === "done") {
         const finalReply = replyRef.current || "这次没有生成内容，要不要换个问法？";
@@ -107,6 +113,7 @@ export function QuickChat({
         setReply(finalReply);
         saveAssistantReply(finalReply);
         changeActiveRequest(null);
+        onPetMoodChange?.(null);
       }
     });
     return () => {
@@ -117,6 +124,7 @@ export function QuickChat({
         saveAssistantReply(replyRef.current || "（快捷回答已停止，可在完整对话中继续。）");
         activeRequestRef.current = null;
       }
+      onPetMoodChange?.(null);
     };
   }, []);
 
@@ -151,6 +159,7 @@ export function QuickChat({
     replyRef.current = "";
     shouldRestoreFocusRef.current = true;
     changeActiveRequest(requestId);
+    onPetMoodChange?.("thinking");
     onDraftChange("");
     onImagesChange([]);
     setAttachmentError("");
@@ -171,6 +180,7 @@ export function QuickChat({
     setReply(finalReply);
     saveAssistantReply(finalReply);
     changeActiveRequest(null);
+    onPetMoodChange?.(null);
   };
 
   const openFullChat = () => {
@@ -179,6 +189,7 @@ export function QuickChat({
       window.desktopPet.abortChat(requestId);
       saveAssistantReply(replyRef.current || "（快捷回答已停止，可在完整对话中继续。）");
       changeActiveRequest(null);
+      onPetMoodChange?.(null);
     }
     onOpenChat();
   };
@@ -203,20 +214,42 @@ export function QuickChat({
     onImagesChange(images.filter((_image, imageIndex) => imageIndex !== index));
   };
 
-  useLayoutEffect(() => {
-    const replyElement = replyElementRef.current;
-    if (!replyElement) return;
-    const contentHeight = quickReplyWindowHeight(replyElement.scrollHeight, Boolean(reply));
-    const nextHeight = Math.min(
-      PET_WINDOW_MAX_HEIGHT,
-      contentHeight + (images.length || attachmentError ? 48 : 0),
-    );
-    if (nextHeight === lastWindowHeightRef.current) return;
-    lastWindowHeightRef.current = nextHeight;
-    void window.desktopPet.setPetWindowHeight(nextHeight);
+  useEffect(() => {
+    const attachmentHeight = images.length || attachmentError ? 48 : 0;
+
+    // The collapsed height is known up front. Avoid a synchronous layout read
+    // and redundant IPC on the first frame when Quick Chat is mounted.
+    if (!reply) {
+      const nextHeight = Math.min(
+        PET_WINDOW_MAX_HEIGHT,
+        PET_WINDOW_BASE_HEIGHT + attachmentHeight,
+      );
+      if (nextHeight !== lastWindowHeightRef.current) {
+        lastWindowHeightRef.current = nextHeight;
+        void window.desktopPet.setPetWindowHeight(nextHeight);
+      }
+      return;
+    }
+
+    // Coalesce streaming reply updates into the next paint instead of forcing
+    // layout during React's commit phase for every token.
+    const frame = requestAnimationFrame(() => {
+      const replyElement = replyElementRef.current;
+      if (!replyElement) return;
+      const contentHeight = quickReplyWindowHeight(replyElement.scrollHeight, true);
+      const nextHeight = Math.min(
+        PET_WINDOW_MAX_HEIGHT,
+        contentHeight + attachmentHeight,
+      );
+      if (nextHeight === lastWindowHeightRef.current) return;
+      lastWindowHeightRef.current = nextHeight;
+      void window.desktopPet.setPetWindowHeight(nextHeight);
+    });
+
+    return () => cancelAnimationFrame(frame);
   }, [attachmentError, images.length, reply, visibleReply]);
 
-  useLayoutEffect(() => () => {
+  useEffect(() => () => {
     lastWindowHeightRef.current = PET_WINDOW_BASE_HEIGHT;
     resetQuickChatWindowHeight(window.desktopPet.setPetWindowHeight);
   }, []);
@@ -226,7 +259,7 @@ export function QuickChat({
       <div className="quick-chat__message">
         <span className="quick-chat__avatar">团</span>
         <p ref={replyElementRef} title={visibleReply} aria-live="polite">{visibleReply}</p>
-        <button type="button" onClick={openFullChat} aria-label="打开完整对话" title="打开完整对话">↗</button>
+        <button type="button" onClick={openFullChat} aria-label="打开完整对话" title="打开完整对话"><PixelIcon name="open" /></button>
       </div>
 
       {ready ? (
@@ -271,7 +304,7 @@ export function QuickChat({
               disabled={speechBusy || (!isGenerating && !draft.trim() && !images.length)}
               aria-label={isGenerating ? "停止生成" : "发送"}
             >
-              {isGenerating ? "■" : "↑"}
+              <PixelIcon name={isGenerating ? "stop" : "arrow-up"} />
             </button>
           </form>
         </>

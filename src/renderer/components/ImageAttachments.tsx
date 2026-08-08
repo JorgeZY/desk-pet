@@ -1,4 +1,5 @@
 import type { ChatImage } from "../../shared/types";
+import { PixelIcon } from "./PixelIcon";
 
 interface ImageAttachButtonProps {
   images: ChatImage[];
@@ -34,9 +35,7 @@ export function ImageAttachButton({
       aria-label={images.length ? `重新上传图片，当前 ${images.length} 张` : "上传图片"}
       title={disabled ? "请先在设置中选择视觉投影模型" : "上传图片（最多 4 张，合计不超过 10 MB）"}
     >
-      <svg className="image-attach-button__icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v4.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V14" />
-      </svg>
+      <PixelIcon name="upload" className="image-attach-button__icon" />
       {images.length > 0 && <b>{images.length}</b>}
     </button>
   );
@@ -57,11 +56,18 @@ export function ImageAttachmentTray({ images, onRemove, compact = false }: Image
           {image.previewUrl ? (
             <img src={image.previewUrl} alt={image.name} />
           ) : (
-            <span aria-hidden="true">▧</span>
+            <span aria-hidden="true"><PixelIcon name="image" /></span>
           )}
           <figcaption>{image.name}</figcaption>
           {onRemove && (
-            <button type="button" onClick={() => onRemove(index)} aria-label={`移除 ${image.name}`}>×</button>
+            <button
+              className="image-attachment__remove"
+              type="button"
+              onClick={() => onRemove(index)}
+              aria-label={`移除 ${image.name}`}
+            >
+              <PixelIcon name="close" className="image-attachment__remove-icon" />
+            </button>
           )}
         </figure>
       ))}

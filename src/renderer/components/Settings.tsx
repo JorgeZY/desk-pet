@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { RuntimeConfig, RuntimeState, SpeechState } from "../../shared/types";
+import { PixelIcon } from "./PixelIcon";
 import { RuntimeBadge } from "./RuntimeBadge";
 
 interface SettingsProps {
@@ -51,7 +52,7 @@ export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPr
         </div>
         <div className="header-actions">
           <RuntimeBadge runtime={runtime} />
-          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭">×</button>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭"><PixelIcon name="close" /></button>
         </div>
       </header>
 
