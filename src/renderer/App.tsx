@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   BootstrapData,
   ChatImage,
@@ -11,15 +11,16 @@ import type {
 import { ChatPanel } from "./components/ChatPanel";
 import { Onboarding } from "./components/Onboarding";
 import { Pet, type PetMood } from "./components/Pet";
+import { PixelIcon } from "./components/PixelIcon";
 import { QuickChat } from "./components/QuickChat";
 import { RuntimeBadge } from "./components/RuntimeBadge";
+import { Settings } from "./components/Settings";
 
 interface GlobalSpeechFeedback {
   sessionId: string;
   text: string;
   phase: "recording" | "transcribing" | "done" | "error";
 }
-import { Settings } from "./components/Settings";
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapData | null>(null);
@@ -37,6 +38,7 @@ export function App() {
   const viewTransitionRef = useRef(false);
   const preparingSpeechRef = useRef(false);
   const [globalSpeech, setGlobalSpeech] = useState<GlobalSpeechFeedback | null>(null);
+  const [quickChatMood, setQuickChatMood] = useState<"thinking" | "talking" | null>(null);
 
   const updateDraft = (value: string) => {
     draftRef.current = value;
@@ -52,10 +54,9 @@ export function App() {
     if (viewTransitionRef.current || nextView === view) return;
     viewTransitionRef.current = true;
     const root = document.documentElement;
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    root.classList.add("view-transitioning");
     try {
-      await new Promise((resolve) => setTimeout(resolve, reducedMotion ? 0 : 165));
+      root.classList.add("view-transitioning");
+      await new Promise((resolve) => setTimeout(resolve, 165));
       await window.desktopPet.setWindowMode(nextView);
       setView(nextView);
       await new Promise<void>((resolve) => {
@@ -178,17 +179,15 @@ export function App() {
 
   useEffect(() => window.desktopPet.onOpenView(setView), []);
 
-  useEffect(() => {
-    void window.desktopPet.setWindowMode(view);
-  }, [view]);
-
-  const mood: PetMood = useMemo(() => {
-    if (!runtime) return "sleeping";
-    if (runtime.phase === "error") return "sad";
-    if (runtime.phase === "starting" || runtime.phase === "downloading") return "thinking";
-    if (runtime.phase === "stopped") return "sleeping";
-    return "idle";
-  }, [runtime]);
+  const mood: PetMood = !runtime
+    ? "sleeping"
+    : runtime.phase === "error"
+      ? "sad"
+      : runtime.phase === "starting" || runtime.phase === "downloading"
+        ? "thinking"
+        : runtime.phase === "stopped"
+          ? "sleeping"
+          : "idle";
 
   const finishOnboarding = async (nextConfig: RuntimeConfig) => {
     const data = await window.desktopPet.saveConfig(nextConfig);
@@ -321,8 +320,8 @@ export function App() {
     <main className="pet-stage">
       <div className="pet-stage__actions">
         <RuntimeBadge runtime={runtime} />
-        <button className="mini-icon-button" type="button" onClick={() => void transitionToView("settings")} aria-label="设置">⚙</button>
-        <button className="mini-icon-button" type="button" onClick={() => window.desktopPet.hideWindow()} aria-label="隐藏">×</button>
+        <button className="mini-icon-button" type="button" onClick={() => void transitionToView("settings")} aria-label="设置"><PixelIcon name="settings" /></button>
+        <button className="mini-icon-button" type="button" onClick={() => window.desktopPet.hideWindow()} aria-label="隐藏"><PixelIcon name="close" /></button>
       </div>
       {!globalSpeech && (
         <QuickChat
@@ -339,10 +338,15 @@ export function App() {
           onCancelSpeech={cancelSpeech}
           onOpenChat={() => void transitionToView("chat")}
           onStartRuntime={startRuntime}
+          onPetMoodChange={setQuickChatMood}
         />
       )}
       <Pet
-        mood={speech.phase === "recording" ? "listening" : speech.phase === "transcribing" ? "transcribing" : mood}
+        mood={speech.phase === "recording"
+          ? "listening"
+          : speech.phase === "transcribing"
+            ? "transcribing"
+            : quickChatMood ?? mood}
         windowDrag
         onClick={() => void transitionToView("chat")}
       />

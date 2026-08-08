@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ProbeResult, RuntimeConfig } from "../../shared/types";
 import { Pet } from "./Pet";
+import { PixelIcon } from "./PixelIcon";
 
 interface OnboardingProps {
   initialConfig: RuntimeConfig;
@@ -73,7 +74,11 @@ export function Onboarding({ initialConfig, platform, onComplete }: OnboardingPr
 
       <div className="step-track" aria-label={`第 ${step + 1} 步，共 4 步`}>
         {[0, 1, 2, 3].map((item) => (
-          <span key={item} className={item <= step ? "active" : ""} />
+          <span
+            key={item}
+            className={item <= step ? "active" : ""}
+            aria-current={item === step ? "step" : undefined}
+          />
         ))}
       </div>
 
@@ -123,11 +128,11 @@ export function Onboarding({ initialConfig, platform, onComplete }: OnboardingPr
                 {busy ? "检测中…" : "检测 llama.cpp"}
               </button>
               <button
-                className="text-button"
+                className="text-button text-button--with-icon"
                 type="button"
                 onClick={() => window.desktopPet.openExternal("https://github.com/ggml-org/llama.cpp/releases")}
               >
-                打开官方下载页 ↗
+                打开官方下载页 <PixelIcon name="open" />
               </button>
             </div>
             {probe && (
@@ -191,11 +196,11 @@ export function Onboarding({ initialConfig, platform, onComplete }: OnboardingPr
               </label>
             )}
             <button
-              className="text-button align-left"
+              className="text-button text-button--with-icon align-left"
               type="button"
               onClick={() => window.desktopPet.openExternal("https://huggingface.co/models?library=gguf")}
             >
-              浏览 GGUF 模型并检查许可 ↗
+              浏览 GGUF 模型并检查许可 <PixelIcon name="open" />
             </button>
           </div>
         )}
