@@ -1,22 +1,25 @@
 import { describe, expect, it } from "vitest";
-import {
-  PET_WINDOW_BASE_HEIGHT,
-  PET_WINDOW_MAX_HEIGHT,
-  quickReplyWindowHeight,
-} from "./pet-window";
+import { clampWindowPosition } from "./pet-window";
 
-describe("quickReplyWindowHeight", () => {
-  it("keeps the compact pet height when there is no assistant reply", () => {
-    expect(quickReplyWindowHeight(240, false)).toBe(PET_WINDOW_BASE_HEIGHT);
+describe("clampWindowPosition", () => {
+  const workArea = { x: 100, y: 50, width: 1_200, height: 800 };
+  const size = { width: 280, height: 330 };
+
+  it("preserves the exact pet position when it is still visible", () => {
+    expect(clampWindowPosition({ x: 947, y: 493 }, size, workArea)).toEqual({
+      x: 947,
+      y: 493,
+    });
   });
 
-  it("grows in stable steps instead of resizing for every streamed token", () => {
-    expect(quickReplyWindowHeight(35, true)).toBe(438);
-    expect(quickReplyWindowHeight(79, true)).toBe(438);
-    expect(quickReplyWindowHeight(83, true)).toBe(486);
-  });
-
-  it("caps very long replies at the largest pet window", () => {
-    expect(quickReplyWindowHeight(2_000, true)).toBe(PET_WINDOW_MAX_HEIGHT);
+  it("only moves the pet when the saved position is outside the work area", () => {
+    expect(clampWindowPosition({ x: 1_240, y: 700 }, size, workArea)).toEqual({
+      x: 1_020,
+      y: 520,
+    });
+    expect(clampWindowPosition({ x: -80, y: -30 }, size, workArea)).toEqual({
+      x: 100,
+      y: 50,
+    });
   });
 });

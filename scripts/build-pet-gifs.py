@@ -30,6 +30,11 @@ SOURCE_PATHS = {
     "groom_lick": SOURCE / "pet-soft-pixel-groom-lick-v1.png",
 }
 
+ACTION_SHEET_PATHS = {
+    "yawning": SOURCE / "pet-soft-pixel-yawn-sheet-v1.png",
+    "ear_scratching": SOURCE / "pet-soft-pixel-ear-scratch-sheet-v1.png",
+}
+
 
 def alpha_composite_at(canvas: Image.Image, source: Image.Image, x: int, y: int) -> None:
     left = max(0, -x)
@@ -79,6 +84,108 @@ def load_keyframes() -> dict[str, Image.Image]:
         bottom / base_source.height * CANVAS[1],
     )
     return {name: load_aligned(path, target_bbox) for name, path in SOURCE_PATHS.items()}
+
+
+def load_action_frames(
+    path: Path,
+    target_frame: Image.Image,
+) -> list[Image.Image]:
+    """Split a 2x2 action sheet and register every pose to the resting pet."""
+    target_bbox = target_frame.getchannel("A").getbbox()
+    if target_bbox is None:
+        raise ValueError("Target pet frame has no visible pixels")
+    sheet = Image.open(path).convert("RGBA")
+    slot_width = sheet.width // 2
+    slot_height = sheet.height // 2
+    slots = [
+        sheet.crop((0, 0, slot_width, slot_height)),
+        sheet.crop((slot_width, 0, slot_width * 2, slot_height)),
+        sheet.crop((0, slot_height, slot_width, slot_height * 2)),
+        sheet.crop((slot_width, slot_height, slot_width * 2, slot_height * 2)),
+    ]
+    boxes = [slot.getchannel("A").getbbox() for slot in slots]
+    if any(box is None for box in boxes):
+        raise ValueError(f"Action sheet contains a blank slot: {path}")
+
+    visible_boxes = [box for box in boxes if box is not None]
+    union = (
+        min(box[0] for box in visible_boxes),
+        min(box[1] for box in visible_boxes),
+        max(box[2] for box in visible_boxes),
+        max(box[3] for box in visible_boxes),
+    )
+    union_width = union[2] - union[0]
+    union_height = union[3] - union[1]
+    target_height = target_bbox[3] - target_bbox[1]
+    scale = min((CANVAS[0] - 16) / union_width, target_height / union_height)
+    render_size = (
+        max(1, round(union_width * scale)),
+        max(1, round(union_height * scale)),
+    )
+    target_bottom = target_bbox[3]
+
+    frames: list[Image.Image] = []
+    for slot in slots:
+        cropped = slot.crop(union).resize(render_size, Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
+        alpha_composite_at(
+            canvas,
+            cropped,
+            round((CANVAS[0] - render_size[0]) / 2),
+            target_bottom - render_size[1],
+        )
+        frames.append(canvas)
+    return register_action_frames(frames, target_frame)
+
+
+def lower_body_anchor(image: Image.Image) -> tuple[float, int]:
+    """Locate the grounded lower torso/paws without letting ears or tails steer it."""
+    alpha = image.getchannel("A")
+    bbox = alpha.getbbox()
+    if bbox is None:
+        raise ValueError("Cannot register a blank action frame")
+
+    left, top, right, bottom = bbox
+    visible_width = right - left
+    visible_height = bottom - top
+    band_top = bottom - max(24, round(visible_height * 0.22))
+    center_left = left + round(visible_width * 0.25)
+    center_right = right - round(visible_width * 0.25)
+    pixels = alpha.load()
+    grounded = [
+        (x, y)
+        for y in range(band_top, bottom)
+        for x in range(center_left, center_right)
+        if pixels[x, y] >= ALPHA_THRESHOLD
+    ]
+    if not grounded:
+        raise ValueError("Action frame has no grounded lower-body pixels")
+    return sum(x for x, _ in grounded) / len(grounded), max(y for _, y in grounded)
+
+
+def translate_frame(image: Image.Image, dx: int, dy: int) -> Image.Image:
+    translated = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
+    alpha_composite_at(translated, image, dx, dy)
+    return translated
+
+
+def register_action_frames(
+    frames: Sequence[Image.Image],
+    target_frame: Image.Image,
+) -> list[Image.Image]:
+    """Keep the paws/lower torso fixed while the upper-body action changes."""
+    target_x, target_y = lower_body_anchor(target_frame)
+    registered: list[Image.Image] = []
+    for frame in frames:
+        anchor_x, anchor_y = lower_body_anchor(frame)
+        registered.append(
+            translate_frame(
+                frame,
+                round(target_x - anchor_x),
+                target_y - anchor_y,
+            )
+        )
+    return registered
 
 
 def transform_pose(
@@ -202,6 +309,14 @@ def main() -> None:
     keyframes = load_keyframes()
     base = keyframes["base"]
     happy = keyframes["happy"]
+    yawning_keyframes = load_action_frames(
+        ACTION_SHEET_PATHS["yawning"],
+        base,
+    )
+    ear_scratching_keyframes = load_action_frames(
+        ACTION_SHEET_PATHS["ear_scratching"],
+        base,
+    )
 
     idle = breathe_frames(base, 20, lift=2.2, stretch=0.0032, sway=0.06)
     idle[15] = transform_pose(happy, dy=-1)
@@ -238,6 +353,32 @@ def main() -> None:
     ]
     grooming_durations = [300, 180, 380, 180, 260, 210, 230, 170, 340, 200, 450]
 
+    yawning = [
+        base,
+        yawning_keyframes[0],
+        yawning_keyframes[1],
+        yawning_keyframes[2],
+        yawning_keyframes[1],
+        yawning_keyframes[3],
+        base,
+    ]
+    yawning_durations = [300, 180, 240, 520, 360, 260, 700]
+
+    ear_scratching = [
+        base,
+        ear_scratching_keyframes[0],
+        ear_scratching_keyframes[1],
+        ear_scratching_keyframes[2],
+        ear_scratching_keyframes[1],
+        ear_scratching_keyframes[2],
+        ear_scratching_keyframes[1],
+        ear_scratching_keyframes[3],
+        base,
+    ]
+    ear_scratching_durations = [280, 160, 180, 260, 180, 260, 180, 200, 800]
+
+    # Keep the established shared palette stable so adding an action does not
+    # rewrite every existing mood GIF.
     palette = build_palette(keyframes.values())
     save_gif("idle", idle, idle_durations, palette)
     save_gif("thinking", thinking, 150, palette)
@@ -247,6 +388,14 @@ def main() -> None:
     save_gif("listening", listening, 130, palette)
     save_gif("transcribing", transcribing, 150, palette)
     save_gif("grooming", grooming, grooming_durations, palette, loop=False)
+    save_gif("yawning", yawning, yawning_durations, palette, loop=False)
+    save_gif(
+        "ear-scratching",
+        ear_scratching,
+        ear_scratching_durations,
+        palette,
+        loop=False,
+    )
 
 
 if __name__ == "__main__":

@@ -37,11 +37,10 @@ describe("PixelIcon", () => {
       <ImageAttachmentTray
         images={[{ path: "C:/cat.png", name: "cat.png", mimeType: "image/png" }]}
         onRemove={() => undefined}
-        compact
       />,
     );
 
-    expect(markup).toContain("image-attachment-tray--compact");
+    expect(markup).toContain("image-attachment-tray");
     expect(markup).toContain("image-attachment__remove");
     expect(markup).toContain("image-attachment__remove-icon");
     expect(markup).toContain('aria-label="移除 cat.png"');

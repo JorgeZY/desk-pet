@@ -38,7 +38,7 @@ describe("chat history", () => {
     expect(readChatHistory(storage)).toEqual([message(1)]);
   });
 
-  it("appends quick-chat turns and keeps the newest 40 messages", () => {
+  it("appends chat turns and keeps the newest 40 messages", () => {
     const storage = new MemoryStorage();
     appendChatMessages(Array.from({ length: 39 }, (_, index) => message(index)), storage);
 

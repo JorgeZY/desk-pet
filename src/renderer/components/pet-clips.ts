@@ -7,7 +7,14 @@ export type PetMood =
   | "listening"
   | "transcribing";
 
-export type PetVisualState = PetMood | "grooming";
+export const PET_IDLE_ACTIONS = [
+  "grooming",
+  "yawning",
+  "ear-scratching",
+] as const;
+
+export type PetIdleAction = (typeof PET_IDLE_ACTIONS)[number];
+export type PetVisualState = PetMood | PetIdleAction;
 
 interface PetClip {
   src: string;
@@ -16,6 +23,8 @@ interface PetClip {
 }
 
 export const PET_GROOMING_DURATION_MS = 2_900;
+export const PET_YAWNING_DURATION_MS = 2_560;
+export const PET_EAR_SCRATCHING_DURATION_MS = 2_500;
 
 const clip = (name: string, options: Omit<PetClip, "src">): PetClip => ({
   src: `./pet/moods/pet-${name}-v1.gif`,
@@ -31,10 +40,18 @@ export const PET_CLIPS = {
   listening: clip("listening", { loop: true }),
   transcribing: clip("transcribing", { loop: true }),
   grooming: clip("grooming", { loop: false, durationMs: PET_GROOMING_DURATION_MS }),
+  yawning: clip("yawning", { loop: false, durationMs: PET_YAWNING_DURATION_MS }),
+  "ear-scratching": clip("ear-scratching", {
+    loop: false,
+    durationMs: PET_EAR_SCRATCHING_DURATION_MS,
+  }),
 } satisfies Record<PetVisualState, PetClip>;
 
-export function resolvePetVisualState(mood: PetMood, grooming: boolean): PetVisualState {
-  return mood === "idle" && grooming ? "grooming" : mood;
+export function resolvePetVisualState(
+  mood: PetMood,
+  idleAction: PetIdleAction | null,
+): PetVisualState {
+  return mood === "idle" && idleAction ? idleAction : mood;
 }
 
 export function petClipPlaybackSrc(state: PetVisualState, playbackId: string) {

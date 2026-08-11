@@ -83,10 +83,12 @@ describe("Pet", () => {
     expect(markup).toContain("橘猫团子");
   });
 
-  it("allows grooming to replace idle but never a business mood", () => {
-    expect(resolvePetVisualState("idle", true)).toBe("grooming");
-    expect(resolvePetVisualState("thinking", true)).toBe("thinking");
-    expect(resolvePetVisualState("listening", true)).toBe("listening");
-    expect(resolvePetVisualState("transcribing", true)).toBe("transcribing");
+  it("allows an idle action to replace idle but never a business mood", () => {
+    expect(resolvePetVisualState("idle", "grooming")).toBe("grooming");
+    expect(resolvePetVisualState("idle", "yawning")).toBe("yawning");
+    expect(resolvePetVisualState("idle", "ear-scratching")).toBe("ear-scratching");
+    expect(resolvePetVisualState("thinking", "yawning")).toBe("thinking");
+    expect(resolvePetVisualState("listening", "ear-scratching")).toBe("listening");
+    expect(resolvePetVisualState("transcribing", "grooming")).toBe("transcribing");
   });
 });

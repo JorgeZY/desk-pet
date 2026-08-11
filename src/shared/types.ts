@@ -181,7 +181,6 @@ export interface DesktopPetApi {
   pickMmproj(): Promise<FilePickResult | null>;
   pickChatImages(): Promise<ChatImage[]>;
   setWindowMode(mode: WindowMode): Promise<void>;
-  setPetWindowHeight(height: number): Promise<void>;
   hideWindow(): Promise<void>;
   openExternal(url: string): Promise<void>;
   startChat(request: ChatRequest): void;
