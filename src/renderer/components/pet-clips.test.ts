@@ -3,11 +3,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   PET_CLIPS,
+  PET_EAR_SCRATCHING_DURATION_MS,
   PET_GROOMING_DURATION_MS,
+  PET_IDLE_ACTIONS,
+  PET_YAWNING_DURATION_MS,
   petClipPlaybackSrc,
   preloadLoopingPetClips,
 } from "./pet-clips";
-import { PET_GROOMING_TIMING } from "./pet-grooming";
 
 const clipPath = (src: string) => fileURLToPath(
   new URL(`../public/${src.replace(/^\.\//, "")}`, import.meta.url),
@@ -92,22 +94,25 @@ describe("pet GIF clips", () => {
       expect(stat.size).toBeLessThan(2.5 * 1024 * 1024);
     }
 
-    expect(totalBytes).toBeLessThan(11 * 1024 * 1024);
+    expect(totalBytes).toBeLessThan(16 * 1024 * 1024);
   });
 
-  it("keeps the one-shot grooming timer aligned with its GIF manifest", () => {
-    const groomingData = readFileSync(clipPath(PET_CLIPS.grooming.src));
+  it.each([
+    ["grooming", PET_GROOMING_DURATION_MS],
+    ["yawning", PET_YAWNING_DURATION_MS],
+    ["ear-scratching", PET_EAR_SCRATCHING_DURATION_MS],
+  ] as const)("keeps the one-shot %s timer aligned with its GIF manifest", (action, durationMs) => {
+    const data = readFileSync(clipPath(PET_CLIPS[action].src));
 
-    expect(PET_CLIPS.grooming.loop).toBe(false);
-    expect(PET_CLIPS.grooming.durationMs).toBe(PET_GROOMING_DURATION_MS);
-    expect(PET_GROOMING_TIMING.durationMs).toBe(PET_GROOMING_DURATION_MS);
-    expect(readGifDurationMs(groomingData)).toBe(PET_GROOMING_DURATION_MS);
-    expect(groomingData.includes(Buffer.from("NETSCAPE2.0", "ascii"))).toBe(false);
+    expect(PET_CLIPS[action].loop).toBe(false);
+    expect(PET_CLIPS[action].durationMs).toBe(durationMs);
+    expect(readGifDurationMs(data)).toBe(durationMs);
+    expect(data.includes(Buffer.from("NETSCAPE2.0", "ascii"))).toBe(false);
   });
 
   it("keeps every mood clip looping", () => {
     for (const [state, media] of Object.entries(PET_CLIPS)) {
-      if (state === "grooming") continue;
+      if (PET_IDLE_ACTIONS.includes(state as (typeof PET_IDLE_ACTIONS)[number])) continue;
       const data = readFileSync(clipPath(media.src));
       expect(media.loop).toBe(true);
       expect(readGifDurationMs(data)).toBeGreaterThan(0);
@@ -120,7 +125,7 @@ describe("pet GIF clips", () => {
     expect(readGifFrameDurationsMs(idleData)[15]).toBe(160);
   });
 
-  it("never starts the one-shot grooming GIF during preload", () => {
+  it("never starts a one-shot idle action during preload", () => {
     const originalImage = globalThis.Image;
     const requestedSources: string[] = [];
 
@@ -142,7 +147,9 @@ describe("pet GIF clips", () => {
     try {
       preloadLoopingPetClips();
       expect(requestedSources).toHaveLength(7);
-      expect(requestedSources).not.toContain(PET_CLIPS.grooming.src);
+      for (const action of PET_IDLE_ACTIONS) {
+        expect(requestedSources).not.toContain(PET_CLIPS[action].src);
+      }
     } finally {
       Object.defineProperty(globalThis, "Image", {
         configurable: true,
@@ -158,6 +165,12 @@ describe("pet GIF clips", () => {
     );
     expect(petClipPlaybackSrc("grooming", "two")).not.toBe(
       petClipPlaybackSrc("grooming", "one"),
+    );
+    expect(petClipPlaybackSrc("yawning", "one")).toBe(
+      `${PET_CLIPS.yawning.src}?play=one`,
+    );
+    expect(petClipPlaybackSrc("ear-scratching", "one")).toBe(
+      `${PET_CLIPS["ear-scratching"].src}?play=one`,
     );
   });
 });

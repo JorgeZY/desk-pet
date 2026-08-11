@@ -104,20 +104,8 @@
   image-rendering: auto;
 }
 
-.pet-clip--previous {
-  z-index: 1;
-}
-
 .pet-clip--current {
-  z-index: 2;
-}
-
-.pet-clip-stack.is-transitioning .pet-clip--previous {
-  animation: pet-clip-exit 110ms ease-in both;
-}
-
-.pet-clip-stack.is-transitioning .pet-clip--current {
-  animation: pet-clip-enter 110ms ease-out both;
+  z-index: 1;
 }
 
 .pet__action:focus-visible {
@@ -411,16 +399,6 @@
   53% { opacity: var(--pet-ground-lift-opacity); transform: scaleX(var(--pet-ground-lift-scale)); }
   69% { opacity: 0.9; transform: scaleX(0.98); }
   82% { opacity: 1; transform: scaleX(1); }
-}
-
-@keyframes pet-clip-enter {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes pet-clip-exit {
-  from { opacity: 1; }
-  to { opacity: 0; }
 }
 
 @keyframes pet-thought-pop {

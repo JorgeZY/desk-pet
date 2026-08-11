@@ -11,9 +11,6 @@ import type {
 import { ChatPanel } from "./components/ChatPanel";
 import { Onboarding } from "./components/Onboarding";
 import { Pet, type PetMood } from "./components/Pet";
-import { PixelIcon } from "./components/PixelIcon";
-import { QuickChat } from "./components/QuickChat";
-import { RuntimeBadge } from "./components/RuntimeBadge";
 import { Settings } from "./components/Settings";
 
 interface GlobalSpeechFeedback {
@@ -38,7 +35,6 @@ export function App() {
   const viewTransitionRef = useRef(false);
   const preparingSpeechRef = useRef(false);
   const [globalSpeech, setGlobalSpeech] = useState<GlobalSpeechFeedback | null>(null);
-  const [quickChatMood, setQuickChatMood] = useState<"thinking" | "talking" | null>(null);
 
   const updateDraft = (value: string) => {
     draftRef.current = value;
@@ -318,35 +314,12 @@ export function App() {
 
   return (
     <main className="pet-stage">
-      <div className="pet-stage__actions">
-        <RuntimeBadge runtime={runtime} />
-        <button className="mini-icon-button" type="button" onClick={() => void transitionToView("settings")} aria-label="设置"><PixelIcon name="settings" /></button>
-        <button className="mini-icon-button" type="button" onClick={() => window.desktopPet.hideWindow()} aria-label="隐藏"><PixelIcon name="close" /></button>
-      </div>
-      {!globalSpeech && (
-        <QuickChat
-          runtime={runtime}
-          speech={speech}
-          draft={draft}
-          images={draftImages}
-          onDraftChange={updateDraft}
-          onImagesChange={setDraftImages}
-          visionEnabled={runtime.visionEnabled}
-          onPrepareSpeech={prepareSpeech}
-          onStartSpeech={startSpeech}
-          onStopSpeech={stopSpeech}
-          onCancelSpeech={cancelSpeech}
-          onOpenChat={() => void transitionToView("chat")}
-          onStartRuntime={startRuntime}
-          onPetMoodChange={setQuickChatMood}
-        />
-      )}
       <Pet
         mood={speech.phase === "recording"
           ? "listening"
           : speech.phase === "transcribing"
             ? "transcribing"
-            : quickChatMood ?? mood}
+            : mood}
         windowDrag
         onClick={() => void transitionToView("chat")}
       />

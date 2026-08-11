@@ -5,10 +5,14 @@ import {
   preloadPetClip,
   preloadLoopingPetClips,
   resolvePetVisualState,
+  type PetIdleAction,
   type PetMood,
   type PetVisualState,
 } from "./pet-clips";
-import { PET_GROOMING_TIMING, startGroomingScheduler } from "./pet-grooming";
+import {
+  PET_IDLE_ACTION_TIMING,
+  startIdleActionScheduler,
+} from "./pet-idle-actions";
 
 export type { PetMood } from "./pet-clips";
 
@@ -24,12 +28,6 @@ interface ClipLayer {
   epoch: number;
 }
 
-interface ClipLayers {
-  current: ClipLayer;
-  previous: ClipLayer | null;
-}
-
-const CLIP_TRANSITION_MS = 110;
 let nextPlaybackSession = 0;
 
 const moodLabels: Record<PetMood, string> = {
@@ -42,35 +40,23 @@ const moodLabels: Record<PetMood, string> = {
   transcribing: "正在把语音转成文字",
 };
 
-function useClipLayers(targetState: PetVisualState) {
+function useClipLayer(targetState: PetVisualState) {
   const initialLayerRef = useRef<ClipLayer>({ state: targetState, epoch: 0 });
   const currentLayerRef = useRef(initialLayerRef.current);
   const epochRef = useRef(0);
   const requestRef = useRef(0);
-  const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [layers, setLayers] = useState<ClipLayers>({
-    current: initialLayerRef.current,
-    previous: null,
-  });
+  const [layer, setLayer] = useState<ClipLayer>(initialLayerRef.current);
 
   useEffect(() => {
     const request = ++requestRef.current;
     if (targetState === currentLayerRef.current.state) return;
-    if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
 
     let cancelled = false;
     const activate = () => {
       if (cancelled || request !== requestRef.current) return;
-      const previous = currentLayerRef.current;
       const current = { state: targetState, epoch: ++epochRef.current };
       currentLayerRef.current = current;
-      setLayers({ current, previous });
-      transitionTimerRef.current = setTimeout(() => {
-        if (currentLayerRef.current.epoch === current.epoch) {
-          setLayers({ current, previous: null });
-        }
-        transitionTimerRef.current = null;
-      }, CLIP_TRANSITION_MS);
+      setLayer(current);
     };
 
     const media = PET_CLIPS[targetState];
@@ -89,10 +75,9 @@ function useClipLayers(targetState: PetVisualState) {
 
   useEffect(() => () => {
     requestRef.current += 1;
-    if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
   }, []);
 
-  return layers;
+  return layer;
 }
 
 function clipImage(
@@ -125,16 +110,16 @@ function clipImage(
 
 export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetProps) {
   const [playbackSession] = useState(() => ++nextPlaybackSession);
-  const groomingEligible = Boolean(onClick) && mood === "idle" && !compact;
-  const [isGrooming, setIsGrooming] = useState(false);
+  const idleActionEligible = Boolean(onClick) && mood === "idle" && !compact;
+  const [idleAction, setIdleAction] = useState<PetIdleAction | null>(null);
 
   useEffect(() => {
     preloadLoopingPetClips();
   }, []);
 
   useEffect(() => {
-    if (!groomingEligible) {
-      setIsGrooming(false);
+    if (!idleActionEligible) {
+      setIdleAction(null);
       return;
     }
 
@@ -142,9 +127,12 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
     const syncVisibility = () => {
       stopScheduler?.();
       stopScheduler = undefined;
-      setIsGrooming(false);
+      setIdleAction(null);
       if (document.visibilityState === "visible") {
-        stopScheduler = startGroomingScheduler(setIsGrooming, PET_GROOMING_TIMING);
+        stopScheduler = startIdleActionScheduler(
+          setIdleAction,
+          PET_IDLE_ACTION_TIMING,
+        );
       }
     };
 
@@ -154,12 +142,12 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
       document.removeEventListener("visibilitychange", syncVisibility);
       stopScheduler?.();
     };
-  }, [groomingEligible]);
+  }, [idleActionEligible]);
 
-  const groomingActive = groomingEligible && isGrooming;
-  const visualState = resolvePetVisualState(mood, groomingActive);
-  const layers = useClipLayers(visualState);
-  const className = `pet ${compact ? "pet--compact" : ""} ${windowDrag ? "pet--window-drag" : ""} ${groomingActive ? "pet--grooming" : ""} mood-${mood} clip-${visualState}`;
+  const activeIdleAction = idleActionEligible ? idleAction : null;
+  const visualState = resolvePetVisualState(mood, activeIdleAction);
+  const layer = useClipLayer(visualState);
+  const className = `pet ${compact ? "pet--compact" : ""} ${windowDrag ? "pet--window-drag" : ""} ${activeIdleAction ? "pet--idle-action" : ""} mood-${mood} clip-${visualState}`;
   const decorativeAlt = onClick ? "" : `橘猫团子，${moodLabels[mood]}`;
 
   const artwork = (
@@ -171,17 +159,10 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
       </svg>
 
       <span className="pet-interaction">
-        <span className={`pet-clip-stack ${layers.previous ? "is-transitioning" : ""}`}>
-          {layers.previous && clipImage(
-            layers.previous,
-            "pet-clip pet-clip--previous",
-            "",
-            true,
-            playbackSession,
-          )}
+        <span className="pet-clip-stack">
           {clipImage(
-            layers.current,
-            `pet-clip pet-clip--current pet-clip--${layers.current.state}`,
+            layer,
+            `pet-clip pet-clip--current pet-clip--${layer.state}`,
             decorativeAlt,
             Boolean(onClick),
             playbackSession,

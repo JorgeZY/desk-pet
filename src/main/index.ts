@@ -28,7 +28,11 @@ import type {
   SpeechState,
   WindowMode,
 } from "../shared/types";
-import { PET_WINDOW_BASE_HEIGHT, PET_WINDOW_MAX_HEIGHT } from "../shared/pet-window";
+import {
+  clampWindowPosition,
+  PET_WINDOW_BASE_HEIGHT,
+  PET_WINDOW_WIDTH,
+} from "../shared/pet-window";
 import { ConfigStore } from "./config-store";
 import { pasteDictationText, resolveShortcutSpeechSource } from "./global-dictation";
 import { LlamaRuntime } from "./llama-runtime";
@@ -41,7 +45,7 @@ const execFileAsync = promisify(execFile);
 app.setName("desk-pet");
 
 const WINDOW_SIZES: Record<WindowMode, { width: number; height: number }> = {
-  pet: { width: 320, height: PET_WINDOW_BASE_HEIGHT },
+  pet: { width: PET_WINDOW_WIDTH, height: PET_WINDOW_BASE_HEIGHT },
   chat: { width: 440, height: 700 },
   settings: { width: 560, height: 740 },
   onboarding: { width: 560, height: 740 },
@@ -55,7 +59,6 @@ let config: RuntimeConfig;
 let runtime: LlamaRuntime;
 let speech: SpeechRuntime;
 let currentWindowMode: WindowMode = "pet";
-let petWindowHeight = PET_WINDOW_BASE_HEIGHT;
 let shortcutHook: typeof import("uiohook-napi").uIOhook | undefined;
 let shortcutHookStarted = false;
 let shortcutListenersRegistered = false;
@@ -63,6 +66,7 @@ let shortcutPressed = false;
 let shortcutReleasedBeforeStart = false;
 let shortcutSessionId: string | undefined;
 let speechComposerFocused = false;
+let petWindowPosition: { x: number; y: number } | null = null;
 const globalDictationSessions = new Set<string>();
 
 function assetPath(fileName: string): string {
@@ -102,31 +106,32 @@ function anchorWindow(window: BrowserWindow, width: number, height: number): voi
   window.setBounds({ x, y, width, height }, false);
 }
 
-function setWindowMode(mode: WindowMode): void {
-  currentWindowMode = mode;
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const size = mode === "pet"
-    ? { ...WINDOW_SIZES.pet, height: petWindowHeight }
-    : WINDOW_SIZES[mode];
-  anchorWindow(mainWindow, size.width, size.height);
+function restorePetWindow(window: BrowserWindow, width: number, height: number): void {
+  if (!petWindowPosition) {
+    anchorWindow(window, width, height);
+    return;
+  }
+
+  const display = screen.getDisplayNearestPoint(petWindowPosition);
+  const position = clampWindowPosition(petWindowPosition, { width, height }, display.workArea);
+  window.setBounds({ ...position, width, height }, false);
 }
 
-function setPetWindowHeight(height: number): void {
-  if (!Number.isFinite(height)) return;
-  const requestedHeight = Math.round(height);
-  const displayHeight = mainWindow && !mainWindow.isDestroyed()
-    ? screen.getDisplayMatching(mainWindow.getBounds()).workArea.height
-    : PET_WINDOW_MAX_HEIGHT;
-  const availableHeight = Math.max(PET_WINDOW_BASE_HEIGHT, displayHeight - 36);
-  const nextHeight = Math.min(
-    Math.max(requestedHeight, PET_WINDOW_BASE_HEIGHT),
-    PET_WINDOW_MAX_HEIGHT,
-    availableHeight,
-  );
-  petWindowHeight = nextHeight;
-  if (!mainWindow || mainWindow.isDestroyed() || currentWindowMode !== "pet") return;
-  if (mainWindow.getBounds().height === nextHeight) return;
-  anchorWindow(mainWindow, WINDOW_SIZES.pet.width, nextHeight);
+function setWindowMode(mode: WindowMode): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const previousMode = currentWindowMode;
+  if (previousMode === "pet" && mode !== "pet") {
+    const bounds = mainWindow.getBounds();
+    petWindowPosition = { x: bounds.x, y: bounds.y };
+  }
+
+  currentWindowMode = mode;
+  const size = WINDOW_SIZES[mode];
+  if (mode === "pet" && previousMode !== "pet") {
+    restorePetWindow(mainWindow, size.width, size.height);
+  } else {
+    anchorWindow(mainWindow, size.width, size.height);
+  }
 }
 
 function showWindow(mode?: WindowMode): void {
@@ -441,7 +446,6 @@ function registerIpc(): void {
   );
   ipcMain.handle("dialog:pick-chat-images", () => pickChatImages());
   ipcMain.handle("window:set-mode", (_event, mode: WindowMode) => setWindowMode(mode));
-  ipcMain.handle("window:set-pet-height", (_event, height: number) => setPetWindowHeight(height));
   ipcMain.handle("window:hide", () => mainWindow?.hide());
   ipcMain.handle("app:open-external", async (_event, url: string) => {
     const parsed = new URL(url);

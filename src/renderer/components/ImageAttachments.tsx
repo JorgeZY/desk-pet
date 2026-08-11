@@ -4,7 +4,6 @@ import { PixelIcon } from "./PixelIcon";
 interface ImageAttachButtonProps {
   images: ChatImage[];
   disabled?: boolean;
-  compact?: boolean;
   onChange: (images: ChatImage[]) => void;
   onError: (message: string) => void;
 }
@@ -12,7 +11,6 @@ interface ImageAttachButtonProps {
 export function ImageAttachButton({
   images,
   disabled = false,
-  compact = false,
   onChange,
   onError,
 }: ImageAttachButtonProps) {
@@ -28,7 +26,7 @@ export function ImageAttachButton({
 
   return (
     <button
-      className={`image-attach-button ${compact ? "image-attach-button--compact" : ""}`}
+      className="image-attach-button"
       type="button"
       onClick={() => void pick()}
       disabled={disabled}
@@ -44,13 +42,12 @@ export function ImageAttachButton({
 interface ImageAttachmentTrayProps {
   images: ChatImage[];
   onRemove?: (index: number) => void;
-  compact?: boolean;
 }
 
-export function ImageAttachmentTray({ images, onRemove, compact = false }: ImageAttachmentTrayProps) {
+export function ImageAttachmentTray({ images, onRemove }: ImageAttachmentTrayProps) {
   if (!images.length) return null;
   return (
-    <div className={`image-attachment-tray ${compact ? "image-attachment-tray--compact" : ""}`}>
+    <div className="image-attachment-tray">
       {images.map((image, index) => (
         <figure className="image-attachment" key={`${image.path}-${index}`} title={image.name}>
           {image.previewUrl ? (

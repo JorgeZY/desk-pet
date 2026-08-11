@@ -1,19 +1,27 @@
-export const PET_WINDOW_BASE_HEIGHT = 390;
-export const PET_WINDOW_MAX_HEIGHT = 630;
-export const QUICK_REPLY_COLLAPSED_HEIGHT = 34;
-export const QUICK_REPLY_MAX_HEIGHT = 274;
+export const PET_WINDOW_WIDTH = 280;
+export const PET_WINDOW_BASE_HEIGHT = 330;
 
-const PET_WINDOW_GROWTH_STEP = 48;
+interface WindowPosition {
+  x: number;
+  y: number;
+}
 
-export function quickReplyWindowHeight(scrollHeight: number, expanded: boolean): number {
-  if (!expanded) return PET_WINDOW_BASE_HEIGHT;
+interface WindowSize {
+  width: number;
+  height: number;
+}
 
-  const replyHeight = Math.min(
-    QUICK_REPLY_MAX_HEIGHT,
-    Math.max(QUICK_REPLY_COLLAPSED_HEIGHT, Math.ceil(scrollHeight)),
-  );
-  const extraHeight = replyHeight - QUICK_REPLY_COLLAPSED_HEIGHT;
-  const steppedExtraHeight = Math.ceil(extraHeight / PET_WINDOW_GROWTH_STEP) * PET_WINDOW_GROWTH_STEP;
+interface WorkArea extends WindowPosition, WindowSize {}
 
-  return Math.min(PET_WINDOW_MAX_HEIGHT, PET_WINDOW_BASE_HEIGHT + steppedExtraHeight);
+export function clampWindowPosition(
+  position: WindowPosition,
+  size: WindowSize,
+  workArea: WorkArea,
+): WindowPosition {
+  const maxX = Math.max(workArea.x, workArea.x + workArea.width - size.width);
+  const maxY = Math.max(workArea.y, workArea.y + workArea.height - size.height);
+  return {
+    x: Math.min(Math.max(position.x, workArea.x), maxX),
+    y: Math.min(Math.max(position.y, workArea.y), maxY),
+  };
 }

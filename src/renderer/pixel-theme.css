@@ -711,8 +711,7 @@ select:focus {
   transform: translate(2px, 2px);
 }
 
-.message-avatar,
-.quick-chat__avatar {
+.message-avatar {
   color: #fffaf0;
   background: var(--pixel-orange);
   border: 2px solid var(--pixel-outline);
@@ -917,8 +916,7 @@ select:focus {
   transform: translate3d(0, -1px, 0);
 }
 
-.voice-button.phase-recording,
-.quick-chat__composer .voice-button.phase-recording {
+.voice-button.phase-recording {
   color: #225f53;
   background: #caf0e1;
   border-color: #347a6b;
@@ -1034,7 +1032,7 @@ select:focus {
   border-top: 3px solid var(--pixel-outline);
 }
 
-/* Collapsed pet window and Quick Chat */
+/* Collapsed pet window */
 
 .pet-stage {
   background: transparent;
@@ -1055,8 +1053,7 @@ select:focus {
   box-shadow: 2px 2px 0 rgba(75, 48, 40, 0.3);
 }
 
-.global-speech-bubble,
-.quick-chat {
+.global-speech-bubble {
   color: #563b31;
   background-color: #fff8df;
   background-image:
@@ -1073,8 +1070,7 @@ select:focus {
   animation: pixel-dialog-arrive 160ms steps(2, end);
 }
 
-.global-speech-bubble::after,
-.quick-chat::after {
+.global-speech-bubble::after {
   width: 16px;
   height: 12px;
   background: var(--pixel-outline);
@@ -1124,49 +1120,8 @@ select:focus {
   box-shadow: none;
 }
 
-.quick-chat {
-  /* The root already fades across window-mode changes. A second opacity
-     animation here delays and visibly steps the Quick Chat entrance. */
-  animation: none;
-  transition:
-    border-color 110ms ease-out,
-    box-shadow 110ms ease-out;
-}
-
-.quick-chat--has-reply {
-  border-color: #8a4930;
-  box-shadow:
-    4px 4px 0 rgba(75, 48, 40, 0.36),
-    inset 0 2px 0 #ffe8ad;
-}
-
-.quick-chat::after {
-  display: none;
-  bottom: -11px;
-  left: 22px;
-}
-
-.quick-chat__message button {
-  position: relative;
-  display: grid;
-  padding: 0;
-  margin: 0;
-  place-items: center;
-  line-height: 0;
-  color: #6e3d28;
-  background: var(--pixel-amber-light);
-  border: 2px solid var(--pixel-outline);
-  border-radius: 3px;
-  box-shadow: 2px 2px 0 rgba(75, 48, 40, 0.25);
-  transition:
-    background var(--motion-fast) steps(2, end),
-    box-shadow var(--motion-fast) steps(2, end),
-    transform var(--motion-fast) steps(2, end);
-}
-
 .icon-button > [data-pixel-icon],
-.mini-icon-button > [data-pixel-icon],
-.quick-chat__message button > [data-pixel-icon] {
+.mini-icon-button > [data-pixel-icon] {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -1179,42 +1134,21 @@ select:focus {
   height: 18px;
 }
 
-.quick-chat__message button > [data-pixel-icon],
 .chat__header .icon-button > [data-pixel-icon] {
   width: 16px;
   height: 16px;
 }
 
-.quick-chat__message button:hover {
-  background: #ffd774;
-  box-shadow: 3px 3px 0 rgba(75, 48, 40, 0.28);
-  transform: translate(-1px, -1px);
-}
-
-.quick-chat__message button:active {
-  box-shadow: none;
-  transform: translate(2px, 2px);
-}
-
-.quick-chat__composer input {
-  background: #fffdf3;
-  border: 2px solid var(--pixel-outline-soft);
-  border-radius: 4px;
-}
-
-.chat-panel .composer__input textarea,
-.quick-chat__composer input {
+.chat-panel .composer__input textarea {
   caret-color: var(--pixel-focus);
 }
 
-.chat-panel .composer__input textarea:hover:not(:focus),
-.quick-chat__composer input:hover:not(:focus) {
+.chat-panel .composer__input textarea:hover:not(:focus) {
   background: #fff9e9;
   border-color: var(--pixel-orange);
 }
 
-.chat-panel .composer__input textarea:focus,
-.quick-chat__composer input:focus {
+.chat-panel .composer__input textarea:focus {
   background: var(--pixel-focus-surface);
   border-color: var(--pixel-focus);
   box-shadow:
@@ -1223,84 +1157,14 @@ select:focus {
   outline: none;
 }
 
-.chat-panel ::selection,
-.quick-chat ::selection {
+.chat-panel ::selection {
   color: var(--pixel-outline);
   background: #f3b372;
-}
-
-.quick-chat__composer button,
-.quick-chat__wake {
-  color: #fffaf0;
-  background: var(--pixel-orange);
-  border: 2px solid var(--pixel-outline);
-  border-radius: 4px;
-  box-shadow:
-    2px 2px 0 var(--pixel-outline),
-    inset 0 2px 0 var(--pixel-orange-light);
-  text-shadow: 1px 1px 0 #8f3f2b;
-}
-
-.quick-chat__composer > button {
-  display: grid;
-  align-self: center;
-  place-items: center;
-  line-height: 0;
-  transition:
-    color var(--motion-fast) steps(2, end),
-    background var(--motion-fast) steps(2, end),
-    border-color var(--motion-fast) steps(2, end),
-    box-shadow var(--motion-fast) steps(2, end),
-    transform var(--motion-fast) steps(2, end);
-}
-
-.quick-chat__composer > button > [data-pixel-icon],
-.quick-chat__composer > .voice-button > .voice-button__icon[data-pixel-icon] {
-  width: 18px;
-  height: 18px;
 }
 
 .voice-button--compact > .voice-button__icon[data-pixel-icon] {
   width: 19px;
   height: 19px;
-}
-
-.quick-chat__composer > .image-attach-button--compact > .image-attach-button__icon[data-pixel-icon] {
-  width: 18px;
-  height: 18px;
-  fill: currentColor;
-  stroke: none;
-}
-
-.quick-chat__composer > button:not(.voice-button):hover:not(:disabled) {
-  box-shadow: 3px 3px 0 var(--pixel-outline);
-  transform: translate(-1px, -1px);
-}
-
-.quick-chat__composer > button:not(.voice-button):active:not(:disabled) {
-  box-shadow: none;
-  transform: translate(2px, 2px);
-}
-
-.quick-chat__composer .voice-button,
-.quick-chat__composer .image-attach-button--compact {
-  color: #6f4937;
-  background: #ffe5ad;
-  border: 2px solid var(--pixel-outline-soft);
-  box-shadow: 2px 2px 0 rgba(75, 48, 40, 0.24);
-  text-shadow: none;
-}
-
-.quick-chat__composer .image-attach-button--compact:hover:not(:disabled) {
-  color: #653624;
-  background: var(--pixel-amber-light);
-  border-color: var(--pixel-outline);
-}
-
-.quick-chat__wake {
-  box-shadow:
-    3px 3px 0 var(--pixel-outline),
-    inset 0 2px 0 var(--pixel-orange-light);
 }
 
 /* Loading and fatal states */
