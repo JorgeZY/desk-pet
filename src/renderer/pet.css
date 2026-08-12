@@ -166,18 +166,9 @@
 }
 
 @media (hover: hover) {
-  .pet__action:hover .pet-interaction {
-    transform: translateY(-0.8px) scale(1.004);
-  }
-
   .pet__action:hover .pet-ground-response {
     opacity: 0.84;
     transform: scaleX(0.96);
-  }
-
-  .mood-sleeping .pet__action:hover .pet-interaction,
-  .mood-sad .pet__action:hover .pet-interaction {
-    transform: translateY(-0.3px) scale(1.001);
   }
 }
 
