@@ -1174,13 +1174,13 @@ select:focus {
   background: transparent;
 }
 
-.loading-screen p {
-  padding: 8px 11px;
-  background: #fff1c7;
-  border: 2px solid var(--pixel-outline);
-  border-radius: 4px;
-  box-shadow: 3px 3px 0 rgba(75, 48, 40, 0.25);
+.loading-status__text {
   text-shadow: 1px 1px 0 #f4c977;
+}
+
+.loading-paws i {
+  background: var(--pixel-orange);
+  border-radius: 1px;
 }
 
 .fatal-error {

@@ -254,9 +254,19 @@ export function App() {
 
   if (!bootstrap || !runtime || !speech) {
     return (
-      <main className="loading-screen">
-        <Pet mood="sleeping" compact />
-        <p>正在启动 desk-pet…</p>
+      <main className="loading-screen" aria-busy="true">
+        <div className="loading-pet" aria-hidden="true">
+          <span className="loading-pet__glow" />
+          <Pet mood="sleeping" compact />
+        </div>
+        <div className="loading-status" role="status" aria-live="polite">
+          <span className="loading-status__text">团子正在醒来</span>
+          <span className="loading-paws" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+        </div>
       </main>
     );
   }

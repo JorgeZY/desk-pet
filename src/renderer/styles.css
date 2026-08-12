@@ -1813,22 +1813,101 @@ select {
 /* Loading and fatal */
 
 .loading-screen {
+  position: relative;
   display: flex;
   width: 100%;
   height: 100%;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   color: #6d5952;
+  overflow: hidden;
 }
 
-.loading-screen .pet {
-  margin-bottom: -20px;
+.loading-pet {
+  position: relative;
+  display: grid;
+  width: 152px;
+  height: 170px;
+  place-items: end center;
 }
 
-.loading-screen p {
-  font-size: 12px;
-  font-weight: 700;
+.loading-pet .pet {
+  position: relative;
+  z-index: 1;
+  width: 136px;
+  margin: 0;
+}
+
+.loading-pet__glow {
+  position: absolute;
+  right: 16px;
+  bottom: 9px;
+  left: 16px;
+  height: 22px;
+  background: radial-gradient(ellipse, rgba(231, 157, 92, 0.3), rgba(231, 157, 92, 0) 70%);
+  animation: loading-glow 1.8s ease-in-out infinite;
+}
+
+.loading-status {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 8px;
+  margin-top: -5px;
+}
+
+.loading-status__text {
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
+.loading-paws {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.loading-paws i {
+  position: relative;
+  display: block;
+  width: 6px;
+  height: 5px;
+  background: #d8894f;
+  border-radius: 55% 55% 48% 48%;
+  opacity: 0.25;
+  animation: loading-paw-step 1.2s ease-in-out infinite;
+}
+
+.loading-paws i::before,
+.loading-paws i::after {
+  position: absolute;
+  top: -3px;
+  width: 3px;
+  height: 3px;
+  content: "";
+  background: inherit;
+  border-radius: 50%;
+}
+
+.loading-paws i::before {
+  left: 0;
+}
+
+.loading-paws i::after {
+  right: 0;
+}
+
+.loading-paws i:nth-child(2) {
+  animation-delay: 160ms;
+}
+
+.loading-paws i:nth-child(3) {
+  animation-delay: 320ms;
 }
 
 .fatal-error {
@@ -1867,4 +1946,29 @@ select {
 @keyframes speech-bubble-arrive {
   0% { opacity: 0; transform: translateY(5px) scale(0.98); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes loading-glow {
+  0%, 100% { opacity: 0.42; }
+  50% { opacity: 0.92; }
+}
+
+@keyframes loading-paw-step {
+  0%, 22%, 100% { opacity: 0.22; transform: translateY(0); }
+  42%, 62% { opacity: 1; transform: translateY(-2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-pet__glow,
+  .loading-paws i {
+    animation: none;
+  }
+
+  .loading-pet__glow {
+    opacity: 0.65;
+  }
+
+  .loading-paws i {
+    opacity: 0.7;
+  }
 }
