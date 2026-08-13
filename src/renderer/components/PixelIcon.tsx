@@ -9,7 +9,10 @@ export type PixelIconName =
   | "upload"
   | "image"
   | "bolt"
-  | "sparkle";
+  | "sparkle"
+  | "history"
+  | "plus"
+  | "trash";
 
 interface PixelIconProps {
   name: PixelIconName;
@@ -28,6 +31,9 @@ const ICON_PATHS = {
   image: "M2 2h12v12H2V2Zm2 2v8h8V4H4Zm1 6 2-2 2 2 1-1 2 2v1H4v-1l1-1Zm5-4h1v1h-1V6Z",
   bolt: "M8 1h4v4h-2v2h3v2h-2v2H9v2H7v2H4v-4h2V9H3V6h2V4h3V1Z",
   sparkle: "M7 1h2v4h2v2h4v2h-4v2H9v4H7v-4H5V9H1V7h4V5h2V1Zm6 10h1v1h1v1h-1v1h-1v-1h-1v-1h1v-1Z",
+  history: "M3 2h10v2H3V2ZM2 5h12v9H2V5Zm2 2v5h8V7H4Zm2 1h4v2H6V8Z",
+  plus: "M7 2h2v5h5v2H9v5H7V9H2V7h5V2Z",
+  trash: "M5 1h6v2h3v2H2V3h3V1ZM3 6h10v9H3V6Zm3 2v5h1V8H6Zm3 0v5h1V8H9Z",
 } satisfies Record<PixelIconName, string>;
 
 export function PixelIcon({ name, className }: PixelIconProps) {

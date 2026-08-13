@@ -61,8 +61,14 @@ describe("pet idle action scheduler", () => {
   it("selects from the action pack without repeating the previous action", () => {
     expect(pickIdleAction(["grooming"], "grooming", () => 1)).toBe("grooming");
     expect(pickIdleAction(PET_IDLE_ACTION_TIMING.actions, "grooming", () => 0)).toBe("yawning");
-    expect(pickIdleAction(PET_IDLE_ACTION_TIMING.actions, "grooming", () => 1)).toBe("ear-scratching");
+    expect(pickIdleAction(PET_IDLE_ACTION_TIMING.actions, "grooming", () => 1)).toBe("perking-up");
     expect(pickIdleAction([], null)).toBeNull();
+  });
+
+  it("rotates more frequently while keeping enough rest between actions", () => {
+    expect(PET_IDLE_ACTION_TIMING.initialDelayMs).toEqual([4_000, 8_000]);
+    expect(PET_IDLE_ACTION_TIMING.repeatDelayMs).toEqual([10_000, 18_000]);
+    expect(PET_IDLE_ACTION_TIMING.actions).toHaveLength(7);
   });
 
   it("clamps random delay samples to the configured range", () => {

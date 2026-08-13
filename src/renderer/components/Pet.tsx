@@ -18,6 +18,7 @@ export type { PetMood } from "./pet-clips";
 
 interface PetProps {
   mood: PetMood;
+  clipMood?: PetMood;
   compact?: boolean;
   onClick?: () => void;
   windowDrag?: boolean;
@@ -108,7 +109,13 @@ function clipImage(
   );
 }
 
-export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetProps) {
+export function Pet({
+  mood,
+  clipMood = mood,
+  compact = false,
+  onClick,
+  windowDrag = false,
+}: PetProps) {
   const [playbackSession] = useState(() => ++nextPlaybackSession);
   const idleActionEligible = Boolean(onClick) && mood === "idle" && !compact;
   const [idleAction, setIdleAction] = useState<PetIdleAction | null>(null);
@@ -145,7 +152,7 @@ export function Pet({ mood, compact = false, onClick, windowDrag = false }: PetP
   }, [idleActionEligible]);
 
   const activeIdleAction = idleActionEligible ? idleAction : null;
-  const visualState = resolvePetVisualState(mood, activeIdleAction);
+  const visualState = resolvePetVisualState(clipMood, activeIdleAction);
   const layer = useClipLayer(visualState);
   const className = `pet ${compact ? "pet--compact" : ""} ${windowDrag ? "pet--window-drag" : ""} ${activeIdleAction ? "pet--idle-action" : ""} mood-${mood} clip-${visualState}`;
   const decorativeAlt = onClick ? "" : `橘猫团子，${moodLabels[mood]}`;

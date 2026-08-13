@@ -14,8 +14,8 @@ export interface IdleActionScheduleOptions {
 }
 
 export const PET_IDLE_ACTION_TIMING: IdleActionScheduleOptions = {
-  initialDelayMs: [8_000, 15_000],
-  repeatDelayMs: [24_000, 42_000],
+  initialDelayMs: [4_000, 8_000],
+  repeatDelayMs: [10_000, 18_000],
   actions: PET_IDLE_ACTIONS,
 };
 

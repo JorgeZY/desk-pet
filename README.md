@@ -206,7 +206,7 @@ Electron main
 ## 🔐 偷算力，不偷数据
 
 - 聊天请求只发往 `http://127.0.0.1:<port>`。
-- 对话历史保存在 Electron renderer 的本地存储中。
+- 对话历史保存在 Electron `userData/chat-history.sqlite`，支持最多 30 个本地会话；历史推荐由本地模型在宠物模式且系统空闲时静默预生成，Chat Panel 只读取缓存，不会因为生成推荐阻塞输入。
 - 配置保存在 Electron `userData/config.json`。
 - GGUF 自动下载只访问 ModelScope / Hugging Face，语音模型只访问 sherpa-onnx 的 GitHub
   Releases；推理、录音和聊天仍在本机进行。

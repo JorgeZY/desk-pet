@@ -8,6 +8,7 @@ import {
   Menu,
   nativeImage,
   net,
+  powerMonitor,
   screen,
   shell,
   Tray,
@@ -18,6 +19,7 @@ import { promisify } from "node:util";
 import { basename, extname, join } from "node:path";
 import type {
   BootstrapData,
+  ChatMessage,
   ChatImage,
   ChatImageMimeType,
   ChatRequest,
@@ -34,6 +36,8 @@ import {
   PET_WINDOW_WIDTH,
 } from "../shared/pet-window";
 import { ConfigStore } from "./config-store";
+import { ChatHistoryStore } from "./chat-history-store";
+import { ChatRecommendationService } from "./chat-recommendation-service";
 import { pasteDictationText, resolveShortcutSpeechSource } from "./global-dictation";
 import { LlamaRuntime } from "./llama-runtime";
 import { migrateModelDirectory, resolveModelDirectory } from "./model-directory";
@@ -50,11 +54,16 @@ const WINDOW_SIZES: Record<WindowMode, { width: number; height: number }> = {
   settings: { width: 560, height: 740 },
   onboarding: { width: 560, height: 740 },
 };
+const RECOMMENDATION_IDLE_SECONDS = 60;
+const RECOMMENDATION_POLL_INTERVAL_MS = 1_000;
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let configStore: ConfigStore;
+let chatHistoryStore: ChatHistoryStore | null = null;
+let chatRecommendationService: ChatRecommendationService | null = null;
+let recommendationIdleTimer: ReturnType<typeof setInterval> | null = null;
 let config: RuntimeConfig;
 let runtime: LlamaRuntime;
 let speech: SpeechRuntime;
@@ -119,6 +128,9 @@ function restorePetWindow(window: BrowserWindow, width: number, height: number):
 
 function setWindowMode(mode: WindowMode): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mode === "chat") {
+    interruptIdleChatRecommendations();
+  }
   const previousMode = currentWindowMode;
   if (previousMode === "pet" && mode !== "pet") {
     const bounds = mainWindow.getBounds();
@@ -145,6 +157,29 @@ function openWindowMode(mode: WindowMode): void {
   const nextMode = config.setupComplete ? mode : "onboarding";
   showWindow(nextMode);
   mainWindow?.webContents.send("app:open-view", nextMode);
+}
+
+function canPrecomputeChatRecommendations(): boolean {
+  return (
+    currentWindowMode === "pet" &&
+    mainWindow?.isFocused() !== true &&
+    speech?.snapshot.activeSessionId === undefined &&
+    powerMonitor.getSystemIdleTime() >= RECOMMENDATION_IDLE_SECONDS
+  );
+}
+
+function interruptIdleChatRecommendations(): void {
+  void runtime?.interruptIdleRecommendation().catch((error) => {
+    console.warn("Could not interrupt idle chat recommendations:", error);
+  });
+}
+
+function pollIdleChatRecommendations(): void {
+  if (!canPrecomputeChatRecommendations()) {
+    interruptIdleChatRecommendations();
+    return;
+  }
+  void chatRecommendationService?.precomputeIfIdle();
 }
 
 function createMainWindow(): BrowserWindow {
@@ -445,6 +480,34 @@ function registerIpc(): void {
     pickFile("选择视觉投影模型（mmproj）", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
   );
   ipcMain.handle("dialog:pick-chat-images", () => pickChatImages());
+  ipcMain.handle("chat-history:list", () => {
+    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
+    return chatHistoryStore.listConversations();
+  });
+  ipcMain.handle("chat-history:create", () => {
+    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
+    return chatHistoryStore.createConversation();
+  });
+  ipcMain.handle("chat-history:load", (_event, conversationId: string) => {
+    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
+    return chatHistoryStore.loadMessages(conversationId);
+  });
+  ipcMain.handle(
+    "chat-history:save",
+    (_event, conversationId: string, messages: ChatMessage[]) => {
+      if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
+      return chatHistoryStore.saveMessages(conversationId, messages);
+    },
+  );
+  ipcMain.handle("chat-history:delete", (_event, conversationId: string) => {
+    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
+    chatHistoryStore.deleteConversation(conversationId);
+  });
+  // This IPC path is deliberately cache-only. Opening an empty conversation
+  // must never start model inference or make the composer wait for it.
+  ipcMain.handle("chat-history:recommendations", () =>
+    chatRecommendationService?.getCachedRecommendations() ?? []);
+  ipcMain.on("chat-recommendation:user-activity", interruptIdleChatRecommendations);
   ipcMain.handle("window:set-mode", (_event, mode: WindowMode) => setWindowMode(mode));
   ipcMain.handle("window:hide", () => mainWindow?.hide());
   ipcMain.handle("app:open-external", async (_event, url: string) => {
@@ -590,6 +653,13 @@ async function initialize(): Promise<void> {
   }
   configStore = new ConfigStore();
   config = await configStore.read();
+  try {
+    await fs.mkdir(app.getPath("userData"), { recursive: true });
+    chatHistoryStore = new ChatHistoryStore(join(app.getPath("userData"), "chat-history.sqlite"));
+  } catch (error) {
+    chatHistoryStore = null;
+    console.warn("Could not initialize the local chat database:", error);
+  }
   const modelDownloader = new ManagedModelDownloader(
     modelDirectory,
     (input, init) => net.fetch(input, init),
@@ -597,6 +667,22 @@ async function initialize(): Promise<void> {
   runtime = new LlamaRuntime(config, (modelId, options) =>
     modelDownloader.resolve(modelId, options),
   );
+  if (chatHistoryStore) {
+    chatRecommendationService = new ChatRecommendationService({
+      store: chatHistoryStore,
+      runtime,
+      canPrecompute: canPrecomputeChatRecommendations,
+      onError: (error) => {
+        if (!(error instanceof Error && error.name === "AbortError")) {
+          console.warn("Could not precompute chat recommendations:", error);
+        }
+      },
+    });
+    recommendationIdleTimer = setInterval(
+      pollIdleChatRecommendations,
+      RECOMMENDATION_POLL_INTERVAL_MS,
+    );
+  }
   speech = new SpeechRuntime(
     config.speech,
     new SpeechModelManager(
@@ -616,6 +702,7 @@ async function initialize(): Promise<void> {
 
   registerIpc();
   mainWindow = createMainWindow();
+  mainWindow.on("focus", interruptIdleChatRecommendations);
   mainWindow.on("blur", () => {
     speechComposerFocused = false;
   });
@@ -652,9 +739,14 @@ app.on("before-quit", () => {
   globalShortcut.unregisterAll();
   if (shortcutHookStarted) shortcutHook?.stop();
   shortcutHookStarted = false;
+  if (recommendationIdleTimer) clearInterval(recommendationIdleTimer);
+  recommendationIdleTimer = null;
+  chatRecommendationService = null;
   tray?.destroy();
   void runtime?.stop();
   void speech?.dispose();
+  chatHistoryStore?.close();
+  chatHistoryStore = null;
 });
 app.on("window-all-closed", () => {
   // The tray keeps the pet alive until the user explicitly quits.

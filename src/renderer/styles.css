@@ -170,6 +170,26 @@ p {
   border: 1px solid rgba(213, 111, 78, 0.14);
 }
 
+.button--danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: white;
+  background: var(--red);
+  box-shadow: 0 4px 12px rgba(172, 67, 67, 0.22);
+}
+
+.button--danger:hover:not(:disabled) {
+  background: #b94c4f;
+  box-shadow: 0 6px 16px rgba(172, 67, 67, 0.27);
+}
+
+.button--danger svg {
+  width: 15px;
+  height: 15px;
+}
+
 .button--quiet {
   color: #6e5b55;
   background: rgba(103, 76, 67, 0.07);
@@ -795,6 +815,210 @@ select {
 }
 
 /* Chat */
+
+.history-drawer {
+  position: absolute;
+  z-index: 15;
+  top: 72px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 18px;
+  background: rgba(255, 250, 239, 0.98);
+  backdrop-filter: blur(12px);
+}
+
+.history-drawer__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 2px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.history-drawer__header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.history-drawer__header b {
+  font-size: 14px;
+}
+
+.history-drawer__header small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.history-drawer__error {
+  flex: 0 0 auto;
+  margin: 10px 2px 0;
+  padding: 8px 10px;
+  color: #8e3438;
+  font-size: 10px;
+  background: #fff0eb;
+  border: 1px solid rgba(142, 52, 56, 0.35);
+  border-radius: 6px;
+}
+
+.history-drawer__list {
+  display: flex;
+  min-height: 0;
+  padding: 12px 2px 4px;
+  overflow-y: auto;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-item {
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+
+.history-item--active {
+  background: var(--peach-soft);
+  border-color: rgba(216, 112, 78, 0.28);
+}
+
+.history-item__select {
+  display: flex;
+  min-width: 0;
+  padding: 10px 11px;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  color: #57433d;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.history-item__select b {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item__select small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.history-item__delete {
+  display: grid;
+  width: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  color: #94736a;
+  background: transparent;
+  cursor: pointer;
+}
+
+.history-item__delete:hover:not(:disabled) {
+  color: #b64f3c;
+  background: rgba(185, 79, 60, 0.08);
+}
+
+.history-item button:disabled,
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.history-drawer--busy .history-item button:disabled,
+.history-drawer--dialog-open .history-item button:disabled {
+  opacity: 1;
+}
+
+.history-toggle[aria-expanded="true"]:disabled,
+.history-toggle--busy:disabled {
+  opacity: 1;
+}
+
+.confirm-dialog-backdrop {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  padding: 20px;
+  place-items: center;
+  background: rgba(63, 43, 37, 0.42);
+  -webkit-app-region: no-drag;
+  animation: confirm-backdrop-arrive 120ms steps(2, end);
+}
+
+.confirm-dialog {
+  width: min(330px, 100%);
+  padding: 20px;
+  color: var(--ink);
+  background: var(--paper-solid);
+  border: 2px solid rgba(85, 57, 49, 0.22);
+  border-radius: 15px;
+  box-shadow: 0 14px 36px rgba(57, 36, 30, 0.25);
+  animation: confirm-dialog-arrive 180ms var(--ease-soft-spring);
+}
+
+.confirm-dialog__heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.confirm-dialog__icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: var(--red);
+  background: #ffe1d8;
+  border: 1px solid rgba(159, 65, 61, 0.2);
+  border-radius: 11px;
+}
+
+.confirm-dialog__heading h2 {
+  margin: 1px 0 6px;
+  font-size: 16px;
+}
+
+.confirm-dialog__heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.confirm-dialog__error {
+  padding: 8px 10px;
+  margin: 14px 0 0;
+  color: #963e42;
+  background: #fff0ec;
+  border: 1px solid rgba(150, 62, 66, 0.22);
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.confirm-dialog__actions .button {
+  min-width: 104px;
+}
 
 .chat-log {
   flex: 1;
@@ -1948,6 +2172,16 @@ select {
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+@keyframes confirm-backdrop-arrive {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes confirm-dialog-arrive {
+  from { opacity: 0; transform: translateY(4px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 @keyframes loading-glow {
   0%, 100% { opacity: 0.42; }
   50% { opacity: 0.92; }
@@ -1959,6 +2193,8 @@ select {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .confirm-dialog-backdrop,
+  .confirm-dialog,
   .loading-pet__glow,
   .loading-paws i {
     animation: none;

@@ -128,6 +128,14 @@ export interface ChatMessage {
   createdAt: number;
 }
 
+export interface ChatConversation {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+}
+
 export type ChatImageMimeType = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
 
 export interface ChatImage {
@@ -180,6 +188,13 @@ export interface DesktopPetApi {
   pickModel(): Promise<FilePickResult | null>;
   pickMmproj(): Promise<FilePickResult | null>;
   pickChatImages(): Promise<ChatImage[]>;
+  listChatConversations(): Promise<ChatConversation[]>;
+  createChatConversation(): Promise<ChatConversation>;
+  loadChatConversation(conversationId: string): Promise<ChatMessage[]>;
+  saveChatMessages(conversationId: string, messages: ChatMessage[]): Promise<ChatConversation>;
+  deleteChatConversation(conversationId: string): Promise<void>;
+  getChatRecommendations(): Promise<string[]>;
+  notifyChatUserActivity(): void;
   setWindowMode(mode: WindowMode): Promise<void>;
   hideWindow(): Promise<void>;
   openExternal(url: string): Promise<void>;
