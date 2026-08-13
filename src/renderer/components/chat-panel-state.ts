@@ -12,6 +12,17 @@ export function shouldResetComposer(
   return operationStartRevision === currentRevision;
 }
 
+export function shouldResetComposerAfterInitialization(
+  composerWasEmpty: boolean,
+  initializationStartRevision: number,
+  currentRevision: number,
+): boolean {
+  return (
+    composerWasEmpty &&
+    shouldResetComposer(initializationStartRevision, currentRevision)
+  );
+}
+
 export type ConversationOperationKind = "create" | "switch" | "delete";
 export type ConversationOperationPhase = "start" | "commit";
 

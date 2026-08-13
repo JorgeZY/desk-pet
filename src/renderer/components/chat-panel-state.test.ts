@@ -3,6 +3,7 @@ import {
   conversationOperationUiPolicy,
   isCurrentConversationOperation,
   shouldResetComposer,
+  shouldResetComposerAfterInitialization,
 } from "./chat-panel-state";
 
 describe("chat panel conversation operation guards", () => {
@@ -14,6 +15,12 @@ describe("chat panel conversation operation guards", () => {
   it("only resets a composer that the user has not changed while waiting", () => {
     expect(shouldResetComposer(4, 4)).toBe(true);
     expect(shouldResetComposer(4, 5)).toBe(false);
+  });
+
+  it("preserves a composer that already contained a draft during initialization", () => {
+    expect(shouldResetComposerAfterInitialization(false, 4, 4)).toBe(false);
+    expect(shouldResetComposerAfterInitialization(true, 4, 4)).toBe(true);
+    expect(shouldResetComposerAfterInitialization(true, 4, 5)).toBe(false);
   });
 
   it("keeps the history drawer open after deleting a conversation", () => {

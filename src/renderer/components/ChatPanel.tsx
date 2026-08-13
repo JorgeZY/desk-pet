@@ -19,6 +19,7 @@ import {
   type ConversationOperationKind,
   isCurrentConversationOperation,
   shouldResetComposer,
+  shouldResetComposerAfterInitialization,
 } from "./chat-panel-state";
 
 interface ChatPanelProps {
@@ -290,6 +291,8 @@ export function ChatPanel({
   useEffect(() => {
     let cancelled = false;
     const initializationComposerRevision = composerRevisionRef.current;
+    const initializationComposerWasEmpty =
+      observedDraftRef.current.length === 0 && observedImagesRef.current.length === 0;
     initializationRef.current ??= (async () => {
       try {
         let nextConversations = await window.desktopPet.listChatConversations();
@@ -321,7 +324,11 @@ export function ChatPanel({
       loadIntoState(
         result.conversationId,
         result.messages,
-        shouldResetComposer(initializationComposerRevision, composerRevisionRef.current),
+        shouldResetComposerAfterInitialization(
+          initializationComposerWasEmpty,
+          initializationComposerRevision,
+          composerRevisionRef.current,
+        ),
       );
       if (result.mode === "database") {
         clearLegacyChatHistory();
