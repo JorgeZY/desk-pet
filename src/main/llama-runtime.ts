@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { existsSync, promises as fs } from "node:fs";
+import { constants as osConstants, getPriority, setPriority } from "node:os";
 import { basename, dirname, isAbsolute, win32 } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
@@ -17,6 +18,7 @@ import { SseDecoder } from "./sse";
 const MODEL_ALIAS = "desk-pet-model";
 const MAX_CHAT_REQUEST_IMAGES = 4;
 const MAX_CHAT_REQUEST_IMAGE_BYTES = 10 * 1024 * 1024;
+const IDLE_RECOMMENDATION_INTERRUPTED = "IDLE_RECOMMENDATION_INTERRUPTED";
 const SUPPORTED_IMAGE_MIME_TYPES = new Set<ChatImageMimeType>([
   "image/jpeg",
   "image/png",
@@ -195,6 +197,41 @@ const initialState = (config: RuntimeConfig): RuntimeState => ({
   updatedAt: Date.now(),
 });
 
+export function parseChatRecommendations(value: string): string[] {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed) || parsed.length !== 3) {
+    throw new Error("推荐结果必须包含三项。");
+  }
+  const recommendations = parsed.map((item) => {
+    if (typeof item !== "string") throw new Error("推荐内容必须是字符串。");
+    const recommendation = item.trim();
+    if (!recommendation || recommendation.length > 80) {
+      throw new Error("推荐内容长度无效。");
+    }
+    return recommendation;
+  });
+  if (new Set(recommendations).size !== recommendations.length) {
+    throw new Error("推荐内容不能重复。");
+  }
+  return recommendations;
+}
+
+export function reportsFullGpuOffload(log: string): boolean {
+  for (const match of log.matchAll(/offloaded\s+(\d+)\s*\/\s*(\d+)\s+layers?\s+to\s+GPUs?/gi)) {
+    const offloadedLayers = Number(match[1]);
+    const totalLayers = Number(match[2]);
+    if (totalLayers > 0 && offloadedLayers >= totalLayers) return true;
+  }
+  return false;
+}
+
+export function shouldLowerIdleRecommendationPriority(
+  fullyGpuOffloaded: boolean,
+  platform = process.platform,
+): boolean {
+  return platform === "win32" && !fullyGpuOffloaded;
+}
+
 export class LlamaRuntime extends EventEmitter {
   private config: RuntimeConfig;
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -202,6 +239,9 @@ export class LlamaRuntime extends EventEmitter {
   private generation = 0;
   private downloadController: AbortController | null = null;
   private readonly abortControllers = new Map<string, AbortController>();
+  private recommendationController: AbortController | null = null;
+  private recommendationInterruption: Promise<void> | null = null;
+  private fullyGpuOffloaded = false;
 
   constructor(
     config: RuntimeConfig,
@@ -231,9 +271,20 @@ export class LlamaRuntime extends EventEmitter {
     return `http://${this.config.host}:${this.config.port}`;
   }
 
+  get hasActiveChat(): boolean {
+    return this.abortControllers.size > 0;
+  }
+
+  get canRunIdleRecommendations(): boolean {
+    return this.state.phase === "ready" && this.child !== null;
+  }
+
   async start(allowDownload = true): Promise<RuntimeState> {
     if (this.state.phase === "ready" || this.state.phase === "starting" || this.state.phase === "downloading") {
       return this.snapshot;
+    }
+    if (this.state.phase === "error" && this.child) {
+      return this.fail("本地模型进程未能退出。请退出桌宠后重试，以免连接到仍被占用的旧进程。");
     }
 
     if (
@@ -267,7 +318,7 @@ export class LlamaRuntime extends EventEmitter {
     if (launchConfig.modelMode === "huggingface" && this.resolveManagedModel) {
       this.downloadController = new AbortController();
       this.setState({
-        phase: allowDownload ? "downloading" : "stopped",
+        phase: allowDownload ? "downloading" : "starting",
         visionEnabled: false,
         endpoint: this.endpoint,
         message: allowDownload ? "正在连接模型镜像" : "正在检查本地模型缓存",
@@ -294,6 +345,8 @@ export class LlamaRuntime extends EventEmitter {
     this.generation += 1;
     this.downloadController?.abort();
     this.downloadController = null;
+    this.recommendationController?.abort();
+    this.recommendationController = null;
     for (const controller of this.abortControllers.values()) controller.abort();
     this.abortControllers.clear();
 
@@ -338,14 +391,164 @@ export class LlamaRuntime extends EventEmitter {
     this.abortControllers.get(requestId)?.abort();
   }
 
-  async streamChat(request: ChatRequest, emit: (event: ChatEvent) => void): Promise<void> {
-    if (this.state.phase !== "ready") throw new Error("本地模型尚未就绪。");
+  interruptIdleRecommendation(reason: "user-activity" | "timeout" = "user-activity"): Promise<void> {
+    if (this.recommendationInterruption) return this.recommendationInterruption;
+    const controller = this.recommendationController;
+    const child = this.child;
+    if (!controller || !child) return Promise.resolve();
 
+    // Aborting fetch alone is insufficient on affected llama.cpp builds. The
+    // model process is owned by this app, so terminate it to guarantee its
+    // single inference slot is released, then start it again from local cache.
+    controller.abort(new DOMException(
+      reason === "user-activity" ? IDLE_RECOMMENDATION_INTERRUPTED : "IDLE_RECOMMENDATION_TIMEOUT",
+      "AbortError",
+    ));
+    const interruptionGeneration = ++this.generation;
+    this.setState({
+      ...this.state,
+      phase: "stopping",
+      visionEnabled: false,
+      message: "正在让聊天接管本地模型",
+      updatedAt: Date.now(),
+    });
+
+    let interruption!: Promise<void>;
+    interruption = new Promise<void>((resolve, reject) => {
+      if (child.exitCode !== null) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        reject(new Error("空闲推荐进程未能及时退出，请重新启动本地模型。"));
+      }, 5_000);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      if (!child.kill()) {
+        clearTimeout(timer);
+        reject(new Error("无法停止空闲推荐进程，请重新启动本地模型。"));
+      }
+    })
+      .then(async () => {
+        if (this.generation !== interruptionGeneration) return;
+        if (this.child === child) this.child = null;
+        this.setState(initialState(this.config));
+        await this.start(false);
+      })
+      .catch((error) => {
+        if (this.generation === interruptionGeneration) {
+          this.fail(error instanceof Error ? error.message : String(error));
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (this.recommendationInterruption === interruption) {
+          this.recommendationInterruption = null;
+        }
+      });
+    this.recommendationInterruption = interruption;
+    return interruption;
+  }
+
+  async generateChatRecommendations(transcript: string): Promise<string[]> {
+    if (this.state.phase !== "ready" || !transcript.trim()) return [];
+
+    const controller = new AbortController();
+    this.recommendationController = controller;
+    const timeout = setTimeout(() => {
+      void this.interruptIdleRecommendation("timeout").catch(() => undefined);
+    }, 20_000);
+    // Once llama.cpp confirms every layer is on the GPU, normal process
+    // priority avoids throttling tokenization and GPU submission. Partial,
+    // unavailable, or CPU-only offload stays unobtrusive in the background.
+    const restorePriority = shouldLowerIdleRecommendationPriority(this.fullyGpuOffloaded)
+      ? this.lowerOwnedServerPriority()
+      : () => undefined;
+    try {
+      const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: MODEL_ALIAS,
+          messages: [
+            {
+              role: "system",
+              content:
+                "你只负责根据用户的本地聊天历史生成三个新的中文开场建议。建议应简短、自然、互不重复，能够延续用户近期关注的话题，但不要复述隐私细节。只输出严格的 JSON 字符串数组，不要 Markdown、解释或其他文字。",
+            },
+            {
+              role: "user",
+              content: `根据以下历史生成三个适合用户接下来发起的对话：\n\n${transcript}`,
+            },
+          ],
+          // Do not cancel this idle request on UI interaction: some llama.cpp
+          // builds keep computing after a client disconnects. The scheduler
+          // instead prevents overlap and caps the response length.
+          stream: true,
+          max_tokens: 72,
+          temperature: 0.7,
+          top_k: this.config.topK,
+          top_p: this.config.topP,
+          min_p: this.config.minP,
+          repeat_penalty: this.config.repeatPenalty,
+          chat_template_kwargs: { enable_thinking: false },
+        }),
+      });
+      if (!response.ok) throw new Error(`llama.cpp 返回 ${response.status}`);
+      if (!response.body) throw new Error("llama.cpp 没有返回可读取的推荐流。");
+      const reader = response.body.getReader();
+      const textDecoder = new TextDecoder();
+      const sse = new SseDecoder();
+      let content = "";
+      const consume = (data: string): boolean => {
+        if (data === "[DONE]") return true;
+        const payload = JSON.parse(data) as {
+          choices?: Array<{ delta?: { content?: string } }>;
+        };
+        content += payload.choices?.[0]?.delta?.content ?? "";
+        return false;
+      };
+
+      let done = false;
+      while (!done) {
+        const part = await reader.read();
+        if (part.done) break;
+        for (const event of sse.push(textDecoder.decode(part.value, { stream: true }))) {
+          done = consume(event.data);
+          if (done) break;
+        }
+      }
+      for (const event of sse.finish()) {
+        if (!done) done = consume(event.data);
+      }
+      if (!content) throw new Error("模型没有返回推荐内容。");
+      return parseChatRecommendations(content);
+    } finally {
+      clearTimeout(timeout);
+      restorePriority();
+      if (this.recommendationController === controller) {
+        this.recommendationController = null;
+      }
+    }
+  }
+
+  async streamChat(request: ChatRequest, emit: (event: ChatEvent) => void): Promise<void> {
     const controller = new AbortController();
     this.abortControllers.set(request.requestId, controller);
     emit({ requestId: request.requestId, type: "start" });
 
     try {
+      await this.interruptIdleRecommendation();
+      await this.waitForInteractiveReady(controller.signal);
+      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      if (this.state.phase !== "ready") throw new Error("本地模型尚未就绪。");
       const messages = await buildChatCompletionMessages(this.config, request.messages, {
         visionEnabled: this.state.visionEnabled,
         onWarning: (message) => emit({ requestId: request.requestId, type: "warning", message }),
@@ -546,8 +749,41 @@ export class LlamaRuntime extends EventEmitter {
     });
   }
 
+  private async waitForInteractiveReady(signal: AbortSignal): Promise<void> {
+    const timeoutAt = Date.now() + 5 * 60 * 1000;
+    while (
+      !signal.aborted &&
+      Date.now() < timeoutAt &&
+      (this.state.phase === "starting" ||
+        this.state.phase === "downloading" ||
+        this.state.phase === "stopping" ||
+        (this.state.phase === "stopped" && this.downloadController !== null))
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  private lowerOwnedServerPriority(): () => void {
+    const pid = this.child?.pid;
+    if (!pid) return () => undefined;
+    try {
+      const previousPriority = getPriority(pid);
+      setPriority(pid, osConstants.priority.PRIORITY_BELOW_NORMAL);
+      return () => {
+        try {
+          setPriority(pid, previousPriority);
+        } catch {
+          // The owned server may have exited while the idle request was running.
+        }
+      };
+    } catch {
+      return () => undefined;
+    }
+  }
+
   private launch(config: RuntimeConfig, generation: number): void {
     const { command, args } = buildLlamaCommand(config);
+    this.fullyGpuOffloaded = false;
     this.setState({
       phase: "starting",
       visionEnabled: false,
@@ -568,8 +804,11 @@ export class LlamaRuntime extends EventEmitter {
         stdio: "pipe",
       });
       this.child = child;
+      let offloadLogWindow = "";
 
       const handleLog = (buffer: Buffer): void => {
+        offloadLogWindow = `${offloadLogWindow}${buffer.toString("utf8")}`.slice(-1000);
+        if (reportsFullGpuOffload(offloadLogWindow)) this.fullyGpuOffloaded = true;
         const lines = buffer
           .toString("utf8")
           .split(/\r?\n/)

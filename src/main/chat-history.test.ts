@@ -19,6 +19,10 @@ class MemoryStorage implements ChatHistoryStorage {
   setItem(key: string, value: string): void {
     this.values.set(key, value);
   }
+
+  removeItem(key: string): void {
+    this.values.delete(key);
+  }
 }
 
 function message(index: number, role: ChatMessage["role"] = "user"): ChatMessage {

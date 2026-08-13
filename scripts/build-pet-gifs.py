@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageChops, ImageEnhance
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +31,10 @@ SOURCE_PATHS = {
 }
 
 ACTION_SHEET_PATHS = {
+    "thinking": SOURCE / "pet-soft-pixel-thinking-sheet-v1.png",
+    "talking": SOURCE / "pet-soft-pixel-talking-sheet-v1.png",
+    "sleeping": SOURCE / "pet-soft-pixel-sleeping-sheet-v1.png",
+    "listening": SOURCE / "pet-soft-pixel-listening-sheet-v1.png",
     "yawning": SOURCE / "pet-soft-pixel-yawn-sheet-v1.png",
     "ear_scratching": SOURCE / "pet-soft-pixel-ear-scratch-sheet-v1.png",
 }
@@ -188,6 +192,53 @@ def register_action_frames(
     return registered
 
 
+def normalize_upright_action_frames(
+    frames: Sequence[Image.Image],
+    target_frame: Image.Image,
+) -> list[Image.Image]:
+    """Match upright generated poses to the resting pet's height and paw anchor."""
+    target_bbox = target_frame.getchannel("A").getbbox()
+    if target_bbox is None:
+        raise ValueError("Target pet frame has no visible pixels")
+    target_height = target_bbox[3] - target_bbox[1]
+    target_x, target_y = lower_body_anchor(target_frame)
+    normalized: list[Image.Image] = []
+
+    for frame in frames:
+        bbox = frame.getchannel("A").getbbox()
+        if bbox is None:
+            raise ValueError("Cannot normalize a blank action frame")
+        left, top, right, bottom = bbox
+        scale = target_height / (bottom - top)
+        crop = frame.crop(bbox)
+        resized = crop.resize(
+            (max(1, round(crop.width * scale)), target_height),
+            Image.Resampling.LANCZOS,
+        )
+        anchor_x, anchor_y = lower_body_anchor(frame)
+        anchor_offset_x = (anchor_x - left) * scale
+        anchor_offset_y = (anchor_y - top) * scale
+        canvas = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
+        alpha_composite_at(
+            canvas,
+            resized,
+            round(target_x - anchor_offset_x),
+            round(target_y - anchor_offset_y),
+        )
+        normalized_bbox = canvas.getchannel("A").getbbox()
+        normalized_x, normalized_y = lower_body_anchor(canvas)
+        if (
+            normalized_bbox is None
+            or abs((normalized_bbox[3] - normalized_bbox[1]) - target_height) > 1
+            or abs(normalized_x - target_x) > 2
+            or abs(normalized_y - target_y) > 2
+        ):
+            raise ValueError("Upright action frame drifted away from the resting body anchor")
+        normalized.append(canvas)
+
+    return normalized
+
+
 def transform_pose(
     image: Image.Image,
     *,
@@ -305,10 +356,108 @@ def save_gif(
     print(f"Wrote {output.relative_to(ROOT)} ({output.stat().st_size / 1024:.1f} KiB)")
 
 
+def require_matching_loop_endpoints(name: str, frames: Sequence[Image.Image]) -> None:
+    """Prevent a looping action from jumping when it wraps or returns to idle."""
+    if len(frames) < 2 or ImageChops.difference(frames[0], frames[-1]).getbbox() is not None:
+        raise ValueError(f"{name} must start and end on the exact same resting frame")
+
+
+def load_gif_frames(path: Path) -> list[Image.Image]:
+    """Decode the shipped GIF so validation covers palette conversion as well."""
+    image = Image.open(path)
+    frames: list[Image.Image] = []
+    for index in range(image.n_frames):
+        image.seek(index)
+        frames.append(image.convert("RGBA").copy())
+    return frames
+
+
+def validate_upright_loop_output(name: str) -> None:
+    """Guard the action-neutral seam, pose symmetry, scale, and baseline."""
+    idle_frame = load_gif_frames(OUTPUT / "pet-idle-v1.gif")[0]
+    frames = load_gif_frames(OUTPUT / f"pet-{name}-v1.gif")
+    if len(frames) < 3 or len(frames) % 2 == 0:
+        raise ValueError(f"{name} must contain an odd neutral-to-action loop")
+    if ImageChops.difference(frames[0], frames[-1]).getbbox() is not None:
+        raise ValueError(f"{name} decoded endpoints must use one action-neutral frame")
+    mirrored_pose_index = len(frames) - 2
+    if ImageChops.difference(frames[1], frames[mirrored_pose_index]).getbbox() is not None:
+        raise ValueError(f"{name} decoded poses must return symmetrically to rest")
+
+    idle_alpha = idle_frame.getchannel("A")
+    idle_bbox = idle_alpha.getbbox()
+    if idle_bbox is None:
+        raise ValueError("Decoded idle frame has no visible pixels")
+    idle_area = sum(
+        value >= ALPHA_THRESHOLD for value in idle_alpha.get_flattened_data()
+    )
+    idle_bottom = idle_bbox[3]
+    neutral_bbox = frames[0].getchannel("A").getbbox()
+    if neutral_bbox is None:
+        raise ValueError(f"{name} decoded neutral frame has no visible pixels")
+    neutral_width_ratio = (
+        (neutral_bbox[2] - neutral_bbox[0]) / (idle_bbox[2] - idle_bbox[0])
+    )
+    neutral_height_ratio = (
+        (neutral_bbox[3] - neutral_bbox[1]) / (idle_bbox[3] - idle_bbox[1])
+    )
+    neutral_anchor_x, neutral_anchor_y = lower_body_anchor(frames[0])
+    idle_anchor_x, idle_anchor_y = lower_body_anchor(idle_frame)
+    if not 0.96 <= neutral_width_ratio <= 1.05:
+        raise ValueError(f"{name} action-neutral width does not match idle")
+    if not 0.975 <= neutral_height_ratio <= 1.025:
+        raise ValueError(f"{name} action-neutral height does not match idle")
+    if (
+        abs(neutral_anchor_x - idle_anchor_x) > 2
+        or abs(neutral_anchor_y - idle_anchor_y) > 2
+    ):
+        raise ValueError(f"{name} action-neutral lower body is not aligned with idle")
+    action_heights: list[int] = []
+    for frame in frames:
+        alpha = frame.getchannel("A")
+        bbox = alpha.getbbox()
+        if bbox is None:
+            raise ValueError(f"{name} contains a blank decoded frame")
+        area = sum(
+            value >= ALPHA_THRESHOLD for value in alpha.get_flattened_data()
+        )
+        area_ratio = area / idle_area
+        if not 0.88 <= area_ratio <= 1.10:
+            raise ValueError(
+                f"{name} decoded visual volume drifted to {area_ratio:.3f} of idle"
+            )
+        if abs(bbox[3] - idle_bottom) > 2:
+            raise ValueError(f"{name} decoded baseline drifted away from idle")
+        action_heights.append(bbox[3] - bbox[1])
+
+    if (
+        name == "listening"
+        and ImageChops.difference(frames[0], frames[2]).getbbox() is not None
+    ):
+        raise ValueError("listening must return to its upright neutral pose on frame three")
+
+    action_heights = action_heights[1:-1]
+    if max(action_heights) - min(action_heights) > 6:
+        raise ValueError(f"{name} decoded action height changes too much during its loop")
+
+
 def main() -> None:
     keyframes = load_keyframes()
     base = keyframes["base"]
     happy = keyframes["happy"]
+    thinking_keyframes = normalize_upright_action_frames(
+        load_action_frames(ACTION_SHEET_PATHS["thinking"], base),
+        base,
+    )
+    talking_keyframes = normalize_upright_action_frames(
+        load_action_frames(ACTION_SHEET_PATHS["talking"], base),
+        base,
+    )
+    sleeping_keyframes = load_action_frames(ACTION_SHEET_PATHS["sleeping"], base)
+    listening_keyframes = normalize_upright_action_frames(
+        load_action_frames(ACTION_SHEET_PATHS["listening"], base),
+        base,
+    )
     yawning_keyframes = load_action_frames(
         ACTION_SHEET_PATHS["yawning"],
         base,
@@ -323,18 +472,51 @@ def main() -> None:
     idle_durations = [235] * len(idle)
     idle_durations[15] = IDLE_BLINK_DURATION_MS
 
-    thinking = breathe_frames(base, 16, lift=2.0, stretch=0.002, sway=0.32, horizontal=1.0)
+    thinking = [
+        thinking_keyframes[3],
+        thinking_keyframes[1],
+        thinking_keyframes[2],
+        thinking_keyframes[1],
+        thinking_keyframes[3],
+    ]
+    thinking_durations = [200, 650, 3_100, 650, 200]
 
-    talking = breathe_frames(base, 10, lift=3.2, stretch=0.002, sway=0.14)
-    talking[4] = transform_pose(happy, dy=-2)
+    talking = [
+        talking_keyframes[0],
+        talking_keyframes[1],
+        talking_keyframes[2],
+        talking_keyframes[1],
+        talking_keyframes[2],
+        talking_keyframes[1],
+        talking_keyframes[3],
+    ]
+    talking_durations = [180, 170, 240, 140, 220, 160, 220]
 
-    sleeping = breathe_frames(happy, 18, lift=1.0, stretch=0.0038, sway=0.04)
+    sleeping = [
+        sleeping_keyframes[0],
+        sleeping_keyframes[1],
+        sleeping_keyframes[2],
+        sleeping_keyframes[3],
+        sleeping_keyframes[2],
+        sleeping_keyframes[3],
+        sleeping_keyframes[1],
+    ]
+    sleeping_durations = [300, 450, 1100, 750, 900, 750, 450]
 
     sad_source = tint_sad(base)
     sad = breathe_frames(sad_source, 18, lift=0.7, stretch=0.0014, sway=0.05)
     sad = [transform_pose(frame, dy=2) for frame in sad]
 
-    listening = breathe_frames(base, 12, lift=3.0, stretch=0.0018, sway=0.12)
+    listening = [
+        listening_keyframes[3],
+        listening_keyframes[1],
+        listening_keyframes[3],
+        listening_keyframes[1],
+        listening_keyframes[3],
+    ]
+    listening_durations = [250, 900, 1_650, 900, 700]
+    require_matching_loop_endpoints("thinking", thinking)
+    require_matching_loop_endpoints("listening", listening)
 
     transcribing = breathe_frames(base, 16, lift=1.2, stretch=0.0015, sway=0.04)
 
@@ -381,11 +563,11 @@ def main() -> None:
     # rewrite every existing mood GIF.
     palette = build_palette(keyframes.values())
     save_gif("idle", idle, idle_durations, palette)
-    save_gif("thinking", thinking, 150, palette)
-    save_gif("talking", talking, 110, palette)
-    save_gif("sleeping", sleeping, 200, palette)
+    save_gif("thinking", thinking, thinking_durations, palette)
+    save_gif("talking", talking, talking_durations, palette)
+    save_gif("sleeping", sleeping, sleeping_durations, palette)
     save_gif("sad", sad, 190, palette)
-    save_gif("listening", listening, 130, palette)
+    save_gif("listening", listening, listening_durations, palette)
     save_gif("transcribing", transcribing, 150, palette)
     save_gif("grooming", grooming, grooming_durations, palette, loop=False)
     save_gif("yawning", yawning, yawning_durations, palette, loop=False)
@@ -396,6 +578,8 @@ def main() -> None:
         palette,
         loop=False,
     )
+    validate_upright_loop_output("thinking")
+    validate_upright_loop_output("listening")
 
 
 if __name__ == "__main__":

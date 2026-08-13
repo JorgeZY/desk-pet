@@ -7,6 +7,7 @@ export const CHAT_HISTORY_LIMIT = 40;
 export interface ChatHistoryStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem(key: string): void;
 }
 
 function withoutImagePreviews(messages: ChatMessage[]): ChatMessage[] {
@@ -60,4 +61,9 @@ export function updateChatMessage(
     history.map((message) => (message.id === messageId ? update(message) : message)),
     storage,
   );
+}
+
+export function clearLegacyChatHistory(storage: ChatHistoryStorage = localStorage): void {
+  storage.removeItem(CHAT_HISTORY_KEY);
+  storage.removeItem(LEGACY_CHAT_HISTORY_KEY);
 }

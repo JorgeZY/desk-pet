@@ -1,19 +1,30 @@
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   PET_CLIPS,
+  PET_CHEERING_DURATION_MS,
+  PET_DAYDREAMING_DURATION_MS,
+  PET_DOZING_DURATION_MS,
   PET_EAR_SCRATCHING_DURATION_MS,
   PET_GROOMING_DURATION_MS,
   PET_IDLE_ACTIONS,
+  PET_PERKING_UP_DURATION_MS,
   PET_YAWNING_DURATION_MS,
   petClipPlaybackSrc,
   preloadLoopingPetClips,
 } from "./pet-clips";
 
 const clipPath = (src: string) => fileURLToPath(
-  new URL(`../public/${src.replace(/^\.\//, "")}`, import.meta.url),
+  new URL(`../public/${src.replace(/^\.\//, "").split("?")[0]}`, import.meta.url),
 );
+
+const actionSheetPath = (mood: "thinking" | "talking" | "sleeping" | "listening") =>
+  fileURLToPath(new URL(
+    `../../../assets/pet-source/pet-soft-pixel-${mood}-sheet-v1.png`,
+    import.meta.url,
+  ));
 
 function skipSubBlocks(data: Buffer, start: number) {
   let offset = start;
@@ -81,12 +92,14 @@ function readGifDurationMs(data: Buffer) {
 describe("pet GIF clips", () => {
   it("ships every clip as a bounded 432 x 540 GIF", () => {
     let totalBytes = 0;
+    const measuredSources = new Set<string>();
 
     for (const media of Object.values(PET_CLIPS)) {
       const path = clipPath(media.src);
       const stat = statSync(path);
       const header = readFileSync(path).subarray(0, 10);
-      totalBytes += stat.size;
+      if (!measuredSources.has(media.src)) totalBytes += stat.size;
+      measuredSources.add(media.src);
 
       expect(header.subarray(0, 6).toString("ascii")).toMatch(/^GIF8[79]a$/);
       expect(header.readUInt16LE(6)).toBe(432);
@@ -110,6 +123,64 @@ describe("pet GIF clips", () => {
     expect(data.includes(Buffer.from("NETSCAPE2.0", "ascii"))).toBe(false);
   });
 
+  it.each([
+    ["daydreaming", "thinking", PET_DAYDREAMING_DURATION_MS],
+    ["cheering", "talking", PET_CHEERING_DURATION_MS],
+    ["dozing", "sleeping", PET_DOZING_DURATION_MS],
+    ["perking-up", "listening", PET_PERKING_UP_DURATION_MS],
+  ] as const)("reuses mood artwork for idle action %s without another asset", (action, mood, durationMs) => {
+    expect(PET_CLIPS[action].src).toBe(PET_CLIPS[mood].src);
+    expect(PET_CLIPS[action].loop).toBe(false);
+    expect(PET_CLIPS[action].durationMs).toBe(durationMs);
+    const data = readFileSync(clipPath(PET_CLIPS[mood].src));
+    expect(durationMs % readGifDurationMs(data)).toBe(0);
+  });
+
+  it.each([
+    ["thinking", PET_DAYDREAMING_DURATION_MS],
+    ["talking", PET_CHEERING_DURATION_MS / 2],
+    ["sleeping", PET_DOZING_DURATION_MS],
+    ["listening", PET_PERKING_UP_DURATION_MS],
+  ] as const)("builds %s from a dedicated expressive animation", (mood, durationMs) => {
+    const durations = readGifFrameDurationsMs(readFileSync(clipPath(PET_CLIPS[mood].src)));
+    expect(durations.length).toBeGreaterThanOrEqual(3);
+    expect(durations.reduce((total, duration) => total + duration, 0)).toBe(durationMs);
+  });
+
+  it.each([
+    ["thinking", [200, 650, 3_100, 650, 200]],
+    ["listening", [250, 900, 1_650, 900, 700]],
+  ] as const)("holds a resting endpoint around the %s action", (mood, expectedDurations) => {
+    const data = readFileSync(clipPath(PET_CLIPS[mood].src));
+    const durations = readGifFrameDurationsMs(data);
+    expect(durations).toEqual(expectedDurations);
+  });
+
+  it.each([
+    ["thinking", "8a267ee4b6e6"],
+    ["listening", "3adb18e68ec3"],
+  ] as const)("binds the %s cache revision to its GIF content", (mood, revision) => {
+    const media = PET_CLIPS[mood];
+    const data = readFileSync(clipPath(media.src));
+    const digest = createHash("sha256").update(data).digest("hex");
+
+    expect(media.src).toContain(`?rev=${revision}`);
+    expect(digest.startsWith(revision)).toBe(true);
+  });
+
+  it("ships four distinct transparent source sheets for the expressive moods", () => {
+    const hashes = new Set<string>();
+    for (const mood of ["thinking", "talking", "sleeping", "listening"] as const) {
+      const data = readFileSync(actionSheetPath(mood));
+      expect(data.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      expect(data.readUInt32BE(16)).toBe(1254);
+      expect(data.readUInt32BE(20)).toBe(1254);
+      expect(data[25]).toBe(6);
+      hashes.add(createHash("sha256").update(data).digest("hex"));
+    }
+    expect(hashes.size).toBe(4);
+  });
+
   it("keeps every mood clip looping", () => {
     for (const [state, media] of Object.entries(PET_CLIPS)) {
       if (PET_IDLE_ACTIONS.includes(state as (typeof PET_IDLE_ACTIONS)[number])) continue;
@@ -125,7 +196,7 @@ describe("pet GIF clips", () => {
     expect(readGifFrameDurationsMs(idleData)[15]).toBe(160);
   });
 
-  it("never starts a one-shot idle action during preload", () => {
+  it("preloads only stable loop URLs and never an action playback URL", () => {
     const originalImage = globalThis.Image;
     const requestedSources: string[] = [];
 
@@ -147,9 +218,7 @@ describe("pet GIF clips", () => {
     try {
       preloadLoopingPetClips();
       expect(requestedSources).toHaveLength(7);
-      for (const action of PET_IDLE_ACTIONS) {
-        expect(requestedSources).not.toContain(PET_CLIPS[action].src);
-      }
+      expect(requestedSources.every((src) => !src.includes("?play="))).toBe(true);
     } finally {
       Object.defineProperty(globalThis, "Image", {
         configurable: true,
@@ -171,6 +240,9 @@ describe("pet GIF clips", () => {
     );
     expect(petClipPlaybackSrc("ear-scratching", "one")).toBe(
       `${PET_CLIPS["ear-scratching"].src}?play=one`,
+    );
+    expect(petClipPlaybackSrc("daydreaming", "one")).toBe(
+      `${PET_CLIPS.daydreaming.src}&play=one`,
     );
   });
 });

@@ -47,6 +47,7 @@ export function App() {
   };
 
   const transitionToView = async (nextView: WindowMode) => {
+    if (nextView === "chat") window.desktopPet.notifyChatUserActivity();
     if (viewTransitionRef.current || nextView === view) return;
     viewTransitionRef.current = true;
     const root = document.documentElement;
@@ -330,6 +331,7 @@ export function App() {
           : speech.phase === "transcribing"
             ? "transcribing"
             : mood}
+        clipMood={speech.phase === "recording" ? "idle" : undefined}
         windowDrag
         onClick={() => void transitionToView("chat")}
       />

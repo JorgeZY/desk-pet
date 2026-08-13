@@ -58,7 +58,7 @@ describe("Pet", () => {
     expect(markup).toContain("pet-ground-layer");
     expect(markup).toContain("pet-state-layer");
     expect(markup).toContain("pet-clip--listening");
-    expect(markup).toContain('src="./pet/moods/pet-listening-v1.gif"');
+    expect(markup).toContain(`src="${PET_CLIPS.listening.src}"`);
     expect(markup).toContain('viewBox="0 0 96 120"');
     expect(markup).toContain("pet-ground-response");
     expect(markup).toContain("thought-dots");
@@ -74,12 +74,25 @@ describe("Pet", () => {
     expect(markup).not.toContain("pet-soft-pixel-happy-v1.png");
   });
 
+  it("keeps listening effects while the pet body uses the idle clip", () => {
+    const markup = renderToStaticMarkup(
+      <Pet mood="listening" clipMood="idle" compact />,
+    );
+
+    expect(markup).toContain("mood-listening");
+    expect(markup).toContain("clip-idle");
+    expect(markup).toContain(`src="${PET_CLIPS.idle.src}"`);
+    expect(markup).not.toContain(`src="${PET_CLIPS.listening.src}"`);
+    expect(markup).toContain("voice-wave--outer");
+    expect(markup).toContain("pet-listen-bell");
+  });
+
   it.each(moods)("maps the %s mood to its dedicated GIF", (mood) => {
     const markup = renderToStaticMarkup(<Pet mood={mood} />);
 
     expect(markup).toContain(`mood-${mood}`);
     expect(markup).toContain(`clip-${mood}`);
-    expect(markup).toContain(`src="${PET_CLIPS[mood].src}"`);
+    expect(markup).toContain(`src="${PET_CLIPS[mood].src.replaceAll("&", "&amp;")}"`);
     expect(markup).toContain("橘猫团子");
   });
 
@@ -87,6 +100,10 @@ describe("Pet", () => {
     expect(resolvePetVisualState("idle", "grooming")).toBe("grooming");
     expect(resolvePetVisualState("idle", "yawning")).toBe("yawning");
     expect(resolvePetVisualState("idle", "ear-scratching")).toBe("ear-scratching");
+    expect(resolvePetVisualState("idle", "daydreaming")).toBe("daydreaming");
+    expect(resolvePetVisualState("idle", "cheering")).toBe("cheering");
+    expect(resolvePetVisualState("idle", "dozing")).toBe("dozing");
+    expect(resolvePetVisualState("idle", "perking-up")).toBe("perking-up");
     expect(resolvePetVisualState("thinking", "yawning")).toBe("thinking");
     expect(resolvePetVisualState("listening", "ear-scratching")).toBe("listening");
     expect(resolvePetVisualState("transcribing", "grooming")).toBe("transcribing");

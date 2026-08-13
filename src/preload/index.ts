@@ -27,6 +27,16 @@ const api: DesktopPetApi = {
   pickModel: () => ipcRenderer.invoke("dialog:pick-model"),
   pickMmproj: () => ipcRenderer.invoke("dialog:pick-mmproj"),
   pickChatImages: () => ipcRenderer.invoke("dialog:pick-chat-images"),
+  listChatConversations: () => ipcRenderer.invoke("chat-history:list"),
+  createChatConversation: () => ipcRenderer.invoke("chat-history:create"),
+  loadChatConversation: (conversationId: string) =>
+    ipcRenderer.invoke("chat-history:load", conversationId),
+  saveChatMessages: (conversationId: string, messages) =>
+    ipcRenderer.invoke("chat-history:save", conversationId, messages),
+  deleteChatConversation: (conversationId: string) =>
+    ipcRenderer.invoke("chat-history:delete", conversationId),
+  getChatRecommendations: () => ipcRenderer.invoke("chat-history:recommendations"),
+  notifyChatUserActivity: () => ipcRenderer.send("chat-recommendation:user-activity"),
   setWindowMode: (mode: WindowMode) => ipcRenderer.invoke("window:set-mode", mode),
   hideWindow: () => ipcRenderer.invoke("window:hide"),
   openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url),

@@ -1,8 +1,58 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "./config-store";
-import { buildChatCompletionMessages, buildLlamaCommand, LlamaRuntime } from "./llama-runtime";
+import {
+  buildChatCompletionMessages,
+  buildLlamaCommand,
+  LlamaRuntime,
+  parseChatRecommendations,
+  reportsFullGpuOffload,
+  shouldLowerIdleRecommendationPriority,
+} from "./llama-runtime";
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("parseChatRecommendations", () => {
+  it("accepts exactly three unique JSON string recommendations", () => {
+    expect(parseChatRecommendations('["继续聊项目", "规划今天任务", "回顾最近问题"]')).toEqual([
+      "继续聊项目",
+      "规划今天任务",
+      "回顾最近问题",
+    ]);
+  });
+
+  it.each([
+    "not json",
+    '["只有一条"]',
+    '["重复", "重复", "第三条"]',
+    '["第一条", 2, "第三条"]',
+  ])("rejects malformed recommendation output: %s", (output) => {
+    expect(() => parseChatRecommendations(output)).toThrow();
+  });
+});
+
+describe("shouldLowerIdleRecommendationPriority", () => {
+  it("recognizes full GPU offload from llama.cpp startup logs", () => {
+    expect(reportsFullGpuOffload("load_tensors: offloaded 29/29 layers to GPU")).toBe(true);
+    expect(reportsFullGpuOffload("load_tensors: offloaded 20/29 layers to GPU")).toBe(false);
+    expect(reportsFullGpuOffload("load_tensors: offloading 29 layers to GPU")).toBe(false);
+    expect(reportsFullGpuOffload(
+      "probe: offloaded 20/29 layers to GPU\nload_tensors: offloaded 29/29 layers to GPU",
+    )).toBe(true);
+  });
+
+  it("keeps confirmed full-GPU recommendation work at normal process priority", () => {
+    expect(shouldLowerIdleRecommendationPriority(true, "win32")).toBe(false);
+  });
+
+  it("lowers CPU or partial-offload background inference on Windows", () => {
+    expect(shouldLowerIdleRecommendationPriority(false, "win32")).toBe(true);
+  });
+
+  it("does not apply a potentially irreversible nice change on POSIX", () => {
+    expect(shouldLowerIdleRecommendationPriority(false, "linux")).toBe(false);
+    expect(shouldLowerIdleRecommendationPriority(false, "darwin")).toBe(false);
+  });
+});
 
 describe("buildLlamaCommand", () => {
   it("uses the unified llama serve command and a replaceable HF model", () => {
