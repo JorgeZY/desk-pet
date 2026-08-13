@@ -225,8 +225,11 @@ export function reportsFullGpuOffload(log: string): boolean {
   return false;
 }
 
-export function shouldLowerIdleRecommendationPriority(fullyGpuOffloaded: boolean): boolean {
-  return !fullyGpuOffloaded;
+export function shouldLowerIdleRecommendationPriority(
+  fullyGpuOffloaded: boolean,
+  platform = process.platform,
+): boolean {
+  return platform === "win32" && !fullyGpuOffloaded;
 }
 
 export class LlamaRuntime extends EventEmitter {

@@ -41,11 +41,16 @@ describe("shouldLowerIdleRecommendationPriority", () => {
   });
 
   it("keeps confirmed full-GPU recommendation work at normal process priority", () => {
-    expect(shouldLowerIdleRecommendationPriority(true)).toBe(false);
+    expect(shouldLowerIdleRecommendationPriority(true, "win32")).toBe(false);
   });
 
-  it("lowers background inference unless full GPU offload was confirmed", () => {
-    expect(shouldLowerIdleRecommendationPriority(false)).toBe(true);
+  it("lowers CPU or partial-offload background inference on Windows", () => {
+    expect(shouldLowerIdleRecommendationPriority(false, "win32")).toBe(true);
+  });
+
+  it("does not apply a potentially irreversible nice change on POSIX", () => {
+    expect(shouldLowerIdleRecommendationPriority(false, "linux")).toBe(false);
+    expect(shouldLowerIdleRecommendationPriority(false, "darwin")).toBe(false);
   });
 });
 
