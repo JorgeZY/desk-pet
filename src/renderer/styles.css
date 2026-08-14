@@ -1133,6 +1133,32 @@ select {
   word-break: break-word;
 }
 
+.message-speak {
+  display: inline-flex;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 3px 8px;
+  align-items: center;
+  color: #b08577;
+  background: transparent;
+  border: 1px solid rgba(216, 112, 78, 0.22);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 10px;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.message-speak:hover:not(:disabled),
+.message-speak--active {
+  color: var(--peach);
+  border-color: rgba(216, 112, 78, 0.55);
+}
+
+.message-speak:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .image-attachment-tray {
   display: flex;
   gap: 7px;

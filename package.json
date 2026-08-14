@@ -1,7 +1,7 @@
 {
   "name": "desk-pet",
   "productName": "desk-pet",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "A model-agnostic local desktop pet powered by llama.cpp.",
   "author": "desk-pet contributors",
@@ -17,6 +17,7 @@
     "models:speech:streaming": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/download-streaming-model.ps1 -ModelRoot models",
     "models:speech:final": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/download-models.ps1 -ModelRoot models",
     "models:speech": "npm run models:speech:streaming && npm run models:speech:final",
+    "models:tts": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/download-tts-model.ps1 -ModelRoot models",
     "start": "electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis"
@@ -73,7 +74,8 @@
         "to": "scripts",
         "filter": [
           "download-models.ps1",
-          "download-streaming-model.ps1"
+          "download-streaming-model.ps1",
+          "download-tts-model.ps1"
         ]
       }
     ],
