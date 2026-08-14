@@ -42,7 +42,7 @@ const clip = (name: string, options: Omit<PetClip, "src">): PetClip => ({
 const refreshedClipSource = (name: string, revision: string) =>
   `./pet/moods/pet-${name}-v1.gif?rev=${revision}`;
 
-const THINKING_CLIP_SOURCE = refreshedClipSource("thinking", "8a267ee4b6e6");
+const THINKING_CLIP_SOURCE = refreshedClipSource("thinking", "8db7a77497a4");
 const LISTENING_CLIP_SOURCE = refreshedClipSource("listening", "3adb18e68ec3");
 
 const reusedMoodClip = (
