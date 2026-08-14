@@ -157,7 +157,7 @@ describe("pet GIF clips", () => {
   });
 
   it.each([
-    ["thinking", "8a267ee4b6e6"],
+    ["thinking", "8db7a77497a4"],
     ["listening", "3adb18e68ec3"],
   ] as const)("binds the %s cache revision to its GIF content", (mood, revision) => {
     const media = PET_CLIPS[mood];
