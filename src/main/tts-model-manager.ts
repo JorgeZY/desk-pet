@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { TtsDownloadProgress } from "../shared/types";
 
-const TTS_MODEL_DIRECTORY = "vits-melo-tts-zh-en";
+const TTS_MODEL_DIRECTORY = "vits-melo-tts-zh_en";
 const TTS_DATA_DIRECTORY = "espeak-ng-data";
 const TTS_MODEL_SCRIPT = "download-tts-model.ps1";
 const TTS_MODEL_FILES = ["model.onnx", "lexicon.txt", "tokens.txt"] as const;

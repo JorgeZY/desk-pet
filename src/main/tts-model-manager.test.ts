@@ -42,7 +42,7 @@ describe("TtsModelManager", () => {
     const paths = resolveTtsModelPaths(join("application", "models"));
     expect(paths.root).toBe(join("application", "models", "speech"));
     expect(paths.model).toBe(
-      join("application", "models", "speech", "vits-melo-tts-zh-en", "model.onnx"),
+      join("application", "models", "speech", "vits-melo-tts-zh_en", "model.onnx"),
     );
     expect(paths.lexicon).toContain("lexicon.txt");
     expect(paths.tokens).toContain("tokens.txt");

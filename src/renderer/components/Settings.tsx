@@ -197,7 +197,7 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
             <label><span>语速</span><input type="number" min={0.5} max={2} step={0.1} value={config.tts.speed} onChange={(event) => update("tts", { ...config.tts, speed: Number(event.target.value) })} /></label>
             <label><span>音色编号</span><input type="number" min={0} max={99} value={config.tts.speaker} onChange={(event) => update("tts", { ...config.tts, speaker: Math.round(Number(event.target.value)) })} /></label>
           </div>
-          <p className="hint">音色编号 0 为默认音色；超出模型音色范围时会自动使用最后一个音色。</p>
+          <p className="hint">官方语音朗读模型为单一音色，音色编号保持 0；导入多音色模型时可在此选择（超出范围会自动使用最后一个音色）。</p>
           <div className="settings-info settings-info--path">
             <span>语音朗读模型位置</span>
             <strong title={tts.modelDirectory}>{tts.modelDirectory}</strong>
