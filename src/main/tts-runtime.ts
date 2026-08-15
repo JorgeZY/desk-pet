@@ -362,8 +362,10 @@ export class TtsRuntime extends EventEmitter {
   private async ensureCpal(): Promise<CpalOutputModule> {
     if (!this.cpal) {
       this.cpal = await this.loadCpal();
-      this.output ??= new WarmCpalOutput(this.cpal);
     }
+    // The output wrapper is released whenever playback is interrupted, so
+    // recreate it for every new playback session instead of only on load.
+    this.output ??= new WarmCpalOutput(this.cpal);
     return this.cpal;
   }
 
@@ -466,8 +468,7 @@ export class TtsRuntime extends EventEmitter {
       this.playing = false;
       if (failed || !this.config.enabled) return;
       if (!this.queue.length) {
-        this.speakingRequestId = undefined;
-        this.publish({ phase: this.engine ? "ready" : "not-installed", speakingRequestId: undefined, error: undefined });
+        this.publishIdleState();
       } else {
         // Items may have been enqueued while this pump was interrupted; keep draining.
         void this.pump();
@@ -500,8 +501,17 @@ export class TtsRuntime extends EventEmitter {
             return 0;
           }
           const adapted = this.adaptToOutput(samples, resampler, channels);
-          this.cpal?.writeToStream(output.stream, adapted);
-          writtenSamples += samples.length;
+          if (adapted.length) {
+            try {
+              this.cpal?.writeToStream(output.stream, adapted);
+              writtenSamples += samples.length;
+            } catch (error) {
+              throw new Error(
+                `播放设备写入失败（${output.device.name}，${adapted.length} 采样）：${message(error)}`,
+                { cause: error },
+              );
+            }
+          }
           return 1;
         },
       });
@@ -510,8 +520,10 @@ export class TtsRuntime extends EventEmitter {
       // callbacks, write the full buffer once.
       if (writtenSamples === 0 && result.samples.length) {
         const adapted = this.adaptToOutput(result.samples, resampler, channels);
-        this.cpal?.writeToStream(output.stream, adapted);
-        writtenSamples = result.samples.length;
+        if (adapted.length) {
+          this.cpal?.writeToStream(output.stream, adapted);
+          writtenSamples = result.samples.length;
+        }
       }
       // Wait for the sound to finish playing before starting the next sentence.
       const outputRate = output.config.sampleRate;
@@ -554,11 +566,27 @@ export class TtsRuntime extends EventEmitter {
   private stopPlayback(): void {
     this.playbackGeneration += 1;
     this.queue = [];
-    this.speakingRequestId = undefined;
     // Closing the stream stops the current sound immediately.
     this.output?.close();
     this.output = undefined;
-    this.publish({ phase: this.engine ? "ready" : "not-installed", speakingRequestId: undefined, error: undefined });
+    this.publishIdleState();
+  }
+
+  /**
+   * Returns the state to its idle phase after speaking stops, keeping the
+   * phase/message pair consistent: "ready" once the engine is loaded, and the
+   * previously published state otherwise (not-installed / error / …).
+   */
+  private publishIdleState(): void {
+    if (!this.config.enabled) return;
+    this.speakingRequestId = undefined;
+    const phase = this.engine ? "ready" : this.state.phase === "speaking" ? "ready" : this.state.phase;
+    this.publish({
+      phase,
+      speakingRequestId: undefined,
+      error: undefined,
+      ...(phase === "ready" ? { message: "语音朗读已就绪，团子会用本地语音回答。" } : {}),
+    });
   }
 
   stopAll(): TtsState {

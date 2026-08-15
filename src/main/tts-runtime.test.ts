@@ -273,4 +273,25 @@ describe("TtsRuntime", () => {
     await waitUntil(() => generateAsync.mock.calls.length === 1);
     expect(generateAsync.mock.calls[0]?.[0].sid).toBe(2);
   });
+
+  it("reopens the output stream after playback was stopped", async () => {
+    const { engine, generateAsync } = fakeEngine();
+    const { module } = fakeSherpa(engine);
+    const { cpal, createStream } = fakeCpal();
+    const runtime = new TtsRuntime(config, fakeModels(), {
+      loadSherpa: async () => module,
+      loadCpal: async () => cpal,
+    });
+
+    await runtime.initializeAvailability();
+    runtime.speakText("第一句。");
+    await waitUntil(() => generateAsync.mock.calls.length === 1);
+
+    runtime.stopAll();
+    runtime.speakText("第二句。");
+    await waitUntil(() => generateAsync.mock.calls.length === 2);
+
+    expect(generateAsync.mock.calls.map((call) => call[0].text)).toEqual(["第一句。", "第二句。"]);
+    expect(createStream).toHaveBeenCalledTimes(2);
+  });
 });
