@@ -136,6 +136,9 @@ describe("TtsRuntime", () => {
     );
 
     expect(generateAsync.mock.calls.map((call) => call[0].text)).toEqual(["你好。", "世界！"]);
+    // Electron's V8 throws "External buffers are not allowed" as an uncaught
+    // exception when the addon hands back externally-backed ArrayBuffers.
+    expect(generateAsync.mock.calls.every((call) => call[0].enableExternalBuffer === false)).toBe(true);
     expect(createAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         model: expect.objectContaining({

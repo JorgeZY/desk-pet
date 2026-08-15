@@ -494,7 +494,10 @@ export class TtsRuntime extends EventEmitter {
         text: item.text,
         sid: speaker,
         speed: this.config.speed,
-        enableExternalBuffer: true,
+        // Electron's V8 disallows external ArrayBuffers ("External buffers
+        // are not allowed"); copying the final samples is negligible and
+        // keeps the addon on the plain-buffer path.
+        enableExternalBuffer: false,
         onProgress: ({ samples }) => {
           if (generation !== this.playbackGeneration) {
             cancelled = true;
