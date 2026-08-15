@@ -146,44 +146,42 @@ const PREVIEW_REQUEST_ID = "preview";
 interface PacedPlaybackOptions {
   cpal: CpalOutputModule;
   stream: CpalOutputStream;
-  outputRate: number;
   deviceName: string;
   adapt: (samples: Float32Array) => Float32Array;
   shouldStop: () => boolean;
 }
 
 /**
- * Feeds PCM chunks to the output stream at real-time pace.
+ * Feeds PCM chunks to the output stream with backpressure pacing.
  *
- * The native output stream has a limited buffer: dumping synthesized audio as
- * fast as it is generated (usually faster than real time) overflows it and
- * the sound is dropped silently. This writer queues incoming chunks and
- * releases them according to the wall clock, so playback keeps exactly one
- * real-time schedule regardless of how fast synthesis produces samples.
+ * The native output stream buffers only a limited amount of audio and throws
+ * "buffer full" when written faster than the device consumes it. This writer
+ * hands over small fixed chunks on a short timer and, whenever the device
+ * reports a full buffer, simply waits for the next tick — the device's own
+ * consumption rate becomes the pacing clock, so playback stays continuous
+ * without underruns or overflow.
  */
+const WRITE_CHUNK_SAMPLES = 1024;
+const PLAYBACK_TICK_MS = 20;
+const STALL_TIMEOUT_MS = 5000;
+
 export class PacedPlayback {
   private chunks: Float32Array[] = [];
-  private queued = 0;
-  private written = 0;
-  private startedAt = 0;
   private timer?: ReturnType<typeof setInterval>;
   private settle?: { resolve: () => void; reject: (error: Error) => void };
   private error?: Error;
   private disposed = false;
+  private lastWriteAt = 0;
 
   constructor(private readonly options: PacedPlaybackOptions) {}
-
-  get hasContent(): boolean {
-    return this.queued > 0 || this.written > 0;
-  }
 
   push(samples: Float32Array): void {
     if (this.disposed) return;
     const adapted = this.options.adapt(samples);
     if (!adapted.length) return;
     this.chunks.push(adapted);
-    this.queued += adapted.length;
     this.start();
+    this.pump();
   }
 
   /** Resolves once every pushed sample has been handed to the stream. */
@@ -191,11 +189,7 @@ export class PacedPlayback {
     if (this.disposed) return this.error ? Promise.reject(this.error) : Promise.resolve();
     return new Promise((resolve, reject) => {
       this.settle = { resolve, reject };
-      if (!this.chunks.length) {
-        this.finish();
-      } else {
-        this.pump();
-      }
+      this.pump();
     });
   }
 
@@ -204,15 +198,14 @@ export class PacedPlayback {
     this.timer = undefined;
     this.disposed = true;
     this.chunks = [];
-    this.queued = 0;
     this.settle?.resolve();
     this.settle = undefined;
   }
 
   private start(): void {
     if (this.timer || this.disposed) return;
-    this.startedAt = Date.now();
-    this.timer = setInterval(() => this.pump(), 40);
+    this.lastWriteAt = Date.now();
+    this.timer = setInterval(() => this.pump(), PLAYBACK_TICK_MS);
   }
 
   private pump(): void {
@@ -222,31 +215,34 @@ export class PacedPlayback {
         this.finish();
         return;
       }
-      if (!this.chunks.length) return;
-      const elapsedSamples = ((Date.now() - this.startedAt) / 1000) * this.options.outputRate;
-      let allowed = Math.floor(elapsedSamples - this.written);
-      while (allowed > 0 && this.chunks.length) {
-        const chunk = this.chunks[0];
-        if (!chunk) break;
-        const take = Math.min(chunk.length, allowed);
-        try {
-          this.options.cpal.writeToStream(this.options.stream, chunk.subarray(0, take));
-        } catch (error) {
-          throw new Error(
-            `播放设备写入失败（${this.options.deviceName}，${take} 采样）：${message(error)}`,
-            { cause: error },
-          );
-        }
-        this.written += take;
-        this.queued -= take;
-        allowed -= take;
-        if (take >= chunk.length) this.chunks.shift();
-        else this.chunks[0] = chunk.subarray(take);
+      if (this.chunks.length && Date.now() - this.lastWriteAt > STALL_TIMEOUT_MS) {
+        throw new Error(`播放设备长时间未消费音频（${this.options.deviceName}），请检查输出设备。`);
       }
-      if (!this.chunks.length && this.settle) this.finish();
+      this.tryWrite();
+      if (this.settle && !this.chunks.length) this.finish();
     } catch (error) {
       this.error = error instanceof Error ? error : new Error(String(error));
       this.finish();
+    }
+  }
+
+  private tryWrite(): void {
+    while (this.chunks.length) {
+      const chunk = this.chunks[0];
+      if (!chunk) break;
+      const take = Math.min(chunk.length, WRITE_CHUNK_SAMPLES);
+      try {
+        this.options.cpal.writeToStream(this.options.stream, chunk.subarray(0, take));
+        this.lastWriteAt = Date.now();
+      } catch (error) {
+        if (/buffer full/iu.test(message(error))) return; // device is busy; retry on the next tick
+        throw new Error(
+          `播放设备写入失败（${this.options.deviceName}，${take} 采样）：${message(error)}`,
+          { cause: error },
+        );
+      }
+      if (take >= chunk.length) this.chunks.shift();
+      else this.chunks[0] = chunk.subarray(take);
     }
   }
 
@@ -570,14 +566,44 @@ export class TtsRuntime extends EventEmitter {
     if (this.playing) return;
     this.playing = true;
     let failed = false;
+    let playback: PacedPlayback | undefined;
     try {
       while (this.queue.length && this.config.enabled) {
         const generation = this.playbackGeneration;
-        const item = this.queue.shift();
-        if (!item || generation !== this.playbackGeneration) break;
-        if (!this.shouldSilence?.()) {
-          await this.speakItem(item, generation);
+        const engine = await this.loadEngine();
+        if (generation !== this.playbackGeneration) break;
+        const speaker = Math.min(this.config.speaker, Math.max(0, engine.numSpeakers - 1));
+        const { output, resampler, channels } = await this.ensureOutput(engine.sampleRate);
+        if (generation !== this.playbackGeneration || !this.cpal) break;
+
+        playback = new PacedPlayback({
+          cpal: this.cpal,
+          stream: output.stream,
+          deviceName: output.device.name,
+          adapt: (samples) => this.adaptToOutput(samples, resampler, channels),
+          shouldStop: () => generation !== this.playbackGeneration,
+        });
+        const activePlayback = playback;
+
+        // Pipeline: synthesized chunks are pushed to the single continuous
+        // playback queue as they arrive, so each sentence starts sounding
+        // while it is still being generated, and the next sentence's
+        // synthesis runs while the current one plays out.
+        while (this.queue.length && generation === this.playbackGeneration && this.config.enabled) {
+          const item = this.queue.shift();
+          if (!item) break;
+          if (this.shouldSilence?.()) continue;
+          const cancelled = await this.generateSentenceInto(
+            engine,
+            item,
+            speaker,
+            generation,
+            (chunk) => activePlayback.push(chunk),
+          );
+          if (cancelled || generation !== this.playbackGeneration) break;
         }
+        if (generation !== this.playbackGeneration) break;
+        await activePlayback.drain();
         if (generation !== this.playbackGeneration) break;
       }
     } catch (error) {
@@ -596,6 +622,7 @@ export class TtsRuntime extends EventEmitter {
         this.publish({ phase: "error", message: "语音朗读播放失败。", error: message(error) });
       }
     } finally {
+      playback?.dispose();
       this.playing = false;
       if (failed || !this.config.enabled) return;
       if (!this.queue.length) {
@@ -607,58 +634,45 @@ export class TtsRuntime extends EventEmitter {
     }
   }
 
-  private async speakItem(item: QueueItem, generation: number): Promise<void> {
-    try {
-      const engine = await this.loadEngine();
-      if (generation !== this.playbackGeneration) return;
-      const speaker = Math.min(this.config.speaker, Math.max(0, engine.numSpeakers - 1));
-      this.speakingRequestId = item.requestId;
-      this.publish({ phase: "speaking", speakingRequestId: item.requestId, message: "团子正在说话…", error: undefined });
+  /**
+   * Synthesizes one sentence, handing each PCM chunk to `onChunk` as soon as
+   * the engine produces it. Returns true when generation was cancelled.
+   */
+  private async generateSentenceInto(
+    engine: OfflineTtsLike,
+    item: QueueItem,
+    speaker: number,
+    generation: number,
+    onChunk: (chunk: Float32Array) => void,
+  ): Promise<boolean> {
+    this.speakingRequestId = item.requestId;
+    this.publish({ phase: "speaking", speakingRequestId: item.requestId, message: "团子正在说话…", error: undefined });
 
-      const { output, resampler, channels } = await this.ensureOutput(engine.sampleRate);
-      if (generation !== this.playbackGeneration || !this.cpal) return;
-
-      const playback = new PacedPlayback({
-        cpal: this.cpal,
-        stream: output.stream,
-        outputRate: output.config.sampleRate,
-        deviceName: output.device.name,
-        adapt: (samples) => this.adaptToOutput(samples, resampler, channels),
-        shouldStop: () => generation !== this.playbackGeneration,
-      });
-
-      let cancelled = false;
-      const result = await engine.generateAsync({
-        text: item.text,
-        sid: speaker,
-        speed: this.config.speed,
-        // Electron's V8 disallows external ArrayBuffers ("External buffers
-        // are not allowed"); copying the final samples is negligible and
-        // keeps the addon on the plain-buffer path.
-        enableExternalBuffer: false,
-        onProgress: ({ samples }) => {
-          if (generation !== this.playbackGeneration) {
-            cancelled = true;
-            return 0;
-          }
-          playback.push(samples);
-          return 1;
-        },
-      });
-      if (cancelled || generation !== this.playbackGeneration) {
-        playback.dispose();
-        return;
-      }
-      // If synthesis never reported progress chunks, play the full buffer once.
-      if (!playback.hasContent && result.samples.length) {
-        playback.push(result.samples);
-      }
-      await playback.drain();
-      if (generation !== this.playbackGeneration) return;
-    } catch (error) {
-      if (generation !== this.playbackGeneration) return;
-      throw error;
-    }
+    let cancelled = false;
+    let receivedChunks = false;
+    const result = await engine.generateAsync({
+      text: item.text,
+      sid: speaker,
+      speed: this.config.speed,
+      // Electron's V8 disallows external ArrayBuffers ("External buffers
+      // are not allowed"); copying the final samples is negligible and
+      // keeps the addon on the plain-buffer path.
+      enableExternalBuffer: false,
+      onProgress: ({ samples }) => {
+        if (generation !== this.playbackGeneration) {
+          cancelled = true;
+          return 0;
+        }
+        receivedChunks = true;
+        onChunk(samples);
+        return 1;
+      },
+    });
+    if (cancelled || generation !== this.playbackGeneration) return true;
+    // If synthesis never reported progress chunks, fall back to the full
+    // buffer exactly once (the progress path already carries all samples).
+    if (!receivedChunks && result.samples.length) onChunk(result.samples);
+    return false;
   }
 
   interrupt(requestId: string): void {
