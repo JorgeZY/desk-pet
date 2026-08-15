@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { ChatEvent, TtsConfig, TtsDownloadProgress, TtsState } from "../shared/types";
 import type { TtsModelManager } from "./tts-model-manager";
 import { SentenceAccumulator, splitTtsSentences } from "./tts-text";
@@ -140,6 +142,127 @@ interface QueueItem {
 }
 
 const PREVIEW_REQUEST_ID = "preview";
+
+interface PacedPlaybackOptions {
+  cpal: CpalOutputModule;
+  stream: CpalOutputStream;
+  outputRate: number;
+  deviceName: string;
+  adapt: (samples: Float32Array) => Float32Array;
+  shouldStop: () => boolean;
+}
+
+/**
+ * Feeds PCM chunks to the output stream at real-time pace.
+ *
+ * The native output stream has a limited buffer: dumping synthesized audio as
+ * fast as it is generated (usually faster than real time) overflows it and
+ * the sound is dropped silently. This writer queues incoming chunks and
+ * releases them according to the wall clock, so playback keeps exactly one
+ * real-time schedule regardless of how fast synthesis produces samples.
+ */
+export class PacedPlayback {
+  private chunks: Float32Array[] = [];
+  private queued = 0;
+  private written = 0;
+  private startedAt = 0;
+  private timer?: ReturnType<typeof setInterval>;
+  private settle?: { resolve: () => void; reject: (error: Error) => void };
+  private error?: Error;
+  private disposed = false;
+
+  constructor(private readonly options: PacedPlaybackOptions) {}
+
+  get hasContent(): boolean {
+    return this.queued > 0 || this.written > 0;
+  }
+
+  push(samples: Float32Array): void {
+    if (this.disposed) return;
+    const adapted = this.options.adapt(samples);
+    if (!adapted.length) return;
+    this.chunks.push(adapted);
+    this.queued += adapted.length;
+    this.start();
+  }
+
+  /** Resolves once every pushed sample has been handed to the stream. */
+  drain(): Promise<void> {
+    if (this.disposed) return this.error ? Promise.reject(this.error) : Promise.resolve();
+    return new Promise((resolve, reject) => {
+      this.settle = { resolve, reject };
+      if (!this.chunks.length) {
+        this.finish();
+      } else {
+        this.pump();
+      }
+    });
+  }
+
+  dispose(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    this.disposed = true;
+    this.chunks = [];
+    this.queued = 0;
+    this.settle?.resolve();
+    this.settle = undefined;
+  }
+
+  private start(): void {
+    if (this.timer || this.disposed) return;
+    this.startedAt = Date.now();
+    this.timer = setInterval(() => this.pump(), 40);
+  }
+
+  private pump(): void {
+    if (this.disposed) return;
+    try {
+      if (this.options.shouldStop() || this.error) {
+        this.finish();
+        return;
+      }
+      if (!this.chunks.length) return;
+      const elapsedSamples = ((Date.now() - this.startedAt) / 1000) * this.options.outputRate;
+      let allowed = Math.floor(elapsedSamples - this.written);
+      while (allowed > 0 && this.chunks.length) {
+        const chunk = this.chunks[0];
+        if (!chunk) break;
+        const take = Math.min(chunk.length, allowed);
+        try {
+          this.options.cpal.writeToStream(this.options.stream, chunk.subarray(0, take));
+        } catch (error) {
+          throw new Error(
+            `播放设备写入失败（${this.options.deviceName}，${take} 采样）：${message(error)}`,
+            { cause: error },
+          );
+        }
+        this.written += take;
+        this.queued -= take;
+        allowed -= take;
+        if (take >= chunk.length) this.chunks.shift();
+        else this.chunks[0] = chunk.subarray(take);
+      }
+      if (!this.chunks.length && this.settle) this.finish();
+    } catch (error) {
+      this.error = error instanceof Error ? error : new Error(String(error));
+      this.finish();
+    }
+  }
+
+  private finish(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    const settle = this.settle;
+    this.settle = undefined;
+    if (settle) {
+      if (this.error) settle.reject(this.error);
+      else settle.resolve();
+    }
+  }
+}
 
 export class TtsRuntime extends EventEmitter {
   private state: TtsState;
@@ -313,6 +436,13 @@ export class TtsRuntime extends EventEmitter {
 
   private engineConfig(): Record<string, unknown> {
     const paths = this.models.paths;
+    // The melo model ships inverse-text-normalization rule FSTs: when present,
+    // they make the engine read digits and dates aloud instead of skipping
+    // them as out-of-vocabulary characters.
+    const ruleFsts = ["date.fst", "phone.fst", "number.fst", "new_heteronym.fst"]
+      .map((name) => join(paths.directory, name))
+      .filter((file) => existsSync(file))
+      .join(",");
     return {
       model: {
         vits: {
@@ -329,6 +459,7 @@ export class TtsRuntime extends EventEmitter {
         debug: false,
       },
       maxNumSentences: 2,
+      ...(ruleFsts ? { ruleFsts } : {}),
     };
   }
 
@@ -485,10 +616,17 @@ export class TtsRuntime extends EventEmitter {
       this.publish({ phase: "speaking", speakingRequestId: item.requestId, message: "团子正在说话…", error: undefined });
 
       const { output, resampler, channels } = await this.ensureOutput(engine.sampleRate);
-      if (generation !== this.playbackGeneration) return;
+      if (generation !== this.playbackGeneration || !this.cpal) return;
 
-      let writtenSamples = 0;
-      const startedAt = Date.now();
+      const playback = new PacedPlayback({
+        cpal: this.cpal,
+        stream: output.stream,
+        outputRate: output.config.sampleRate,
+        deviceName: output.device.name,
+        adapt: (samples) => this.adaptToOutput(samples, resampler, channels),
+        shouldStop: () => generation !== this.playbackGeneration,
+      });
+
       let cancelled = false;
       const result = await engine.generateAsync({
         text: item.text,
@@ -503,54 +641,24 @@ export class TtsRuntime extends EventEmitter {
             cancelled = true;
             return 0;
           }
-          const adapted = this.adaptToOutput(samples, resampler, channels);
-          if (adapted.length) {
-            try {
-              this.cpal?.writeToStream(output.stream, adapted);
-              writtenSamples += samples.length;
-            } catch (error) {
-              throw new Error(
-                `播放设备写入失败（${output.device.name}，${adapted.length} 采样）：${message(error)}`,
-                { cause: error },
-              );
-            }
-          }
+          playback.push(samples);
           return 1;
         },
       });
-      if (cancelled || generation !== this.playbackGeneration) return;
-      // If synthesis is missing because the engine returned no progress
-      // callbacks, write the full buffer once.
-      if (writtenSamples === 0 && result.samples.length) {
-        const adapted = this.adaptToOutput(result.samples, resampler, channels);
-        if (adapted.length) {
-          this.cpal?.writeToStream(output.stream, adapted);
-          writtenSamples = result.samples.length;
-        }
+      if (cancelled || generation !== this.playbackGeneration) {
+        playback.dispose();
+        return;
       }
-      // Wait for the sound to finish playing before starting the next sentence.
-      const outputRate = output.config.sampleRate;
-      const playbackMs = (writtenSamples / outputRate) * 1000;
-      const remainingMs = playbackMs - (Date.now() - startedAt);
-      if (remainingMs > 0) await this.sleepInterruptible(remainingMs, generation);
+      // If synthesis never reported progress chunks, play the full buffer once.
+      if (!playback.hasContent && result.samples.length) {
+        playback.push(result.samples);
+      }
+      await playback.drain();
+      if (generation !== this.playbackGeneration) return;
     } catch (error) {
       if (generation !== this.playbackGeneration) return;
       throw error;
     }
-  }
-
-  private sleepInterruptible(milliseconds: number, generation: number): Promise<void> {
-    return new Promise((resolve) => {
-      const step = Math.min(milliseconds, 100);
-      const tick = (remaining: number) => {
-        if (generation !== this.playbackGeneration || remaining <= 0) {
-          resolve();
-          return;
-        }
-        setTimeout(() => tick(remaining - step), step);
-      };
-      tick(milliseconds);
-    });
   }
 
   interrupt(requestId: string): void {

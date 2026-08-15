@@ -50,6 +50,9 @@ export function cleanTtsText(text: string): string {
   return lines
     .join(" ")
     .replace(/[*_~`|]/gu, "")
+    // Punctuation the melo lexicon has no entry for: the engine would skip
+    // it with a console warning per character, so replace it with a pause.
+    .replace(/[（）：“”‘’—…·]/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
 }

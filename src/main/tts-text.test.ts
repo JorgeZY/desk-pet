@@ -9,13 +9,13 @@ describe("cleanTtsText", () => {
   it("strips markdown decorations and keeps link text", () => {
     expect(
       cleanTtsText("**重要**：请访问 [官网](https://example.com) 查看 `config.json`。"),
-    ).toBe("重要：请访问 官网 查看 config.json。");
+    ).toBe("重要 请访问 官网 查看 config.json。");
   });
 
   it("drops fenced code blocks entirely", () => {
     expect(
       cleanTtsText("先看代码：\n```js\nconst a = 1;\n```\n然后继续。"),
-    ).toBe("先看代码： 然后继续。");
+    ).toBe("先看代码 然后继续。");
   });
 
   it("removes headings, lists, blockquotes, and horizontal rules", () => {
@@ -93,7 +93,7 @@ describe("SentenceAccumulator", () => {
 
   it("drops fenced code even when the fence spans deltas", () => {
     const accumulator = new SentenceAccumulator();
-    expect(accumulator.feed("先看例子：\n```py\nprint(1)\n")).toEqual(["先看例子："]);
+    expect(accumulator.feed("先看例子：\n```py\nprint(1)\n")).toEqual(["先看例子"]);
     expect(accumulator.feed("print(2)\n")).toEqual([]);
     expect(accumulator.feed("```\n")).toEqual([]);
     expect(accumulator.feed("现在继续。")).toEqual(["现在继续。"]);
