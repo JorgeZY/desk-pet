@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ChatEvent, TtsConfig, TtsDownloadProgress, TtsState } from "../shared/types";
 import type { TtsModelManager } from "./tts-model-manager";
-import { SentenceAccumulator, splitTtsSentences } from "./tts-text";
+import { cleanTtsText, isSpeakableTtsText, SentenceAccumulator, splitTtsSentences } from "./tts-text";
 
 export interface TtsGeneratedAudio {
   samples: Float32Array;
@@ -31,42 +31,29 @@ export interface TtsSherpaModule {
   OfflineTts: {
     createAsync(config: Record<string, unknown>): Promise<OfflineTtsLike>;
   };
-  LinearResampler: new (inputRate: number, outputRate: number) => LinearResamplerLike;
 }
 
-export interface LinearResamplerLike {
-  resample(samples: Float32Array): Float32Array;
+export interface DedicatedSpeakerLike {
+  writeAsync(chunk: Buffer): Promise<void>;
+  drainAsync(): Promise<void>;
+  stop(): void;
+  readonly underrunCount: number;
 }
 
-export interface CpalOutputDevice {
-  deviceId: string;
-  name: string;
-}
-
-export interface CpalOutputConfig {
-  sampleRate: number;
-  channels: number;
-}
-
-export type CpalOutputStream = unknown;
-
-export interface CpalOutputModule {
-  getDefaultOutputDevice(): CpalOutputDevice;
-  getDefaultOutputConfig(deviceId: string): CpalOutputConfig;
-  createStream(
-    deviceId: string,
-    input: boolean,
-    config: CpalOutputConfig,
-    onData: (samples: Float32Array) => void,
-  ): CpalOutputStream;
-  writeToStream(stream: CpalOutputStream, samples: Float32Array): void;
-  closeStream(stream: CpalOutputStream): void;
+export interface DedicatedSpeakerModule {
+  Speaker: {
+    open(options: {
+      sampleRate: number;
+      channels: number;
+      dtype: "float32";
+    }): Promise<DedicatedSpeakerLike>;
+  };
 }
 
 export interface TtsRuntimeOptions {
   threads?: number;
   loadSherpa?: () => Promise<TtsSherpaModule>;
-  loadCpal?: () => Promise<CpalOutputModule>;
+  loadSpeaker?: () => Promise<DedicatedSpeakerModule>;
   /** Called before each sentence starts playing; truthy means stay silent. */
   shouldSilence?: () => boolean;
 }
@@ -79,61 +66,8 @@ function defaultLoadSherpa(): Promise<TtsSherpaModule> {
   return Promise.resolve(require("sherpa-onnx-node") as TtsSherpaModule);
 }
 
-function defaultLoadCpal(): Promise<CpalOutputModule> {
-  return Promise.resolve(require("node-cpal") as CpalOutputModule);
-}
-
-interface OpenedCpalOutput {
-  device: CpalOutputDevice;
-  config: CpalOutputConfig;
-  stream: CpalOutputStream;
-}
-
-/**
- * Keeps the default output stream open between sentences so playback starts
- * without reopening the device. Re-queries the default device before use and
- * rebuilds the stream when it changes, mirroring WarmCpalInput for the mic.
- */
-export class WarmCpalOutput {
-  private current?: OpenedCpalOutput;
-
-  constructor(private readonly cpal: CpalOutputModule) {}
-
-  get output(): OpenedCpalOutput | undefined {
-    return this.current;
-  }
-
-  ensureDefault(): OpenedCpalOutput {
-    const device = this.cpal.getDefaultOutputDevice();
-    if (this.current?.device.deviceId === device.deviceId) {
-      this.current.device = device;
-      return this.current;
-    }
-
-    const config = this.cpal.getDefaultOutputConfig(device.deviceId);
-    const stream = this.cpal.createStream(device.deviceId, false, config, () => undefined);
-    const previous = this.current;
-    this.current = { device, config, stream };
-    if (previous) {
-      try {
-        this.cpal.closeStream(previous.stream);
-      } catch {
-        // The old device may already have disappeared from the native backend.
-      }
-    }
-    return this.current;
-  }
-
-  close(): void {
-    const current = this.current;
-    this.current = undefined;
-    if (!current) return;
-    try {
-      this.cpal.closeStream(current.stream);
-    } catch {
-      // The stream may already have been closed by the native backend.
-    }
-  }
+function defaultLoadSpeaker(): Promise<DedicatedSpeakerModule> {
+  return Promise.resolve(require("decibri") as DedicatedSpeakerModule);
 }
 
 interface QueueItem {
@@ -142,120 +76,61 @@ interface QueueItem {
 }
 
 const PREVIEW_REQUEST_ID = "preview";
+// A few hundred inserted samples can occur while WASAPI starts. Only report
+// sustained underruns that could be audible (about 23 ms at 44.1 kHz).
+const REPORTABLE_UNDERRUN_SAMPLES = 1024;
 
-interface PacedPlaybackOptions {
-  cpal: CpalOutputModule;
-  stream: CpalOutputStream;
-  deviceName: string;
-  adapt: (samples: Float32Array) => Float32Array;
+interface DedicatedPlaybackOptions {
+  speaker: DedicatedSpeakerLike;
   shouldStop: () => boolean;
 }
 
 /**
- * Feeds PCM chunks to the output stream with backpressure pacing.
- *
- * The native output stream buffers only a limited amount of audio and throws
- * "buffer full" when written faster than the device consumes it. This writer
- * hands over small fixed chunks on a short timer and, whenever the device
- * reports a full buffer, simply waits for the next tick — the device's own
- * consumption rate becomes the pacing clock, so playback stays continuous
- * without underruns or overflow.
+ * Owns a decibri speaker for one playback generation. PCM chunks are copied
+ * before leaving the sherpa callback, then queued through decibri's native
+ * async backpressure path in strict order. `drain()` resolves only after the
+ * device has played the queued tail.
  */
-const WRITE_CHUNK_SAMPLES = 1024;
-const PLAYBACK_TICK_MS = 20;
-const STALL_TIMEOUT_MS = 5000;
-
-export class PacedPlayback {
-  private chunks: Float32Array[] = [];
-  private timer?: ReturnType<typeof setInterval>;
-  private settle?: { resolve: () => void; reject: (error: Error) => void };
+export class DedicatedPlayback {
+  private pending: Promise<void> = Promise.resolve();
   private error?: Error;
-  private disposed = false;
-  private lastWriteAt = 0;
+  private stopped = false;
 
-  constructor(private readonly options: PacedPlaybackOptions) {}
+  constructor(private readonly options: DedicatedPlaybackOptions) {}
+
+  get underrunCount(): number {
+    return this.options.speaker.underrunCount;
+  }
 
   push(samples: Float32Array): void {
-    if (this.disposed) return;
-    const adapted = this.options.adapt(samples);
-    if (!adapted.length) return;
-    this.chunks.push(adapted);
-    this.start();
-    this.pump();
+    if (this.stopped || !samples.length) return;
+    const bytes = Buffer.allocUnsafe(samples.byteLength);
+    bytes.set(new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength));
+    this.pending = this.pending
+      .then(async () => {
+        if (this.stopped || this.options.shouldStop()) return;
+        await this.options.speaker.writeAsync(bytes);
+      })
+      .catch((error) => {
+        this.error = error instanceof Error ? error : new Error(String(error));
+        this.stop();
+      });
   }
 
-  /** Resolves once every pushed sample has been handed to the stream. */
-  drain(): Promise<void> {
-    if (this.disposed) return this.error ? Promise.reject(this.error) : Promise.resolve();
-    return new Promise((resolve, reject) => {
-      this.settle = { resolve, reject };
-      this.pump();
-    });
+  async drain(): Promise<void> {
+    await this.pending;
+    if (this.error) throw this.error;
+    if (this.stopped || this.options.shouldStop()) return;
+    await this.options.speaker.drainAsync();
   }
 
-  dispose(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = undefined;
-    this.disposed = true;
-    this.chunks = [];
-    this.settle?.resolve();
-    this.settle = undefined;
-  }
-
-  private start(): void {
-    if (this.timer || this.disposed) return;
-    this.lastWriteAt = Date.now();
-    this.timer = setInterval(() => this.pump(), PLAYBACK_TICK_MS);
-  }
-
-  private pump(): void {
-    if (this.disposed) return;
+  stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
     try {
-      if (this.options.shouldStop() || this.error) {
-        this.finish();
-        return;
-      }
-      if (this.chunks.length && Date.now() - this.lastWriteAt > STALL_TIMEOUT_MS) {
-        throw new Error(`播放设备长时间未消费音频（${this.options.deviceName}），请检查输出设备。`);
-      }
-      this.tryWrite();
-      if (this.settle && !this.chunks.length) this.finish();
-    } catch (error) {
-      this.error = error instanceof Error ? error : new Error(String(error));
-      this.finish();
-    }
-  }
-
-  private tryWrite(): void {
-    while (this.chunks.length) {
-      const chunk = this.chunks[0];
-      if (!chunk) break;
-      const take = Math.min(chunk.length, WRITE_CHUNK_SAMPLES);
-      try {
-        this.options.cpal.writeToStream(this.options.stream, chunk.subarray(0, take));
-        this.lastWriteAt = Date.now();
-      } catch (error) {
-        if (/buffer full/iu.test(message(error))) return; // device is busy; retry on the next tick
-        throw new Error(
-          `播放设备写入失败（${this.options.deviceName}，${take} 采样）：${message(error)}`,
-          { cause: error },
-        );
-      }
-      if (take >= chunk.length) this.chunks.shift();
-      else this.chunks[0] = chunk.subarray(take);
-    }
-  }
-
-  private finish(): void {
-    if (this.disposed) return;
-    this.disposed = true;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = undefined;
-    const settle = this.settle;
-    this.settle = undefined;
-    if (settle) {
-      if (this.error) settle.reject(this.error);
-      else settle.resolve();
+      this.options.speaker.stop();
+    } catch {
+      // The native stream may already be closed after a device failure.
     }
   }
 }
@@ -265,15 +140,12 @@ export class TtsRuntime extends EventEmitter {
   private config: TtsConfig;
   private readonly threads: number;
   private readonly loadSherpa: () => Promise<TtsSherpaModule>;
-  private readonly loadCpal: () => Promise<CpalOutputModule>;
+  private readonly loadSpeaker: () => Promise<DedicatedSpeakerModule>;
   private readonly shouldSilence?: () => boolean;
 
-  private sherpa?: TtsSherpaModule;
-  private cpal?: CpalOutputModule;
   private engine?: OfflineTtsLike;
-  private resampler?: LinearResamplerLike;
-  private resamplerRate = 0;
-  private output?: WarmCpalOutput;
+  private speakerModule?: DedicatedSpeakerModule;
+  private activePlayback?: DedicatedPlayback;
   private prepareController?: AbortController;
   private engineLoading?: Promise<OfflineTtsLike>;
 
@@ -293,7 +165,7 @@ export class TtsRuntime extends EventEmitter {
     this.config = config;
     this.threads = options.threads ?? 2;
     this.loadSherpa = options.loadSherpa ?? defaultLoadSherpa;
-    this.loadCpal = options.loadCpal ?? defaultLoadCpal;
+    this.loadSpeaker = options.loadSpeaker ?? defaultLoadSpeaker;
     this.shouldSilence = options.shouldSilence;
     this.state = {
       enabled: config.enabled,
@@ -314,7 +186,8 @@ export class TtsRuntime extends EventEmitter {
     return this.snapshot;
   }
 
-  updateConfig(config: TtsConfig): void {    const modelDirectoryChanged = config.modelDirectory !== this.config.modelDirectory;
+  updateConfig(config: TtsConfig): void {
+    const modelDirectoryChanged = config.modelDirectory !== this.config.modelDirectory;
     const previousEnabled = this.config.enabled;
     this.config = config;
     if (modelDirectoryChanged) {
@@ -342,10 +215,8 @@ export class TtsRuntime extends EventEmitter {
     this.playbackGeneration += 1;
     this.engine = undefined;
     this.engineLoadFailed = false;
-    this.resampler = undefined;
-    this.resamplerRate = 0;
-    this.output?.close();
-    this.output = undefined;
+    this.activePlayback?.stop();
+    this.activePlayback = undefined;
   }
 
   async initializeAvailability(): Promise<TtsState> {
@@ -469,10 +340,7 @@ export class TtsRuntime extends EventEmitter {
       const engine = await sherpa.OfflineTts.createAsync(this.engineConfig());
       // The engine may have been dropped while this load was in flight.
       if (generation === this.playbackGeneration) {
-        this.sherpa = sherpa;
         this.engine = engine;
-        this.resampler = undefined;
-        this.resamplerRate = 0;
       }
       return engine;
     })()
@@ -486,48 +354,17 @@ export class TtsRuntime extends EventEmitter {
     return this.engineLoading;
   }
 
-  private async ensureCpal(): Promise<CpalOutputModule> {
-    if (!this.cpal) {
-      this.cpal = await this.loadCpal();
-    }
-    // The output wrapper is released whenever playback is interrupted, so
-    // recreate it for every new playback session instead of only on load.
-    this.output ??= new WarmCpalOutput(this.cpal);
-    return this.cpal;
-  }
-
-  private async ensureOutput(
-    engineRate: number,
-  ): Promise<{ output: OpenedCpalOutput; resampler?: LinearResamplerLike; channels: number }> {
-    await this.ensureCpal();
-    const opened = this.output!.ensureDefault();
-    if (opened.config.sampleRate !== engineRate) {
-      if (!this.resampler || this.resamplerRate !== opened.config.sampleRate) {
-        if (!this.sherpa) throw new Error("语音合成引擎尚未加载。");
-        this.resampler = new this.sherpa.LinearResampler(engineRate, opened.config.sampleRate);
-        this.resamplerRate = opened.config.sampleRate;
-      }
-    } else {
-      this.resampler = undefined;
-      this.resamplerRate = 0;
-    }
-    return { output: opened, resampler: this.resampler, channels: opened.config.channels };
-  }
-
-  private adaptToOutput(
-    samples: Float32Array,
-    resampler: LinearResamplerLike | undefined,
-    channels: number,
-  ): Float32Array {
-    const mono = resampler ? resampler.resample(samples) : samples;
-    if (channels <= 1 || !mono.length) return mono;
-    const stereo = new Float32Array(mono.length * channels);
-    for (let index = 0; index < mono.length; index += 1) {
-      for (let channel = 0; channel < channels; channel += 1) {
-        stereo[index * channels + channel] = mono[index] ?? 0;
-      }
-    }
-    return stereo;
+  private async openPlayback(sampleRate: number, generation: number): Promise<DedicatedPlayback> {
+    this.speakerModule ??= await this.loadSpeaker();
+    const speaker = await this.speakerModule.Speaker.open({
+      sampleRate,
+      channels: 1,
+      dtype: "float32",
+    });
+    return new DedicatedPlayback({
+      speaker,
+      shouldStop: () => generation !== this.playbackGeneration,
+    });
   }
 
   /**
@@ -556,9 +393,12 @@ export class TtsRuntime extends EventEmitter {
   }
 
   private enqueue(requestId: string, text: string): void {
-    const trimmed = text.trim();
-    if (!trimmed || this.engineLoadFailed) return;
-    this.queue.push({ requestId, text: trimmed });
+    // Keep a final safety boundary immediately before the native Melo addon.
+    // Its zero-token failure path terminates the Electron process instead of
+    // raising a recoverable JavaScript exception.
+    const cleaned = cleanTtsText(text);
+    if (!isSpeakableTtsText(cleaned) || this.engineLoadFailed) return;
+    this.queue.push({ requestId, text: cleaned });
     void this.pump();
   }
 
@@ -566,23 +406,19 @@ export class TtsRuntime extends EventEmitter {
     if (this.playing) return;
     this.playing = true;
     let failed = false;
-    let playback: PacedPlayback | undefined;
+    let playback: DedicatedPlayback | undefined;
     try {
       while (this.queue.length && this.config.enabled) {
         const generation = this.playbackGeneration;
         const engine = await this.loadEngine();
         if (generation !== this.playbackGeneration) break;
-        const speaker = Math.min(this.config.speaker, Math.max(0, engine.numSpeakers - 1));
-        const { output, resampler, channels } = await this.ensureOutput(engine.sampleRate);
-        if (generation !== this.playbackGeneration || !this.cpal) break;
-
-        playback = new PacedPlayback({
-          cpal: this.cpal,
-          stream: output.stream,
-          deviceName: output.device.name,
-          adapt: (samples) => this.adaptToOutput(samples, resampler, channels),
-          shouldStop: () => generation !== this.playbackGeneration,
-        });
+        const speakerId = Math.min(this.config.speaker, Math.max(0, engine.numSpeakers - 1));
+        playback = await this.openPlayback(engine.sampleRate, generation);
+        if (generation !== this.playbackGeneration) {
+          playback.stop();
+          break;
+        }
+        this.activePlayback = playback;
         const activePlayback = playback;
 
         // Pipeline: synthesized chunks are pushed to the single continuous
@@ -596,7 +432,7 @@ export class TtsRuntime extends EventEmitter {
           const cancelled = await this.generateSentenceInto(
             engine,
             item,
-            speaker,
+            speakerId,
             generation,
             (chunk) => activePlayback.push(chunk),
           );
@@ -604,7 +440,12 @@ export class TtsRuntime extends EventEmitter {
         }
         if (generation !== this.playbackGeneration) break;
         await activePlayback.drain();
+        if (activePlayback.underrunCount > REPORTABLE_UNDERRUN_SAMPLES) {
+          console.warn(`TTS playback inserted ${activePlayback.underrunCount} silence samples after underruns.`);
+        }
         if (generation !== this.playbackGeneration) break;
+        activePlayback.stop();
+        if (this.activePlayback === activePlayback) this.activePlayback = undefined;
       }
     } catch (error) {
       failed = true;
@@ -622,7 +463,8 @@ export class TtsRuntime extends EventEmitter {
         this.publish({ phase: "error", message: "语音朗读播放失败。", error: message(error) });
       }
     } finally {
-      playback?.dispose();
+      playback?.stop();
+      if (this.activePlayback === playback) this.activePlayback = undefined;
       this.playing = false;
       if (failed || !this.config.enabled) return;
       if (!this.queue.length) {
@@ -691,9 +533,8 @@ export class TtsRuntime extends EventEmitter {
   private stopPlayback(): void {
     this.playbackGeneration += 1;
     this.queue = [];
-    // Closing the stream stops the current sound immediately.
-    this.output?.close();
-    this.output = undefined;
+    this.activePlayback?.stop();
+    this.activePlayback = undefined;
     this.publishIdleState();
   }
 

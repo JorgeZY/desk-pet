@@ -145,29 +145,24 @@ export function resolveTtsModelPaths(modelDirectory: string): TtsModelPaths {
     model: join(directory, "model.onnx"),
     lexicon: join(directory, "lexicon.txt"),
     tokens: join(directory, "tokens.txt"),
-    dataDir: join(root, TTS_DATA_DIRECTORY),
   };
 }
 
 function pathsFromDiscovery(root: string, discovered: DiscoveredTtsModel): TtsModelPaths {
-  return { root, directory: dirname(discovered.model), ...discovered };
+  const directory = dirname(discovered.model);
+  // The official Melo zh_en frontend is lexicon-based. Passing espeak data to
+  // it changes Chinese phonemization and produces short, unintelligible audio.
+  // Other imported VITS models may still require espeak, so keep it for them.
+  const dataDir = basename(directory).toLowerCase() === TTS_MODEL_DIRECTORY
+    ? undefined
+    : discovered.dataDir;
+  return { root, directory, ...discovered, dataDir };
 }
 
 async function hasRequiredFiles(directory: string): Promise<boolean> {
   return (
     await Promise.all(TTS_MODEL_FILES.map((file) => pathExists(join(directory, file))))
   ).every(Boolean);
-}
-
-async function espeakDataReady(directory: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(directory);
-    if (!stat.isDirectory()) return false;
-    const entries = await fs.readdir(directory);
-    return entries.length > 0;
-  } catch {
-    return false;
-  }
 }
 
 async function writableDirectory(directory: string): Promise<void> {
@@ -278,9 +273,7 @@ export class TtsModelManager {
         return false;
       }
     }
-    this.ready =
-      (await hasRequiredFiles(this.managedPaths.directory)) &&
-      (await espeakDataReady(this.managedPaths.dataDir ?? ""));
+    this.ready = await hasRequiredFiles(this.managedPaths.directory);
     return this.ready;
   }
 
@@ -300,8 +293,7 @@ export class TtsModelManager {
     this.useManagedModels();
     await writableDirectory(this.modelDirectory);
     const modelReady = await hasRequiredFiles(this.managedPaths.directory);
-    const dataReady = await espeakDataReady(this.managedPaths.dataDir ?? "");
-    if (!force && modelReady && dataReady) return this.managedPaths;
+    if (!force && modelReady) return this.managedPaths;
     onProgress({ receivedBytes: 0 });
     await this.runScript({
       scriptPath: join(this.scriptDirectory, TTS_MODEL_SCRIPT),
@@ -311,9 +303,6 @@ export class TtsModelManager {
     });
     if (!(await hasRequiredFiles(this.managedPaths.directory))) {
       throw new Error("TTS 下载脚本完成，但模型文件不完整。");
-    }
-    if (!(await espeakDataReady(this.managedPaths.dataDir ?? ""))) {
-      throw new Error("TTS 下载脚本完成，但缺少 espeak-ng 发音数据。");
     }
     onProgress({ receivedBytes: 1, totalBytes: 1, percent: 100 });
     this.ready = true;

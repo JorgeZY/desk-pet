@@ -32,6 +32,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "decibri": "^5.5.0",
     "node-cpal": "^0.1.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
@@ -58,6 +59,8 @@
     "icon": "assets/app-icon.ico",
     "asar": true,
     "asarUnpack": [
+      "node_modules/decibri/**/*",
+      "node_modules/@decibri/**/*",
       "node_modules/node-cpal/**/*",
       "node_modules/uiohook-napi/**/*",
       "node_modules/sherpa-onnx-node/**/*",

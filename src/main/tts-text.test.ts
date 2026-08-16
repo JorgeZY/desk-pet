@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanTtsText, SentenceAccumulator, splitTtsSentences } from "./tts-text";
+import { cleanTtsText, isSpeakableTtsText, SentenceAccumulator, splitTtsSentences } from "./tts-text";
 
 describe("cleanTtsText", () => {
   it("keeps plain speech untouched", () => {
@@ -26,6 +26,15 @@ describe("cleanTtsText", () => {
 
   it("collapses whitespace across lines", () => {
     expect(cleanTtsText("第一行\n\n第二行")).toBe("第一行 第二行");
+  });
+
+  it("removes emoji sequences that Melo cannot tokenize", () => {
+    expect(cleanTtsText("今天也要完成哦！ 🍊✨ 👨‍💻")).toBe("今天也要完成哦！");
+    expect(isSpeakableTtsText(cleanTtsText("🍊✨"))).toBe(false);
+  });
+
+  it("removes full-width wave punctuation that Melo reports as OOV", () => {
+    expect(cleanTtsText("团子来啦～ 今天也要加油〜")).toBe("团子来啦 今天也要加油");
   });
 });
 
@@ -59,6 +68,12 @@ describe("splitTtsSentences", () => {
     expect(splitTtsSentences("")).toEqual([]);
     expect(splitTtsSentences("```\ncode only\n```")).toEqual([]);
     expect(splitTtsSentences("** **")).toEqual([]);
+  });
+
+  it("drops emoji-only and punctuation-only segments", () => {
+    expect(splitTtsSentences("🍊✨")).toEqual([]);
+    expect(splitTtsSentences("！！！...；")).toEqual([]);
+    expect(splitTtsSentences("今天也要完成哦！ 🍊✨")).toEqual(["今天也要完成哦！"]);
   });
 });
 
@@ -121,6 +136,12 @@ describe("SentenceAccumulator", () => {
   it("handles newline-separated lines as sentence boundaries", () => {
     const accumulator = new SentenceAccumulator();
     expect(accumulator.feed("第一行\n")).toEqual(["第一行"]);
+    expect(accumulator.finish()).toEqual([]);
+  });
+
+  it("does not emit an emoji-only streaming tail", () => {
+    const accumulator = new SentenceAccumulator();
+    expect(accumulator.feed("今天也要完成哦！ 🍊✨")).toEqual(["今天也要完成哦！"]);
     expect(accumulator.finish()).toEqual([]);
   });
 });

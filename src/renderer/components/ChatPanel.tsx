@@ -37,6 +37,7 @@ interface ChatPanelProps {
   onStopSpeech: (sessionId: string) => Promise<void>;
   onCancelSpeech: (sessionId: string) => Promise<void>;
   onSpeakText: (text: string) => Promise<void>;
+  onStopSpeaking: () => Promise<void>;
   onClose: () => void;
   onSettings: () => void;
   onStartRuntime: () => Promise<void>;
@@ -118,6 +119,7 @@ export function ChatPanel({
   onStopSpeech,
   onCancelSpeech,
   onSpeakText,
+  onStopSpeaking,
   onClose,
   onSettings,
   onStartRuntime,
@@ -872,11 +874,17 @@ export function ChatPanel({
                     className={`message-speak${tts.phase === "speaking" ? " message-speak--active" : ""}`}
                     type="button"
                     disabled={!tts.enabled}
-                    aria-label={tts.phase === "speaking" ? "正在朗读" : "朗读这段回答"}
-                    title={tts.enabled ? "朗读这段回答" : "请先在设置中启用语音朗读"}
-                    onClick={() => void onSpeakText(message.content)}
+                    aria-label={tts.phase === "speaking" ? "停止朗读" : "朗读这段回答"}
+                    title={
+                      !tts.enabled
+                        ? "请先在设置中启用语音朗读"
+                        : tts.phase === "speaking"
+                          ? "停止朗读"
+                          : "朗读这段回答"
+                    }
+                    onClick={() => void (tts.phase === "speaking" ? onStopSpeaking() : onSpeakText(message.content))}
                   >
-                    <PixelIcon name="volume" />
+                    <PixelIcon name={tts.phase === "speaking" ? "stop" : "volume"} />
                   </button>
                 )}
               </div>

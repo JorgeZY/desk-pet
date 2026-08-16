@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatEvent, TtsConfig, TtsState } from "../shared/types";
 import type { TtsModelManager } from "./tts-model-manager";
 import {
-  WarmCpalOutput,
-  type CpalOutputModule,
+  DedicatedPlayback,
+  type DedicatedSpeakerModule,
   type OfflineTtsLike,
   type TtsSherpaModule,
   TtsRuntime,
@@ -17,7 +17,6 @@ const modelPaths = {
   model: "C:/models/speech/vits-melo-tts-zh_en/model.onnx",
   lexicon: "C:/models/speech/vits-melo-tts-zh_en/lexicon.txt",
   tokens: "C:/models/speech/vits-melo-tts-zh_en/tokens.txt",
-  dataDir: "C:/models/speech/espeak-ng-data",
 };
 
 function fakeModels(): TtsModelManager {
@@ -51,27 +50,20 @@ function fakeSherpa(engine: OfflineTtsLike) {
     createAsync,
     module: {
       OfflineTts: { createAsync },
-      LinearResampler: class {
-        resample(samples: Float32Array): Float32Array {
-          return new Float32Array(samples);
-        }
-      },
     } satisfies TtsSherpaModule,
   };
 }
 
-function fakeCpal() {
-  const writeToStream = vi.fn();
-  const closeStream = vi.fn();
-  const createStream = vi.fn((deviceId: string) => ({ deviceId }));
-  const cpal: CpalOutputModule = {
-    getDefaultOutputDevice: () => ({ deviceId: "speaker", name: "Test speaker" }),
-    getDefaultOutputConfig: () => ({ sampleRate: 44100, channels: 2 }),
-    createStream,
-    writeToStream,
-    closeStream,
+function fakeSpeaker() {
+  const writeAsync = vi.fn(async (_chunk: Buffer) => undefined);
+  const drainAsync = vi.fn(async () => undefined);
+  const stop = vi.fn();
+  const speaker = { writeAsync, drainAsync, stop, underrunCount: 0 };
+  const open = vi.fn(async () => speaker);
+  const module: DedicatedSpeakerModule = {
+    Speaker: { open },
   };
-  return { cpal, writeToStream, closeStream, createStream };
+  return { module, speaker, writeAsync, drainAsync, stop, open };
 }
 
 async function waitUntil(check: () => boolean, timeoutMs = 2_000): Promise<void> {
@@ -86,29 +78,41 @@ function delta(requestId: string, text: string): ChatEvent {
   return { requestId, type: "delta", text };
 }
 
-describe("WarmCpalOutput", () => {
-  it("keeps the default output stream open and rebuilds it after a device switch", () => {
-    let device = { deviceId: "built-in", name: "Built-in speaker" };
-    const cpal: CpalOutputModule = {
-      getDefaultOutputDevice: () => device,
-      getDefaultOutputConfig: vi.fn(() => ({ sampleRate: 44100, channels: 2 })),
-      createStream: vi.fn((deviceId: string) => ({ deviceId })),
-      writeToStream: vi.fn(),
-      closeStream: vi.fn(),
-    };
-    const output = new WarmCpalOutput(cpal);
+describe("DedicatedPlayback", () => {
+  it("copies PCM chunks, writes them in order, and waits for native drain", async () => {
+    const { speaker, writeAsync, drainAsync } = fakeSpeaker();
+    const playback = new DedicatedPlayback({ speaker, shouldStop: () => false });
+    const first = new Float32Array([0.1, -0.2]);
+    const second = new Float32Array([0.3]);
 
-    expect(output.ensureDefault().device.deviceId).toBe("built-in");
-    expect(output.ensureDefault().device.deviceId).toBe("built-in");
-    expect(cpal.createStream).toHaveBeenCalledTimes(1);
+    playback.push(first);
+    playback.push(second);
+    first.fill(0);
+    await playback.drain();
 
-    device = { deviceId: "headset", name: "USB headset" };
-    expect(output.ensureDefault().device.deviceId).toBe("headset");
-    expect(cpal.createStream).toHaveBeenCalledTimes(2);
-    expect(cpal.closeStream).toHaveBeenCalledWith({ deviceId: "built-in" });
+    expect(writeAsync).toHaveBeenCalledTimes(2);
+    const firstWritten = writeAsync.mock.calls[0]![0];
+    const secondWritten = writeAsync.mock.calls[1]![0];
+    expect([...new Float32Array(firstWritten.buffer, firstWritten.byteOffset, firstWritten.byteLength / 4)]).toEqual([
+      expect.closeTo(0.1),
+      expect.closeTo(-0.2),
+    ]);
+    expect([...new Float32Array(secondWritten.buffer, secondWritten.byteOffset, secondWritten.byteLength / 4)]).toEqual([
+      expect.closeTo(0.3),
+    ]);
+    expect(drainAsync).toHaveBeenCalledOnce();
+  });
 
-    output.close();
-    expect(cpal.closeStream).toHaveBeenCalledTimes(2);
+  it("stops native playback immediately", async () => {
+    const { speaker, stop, writeAsync } = fakeSpeaker();
+    const playback = new DedicatedPlayback({ speaker, shouldStop: () => false });
+
+    playback.stop();
+    playback.push(new Float32Array([0.1]));
+    await playback.drain();
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(writeAsync).not.toHaveBeenCalled();
   });
 });
 
@@ -116,10 +120,10 @@ describe("TtsRuntime", () => {
   it("streams chat deltas into sentence playback and returns to ready", async () => {
     const { engine, generateAsync } = fakeEngine();
     const { createAsync, module } = fakeSherpa(engine);
-    const { cpal, writeToStream } = fakeCpal();
+    const { module: speakerModule, writeAsync, open } = fakeSpeaker();
     const runtime = new TtsRuntime(config, fakeModels(), {
       loadSherpa: async () => module,
-      loadCpal: async () => cpal,
+      loadSpeaker: async () => speakerModule,
     });
     const states: TtsState[] = [];
     runtime.on("state", (state: TtsState) => states.push(state));
@@ -146,7 +150,6 @@ describe("TtsRuntime", () => {
             model: modelPaths.model,
             tokens: modelPaths.tokens,
             lexicon: modelPaths.lexicon,
-            dataDir: modelPaths.dataDir,
           }),
           debug: false,
           numThreads: 2,
@@ -156,16 +159,38 @@ describe("TtsRuntime", () => {
       }),
     );
     expect(states.some((state) => state.phase === "speaking" && state.speakingRequestId === "r1")).toBe(true);
-    expect(writeToStream).toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith({ sampleRate: 22050, channels: 1, dtype: "float32" });
+    expect(writeAsync).toHaveBeenCalled();
+  });
+
+  it("never sends an emoji-only streaming tail to the native engine", async () => {
+    const { engine, generateAsync } = fakeEngine();
+    const { module } = fakeSherpa(engine);
+    const { module: speakerModule } = fakeSpeaker();
+    const runtime = new TtsRuntime(config, fakeModels(), {
+      loadSherpa: async () => module,
+      loadSpeaker: async () => speakerModule,
+    });
+
+    await runtime.initializeAvailability();
+    runtime.onChatStart("r1");
+    runtime.onChatEvent(delta("r1", "今天也要把完成写在日历上哦！ 🍊✨"));
+    runtime.onChatEvent({ requestId: "r1", type: "done" });
+
+    await waitUntil(() => generateAsync.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(generateAsync.mock.calls.map((call) => call[0].text)).toEqual([
+      "今天也要把完成写在日历上哦！",
+    ]);
   });
 
   it("interrupts the current request and stops playback immediately", async () => {
     const { engine, generateAsync } = fakeEngine(60);
     const { module } = fakeSherpa(engine);
-    const { cpal, closeStream } = fakeCpal();
+    const { module: speakerModule, stop } = fakeSpeaker();
     const runtime = new TtsRuntime(config, fakeModels(), {
       loadSherpa: async () => module,
-      loadCpal: async () => cpal,
+      loadSpeaker: async () => speakerModule,
     });
     const states: TtsState[] = [];
     runtime.on("state", (state: TtsState) => states.push(state));
@@ -183,16 +208,16 @@ describe("TtsRuntime", () => {
       states.some((state) => state.phase === "ready" && state.speakingRequestId === undefined),
     );
     expect(generateAsync).toHaveBeenCalledTimes(1);
-    expect(closeStream).toHaveBeenCalled();
+    expect(stop).toHaveBeenCalled();
   });
 
   it("starts a new request by discarding the previous queue", async () => {
     const { engine, generateAsync } = fakeEngine();
     const { module } = fakeSherpa(engine);
-    const { cpal } = fakeCpal();
+    const { module: speakerModule } = fakeSpeaker();
     const runtime = new TtsRuntime(config, fakeModels(), {
       loadSherpa: async () => module,
-      loadCpal: async () => cpal,
+      loadSpeaker: async () => speakerModule,
     });
 
     await runtime.initializeAvailability();
@@ -210,10 +235,10 @@ describe("TtsRuntime", () => {
   it("speaks preview text split into sentences in order", async () => {
     const { engine, generateAsync } = fakeEngine();
     const { module } = fakeSherpa(engine);
-    const { cpal } = fakeCpal();
+    const { module: speakerModule } = fakeSpeaker();
     const runtime = new TtsRuntime(config, fakeModels(), {
       loadSherpa: async () => module,
-      loadCpal: async () => cpal,
+      loadSpeaker: async () => speakerModule,
     });
 
     await runtime.initializeAvailability();
@@ -229,10 +254,10 @@ describe("TtsRuntime", () => {
   it("stays silent while disabled", async () => {
     const { engine, generateAsync } = fakeEngine();
     const { module } = fakeSherpa(engine);
-    const { cpal } = fakeCpal();
+    const { module: speakerModule } = fakeSpeaker();
     const runtime = new TtsRuntime({ ...config, enabled: false }, fakeModels(), {
       loadSherpa: async () => module,
-      loadCpal: async () => cpal,
+      loadSpeaker: async () => speakerModule,
     });
 
     runtime.onChatEvent(delta("r1", "你好。"));
@@ -247,10 +272,10 @@ describe("TtsRuntime", () => {
   it("skips playback while the shouldSilence guard is active", async () => {
     const { engine, generateAsync } = fakeEngine();
     const { module } = fakeSherpa(engine);
-    const { cpal } = fakeCpal();
+    const { module: speakerModule } = fakeSpeaker();
     const runtime = new TtsRuntime(config, fakeModels(), {
       loadSherpa: async () => module,
-      loadCpal: async () => cpal,
+      loadSpeaker: async () => speakerModule,
       shouldSilence: () => true,
     });
 
@@ -264,10 +289,10 @@ describe("TtsRuntime", () => {
   it("clamps the speaker id to the model range", async () => {
     const { engine, generateAsync } = fakeEngine();
     const { module } = fakeSherpa(engine);
-    const { cpal } = fakeCpal();
+    const { module: speakerModule } = fakeSpeaker();
     const runtime = new TtsRuntime({ ...config, speaker: 99 }, fakeModels(), {
       loadSherpa: async () => module,
-      loadCpal: async () => cpal,
+      loadSpeaker: async () => speakerModule,
     });
 
     await runtime.initializeAvailability();
@@ -280,10 +305,15 @@ describe("TtsRuntime", () => {
   it("reopens the output stream after playback was stopped", async () => {
     const { engine, generateAsync } = fakeEngine();
     const { module } = fakeSherpa(engine);
-    const { cpal, createStream } = fakeCpal();
+    const firstSpeaker = fakeSpeaker();
+    const secondSpeaker = fakeSpeaker();
+    const open = vi.fn()
+      .mockResolvedValueOnce(firstSpeaker.speaker)
+      .mockResolvedValueOnce(secondSpeaker.speaker);
+    const speakerModule: DedicatedSpeakerModule = { Speaker: { open } };
     const runtime = new TtsRuntime(config, fakeModels(), {
       loadSherpa: async () => module,
-      loadCpal: async () => cpal,
+      loadSpeaker: async () => speakerModule,
     });
 
     await runtime.initializeAvailability();
@@ -295,6 +325,6 @@ describe("TtsRuntime", () => {
     await waitUntil(() => generateAsync.mock.calls.length === 2);
 
     expect(generateAsync.mock.calls.map((call) => call[0].text)).toEqual(["第一句。", "第二句。"]);
-    expect(createStream).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenCalledTimes(2);
   });
 });

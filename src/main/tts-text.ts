@@ -9,6 +9,8 @@
 
 const SENTENCE_END = /[。！？!?；;…]|\.{3,}/gu;
 const MAX_SENTENCE_LENGTH = 120;
+const UNSPEAKABLE_EMOJI = /[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0e\ufe0f\u20e3]/gu;
+const SPEAKABLE_CONTENT = /[\p{L}\p{N}]/u;
 
 const FENCE_PATTERN = /^(\s*)(```|~~~)/u;
 
@@ -50,11 +52,19 @@ export function cleanTtsText(text: string): string {
   return lines
     .join(" ")
     .replace(/[*_~`|]/gu, "")
+    // Melo logs emoji as OOV. An emoji-only segment yields zero token IDs
+    // and can crash the native addon, so remove the whole emoji sequence.
+    .replace(UNSPEAKABLE_EMOJI, " ")
     // Punctuation the melo lexicon has no entry for: the engine would skip
     // it with a console warning per character, so replace it with a pause.
-    .replace(/[（）：“”‘’—…·]/gu, " ")
+    .replace(/[（）：“”‘’—…·～〜]/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
+}
+
+/** Native Melo synthesis requires at least one tokenizable-looking word/number. */
+export function isSpeakableTtsText(text: string): boolean {
+  return SPEAKABLE_CONTENT.test(text);
 }
 
 /**
@@ -76,7 +86,7 @@ export function splitTtsSentences(text: string, maxLength = MAX_SENTENCE_LENGTH)
 
   const segments: string[] = [];
   for (const sentence of sentences) {
-    if (sentence) splitLongSentence(sentence, maxLength, segments);
+    if (isSpeakableTtsText(sentence)) splitLongSentence(sentence, maxLength, segments);
   }
   return segments;
 }
@@ -87,7 +97,7 @@ function isComma(char: string): boolean {
 
 function splitLongSentence(sentence: string, maxLength: number, out: string[]): void {
   if (sentence.length <= maxLength) {
-    out.push(sentence);
+    if (isSpeakableTtsText(sentence)) out.push(sentence);
     return;
   }
   let rest = sentence;
@@ -98,10 +108,11 @@ function splitLongSentence(sentence: string, maxLength: number, out: string[]): 
     }
     const lower = Math.floor(maxLength * 0.6);
     const cut = commas.find((index) => index >= lower) ?? commas[commas.length - 1] ?? maxLength;
-    out.push(rest.slice(0, cut).trim());
+    const segment = rest.slice(0, cut).trim();
+    if (isSpeakableTtsText(segment)) out.push(segment);
     rest = rest.slice(cut).trimStart();
   }
-  if (rest) out.push(rest);
+  if (isSpeakableTtsText(rest)) out.push(rest);
 }
 
 interface Extraction {

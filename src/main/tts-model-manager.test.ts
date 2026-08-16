@@ -20,12 +20,10 @@ async function temporaryDirectory(): Promise<string> {
 
 async function installManagedModel(directory: string, paths = resolveTtsModelPaths(directory)): Promise<void> {
   await fs.mkdir(paths.directory, { recursive: true });
-  await fs.mkdir(paths.dataDir!, { recursive: true });
   await Promise.all([
     fs.writeFile(paths.model, "model"),
     fs.writeFile(paths.lexicon, "lexicon"),
     fs.writeFile(paths.tokens, "tokens"),
-    fs.writeFile(join(paths.dataDir!, "phontab"), "data"),
   ]);
 }
 
@@ -38,7 +36,7 @@ afterEach(async () => {
 });
 
 describe("TtsModelManager", () => {
-  it("keeps the TTS model and espeak data under the shared speech root", () => {
+  it("keeps the managed Melo model under the shared speech root without espeak data", () => {
     const paths = resolveTtsModelPaths(join("application", "models"));
     expect(paths.root).toBe(join("application", "models", "speech"));
     expect(paths.model).toBe(
@@ -46,7 +44,7 @@ describe("TtsModelManager", () => {
     );
     expect(paths.lexicon).toContain("lexicon.txt");
     expect(paths.tokens).toContain("tokens.txt");
-    expect(paths.dataDir).toBe(join("application", "models", "speech", "espeak-ng-data"));
+    expect(paths.dataDir).toBeUndefined();
   });
 
   it("reuses complete cached models without running the download script", async () => {
@@ -63,7 +61,7 @@ describe("TtsModelManager", () => {
     ).resolves.toEqual(paths);
   });
 
-  it("runs the download script when the model or espeak data is missing", async () => {
+  it("runs the download script when the managed model is missing", async () => {
     const directory = await temporaryDirectory();
     const scriptDirectory = join(directory, "scripts");
     const paths = resolveTtsModelPaths(directory);
@@ -92,7 +90,7 @@ describe("TtsModelManager", () => {
 
   it("discovers a model and its espeak data from an imported directory", async () => {
     const directory = await temporaryDirectory();
-    const modelDirectory = join(directory, "my-models", "vits-melo-tts-zh_en");
+    const modelDirectory = join(directory, "my-models", "custom-vits");
     const dataDirectory = join(directory, "my-models", "espeak-ng-data");
     await fs.mkdir(modelDirectory, { recursive: true });
     await fs.mkdir(dataDirectory, { recursive: true });
@@ -112,6 +110,25 @@ describe("TtsModelManager", () => {
     expect(paths.model).toBe(join(modelDirectory, "model.onnx"));
     expect(manager.displayedDirectory).toBe(directory);
     await expect(manager.isReady()).resolves.toBe(true);
+  });
+
+  it("does not attach espeak data to an imported official Melo zh_en model", async () => {
+    const directory = await temporaryDirectory();
+    const modelDirectory = join(directory, "vits-melo-tts-zh_en");
+    const dataDirectory = join(directory, "espeak-ng-data");
+    await fs.mkdir(modelDirectory, { recursive: true });
+    await fs.mkdir(dataDirectory, { recursive: true });
+    await Promise.all([
+      fs.writeFile(join(modelDirectory, "model.onnx"), "model"),
+      fs.writeFile(join(modelDirectory, "lexicon.txt"), "lexicon"),
+      fs.writeFile(join(modelDirectory, "tokens.txt"), "tokens"),
+      fs.writeFile(join(dataDirectory, "phontab"), "data"),
+    ]);
+
+    const manager = new TtsModelManager(directory, join(directory, "scripts"));
+    const paths = await manager.importFromDirectory(directory);
+
+    expect(paths.dataDir).toBeUndefined();
   });
 
   it("rejects directories without a complete TTS model", async () => {

@@ -342,6 +342,7 @@ export function App() {
           onStopSpeech={stopSpeech}
           onCancelSpeech={cancelSpeech}
           onSpeakText={speakText}
+          onStopSpeaking={stopSpeaking}
           onClose={() => void transitionToView("pet")}
           onSettings={() => void transitionToView("settings")}
           onStartRuntime={startRuntime}

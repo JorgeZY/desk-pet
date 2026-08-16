@@ -9,14 +9,11 @@ $ErrorActionPreference = 'Stop'
 $speechModels = Join-Path $ModelRoot 'speech'
 $downloads = Join-Path $ModelRoot '.downloads'
 $target = Join-Path $speechModels 'vits-melo-tts-zh_en'
-$dataTarget = Join-Path $speechModels 'espeak-ng-data'
 $staging = Join-Path $speechModels '.tts-model-download'
 
 # Primary source: official GitHub release archives.
 $modelArchive = Join-Path $downloads 'vits-melo-tts-zh_en.tar.bz2'
-$dataArchive = Join-Path $downloads 'espeak-ng-data.tar.bz2'
 $modelUrl = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts-zh_en.tar.bz2'
-$dataUrl = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/espeak-ng-data.tar.bz2'
 
 # Fallback source: Hugging Face mirror (hf-mirror.com), same files, China-friendly.
 $hfModelFiles = @(
@@ -24,18 +21,10 @@ $hfModelFiles = @(
   @{ Name = 'lexicon.txt'; Url = 'https://hf-mirror.com/csukuangfj/vits-melo-tts-zh_en/resolve/main/lexicon.txt'; MinBytes = 1MB },
   @{ Name = 'tokens.txt'; Url = 'https://hf-mirror.com/csukuangfj/vits-melo-tts-zh_en/resolve/main/tokens.txt'; MinBytes = 100 }
 )
-# Minimal espeak-ng data set validated to initialize the melo zh_en frontend:
-# phontab/phonindex/phondata plus English/Chinese dictionaries and intonations.
-$hfEspeakFiles = @(
-  'phondata', 'phonindex', 'phontab', 'en_dict', 'cmn_dict', 'yue_dict', 'intonations'
-)
-
 function Test-TtsModelReady {
   (Test-Path -LiteralPath (Join-Path $target 'model.onnx')) -and
     (Test-Path -LiteralPath (Join-Path $target 'lexicon.txt')) -and
-    (Test-Path -LiteralPath (Join-Path $target 'tokens.txt')) -and
-    (Test-Path -LiteralPath $dataTarget) -and
-    ((Get-ChildItem -LiteralPath $dataTarget -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0)
+    (Test-Path -LiteralPath (Join-Path $target 'tokens.txt'))
 }
 
 function Test-CachedModel {
@@ -106,13 +95,6 @@ function Install-ModelFromHfMirror {
   }
 }
 
-function Install-EspeakFromHfMirror {
-  New-Item -ItemType Directory -Force -Path $dataTarget | Out-Null
-  foreach ($name in $hfEspeakFiles) {
-    Get-WithRetry "https://hf-mirror.com/csukuangfj/kokoro-multi-lang-v1_0/resolve/main/espeak-ng-data/$name" (Join-Path $dataTarget $name) 3 300 100
-  }
-}
-
 try {
   if (-not $Force -and (Test-CachedModel)) {
     Write-Host 'Reusing cached VITS Melo model files.'
@@ -127,26 +109,11 @@ try {
     }
   }
 
-  if (-not $Force -and (Test-Path -LiteralPath $dataTarget) -and
-      ((Get-ChildItem -LiteralPath $dataTarget -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0)) {
-    Write-Host 'Reusing cached espeak-ng data.'
-  } else {
-    try {
-      Get-WithRetry $dataUrl $dataArchive 2 300 1MB
-      Expand-ArchiveInto $dataArchive $staging $dataTarget 'espeak-ng-data'
-    } catch {
-      Write-Host "GitHub download unavailable, falling back to the HF mirror: $($_.Exception.Message)"
-      Remove-Item -LiteralPath $dataArchive -Force -ErrorAction SilentlyContinue
-      Install-EspeakFromHfMirror
-    }
-  }
-
   if (-not (Test-TtsModelReady)) {
-    throw 'TTS model or espeak-ng data is incomplete after download.'
+    throw 'TTS model is incomplete after download.'
   }
 } finally {
   Remove-Item -LiteralPath $modelArchive -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $dataArchive -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
 }
 
