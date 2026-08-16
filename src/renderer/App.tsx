@@ -6,6 +6,7 @@ import type {
   RuntimeState,
   SpeechEvent,
   SpeechState,
+  TtsState,
   WindowMode,
 } from "../shared/types";
 import { ChatPanel } from "./components/ChatPanel";
@@ -23,6 +24,7 @@ export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapData | null>(null);
   const [runtime, setRuntime] = useState<RuntimeState | null>(null);
   const [speech, setSpeech] = useState<SpeechState | null>(null);
+  const [tts, setTts] = useState<TtsState | null>(null);
   const [view, setView] = useState<WindowMode>("pet");
   const [fatalError, setFatalError] = useState("");
   const [draft, setDraft] = useState("");
@@ -72,6 +74,7 @@ export function App() {
         setBootstrap(data);
         setRuntime(data.runtime);
         setSpeech(data.speech);
+        setTts(data.tts);
         const requestedView = new URLSearchParams(location.search).get("view");
         const isKnownView =
           requestedView === "pet" ||
@@ -114,8 +117,45 @@ export function App() {
     }
   };
 
+  const prepareTts = async (force = false) => {
+    if (!window.confirm(force
+      ? "将重新下载约 170 MB 的本地语音朗读模型，是否继续？"
+      : "首次使用语音朗读需要下载约 170 MB 的本地模型（含发音数据）。模型将保存到项目或应用旁的 models/speech，是否继续？")) return;
+    try {
+      setTts(await window.desktopPet.prepareTts(force));
+    } catch (error) {
+      console.error("Failed to prepare local TTS models:", error);
+    }
+  };
+
+  const importTtsModels = async () => {
+    try {
+      const state = await window.desktopPet.importTtsModels();
+      if (state) setTts(state);
+    } catch (error) {
+      console.error("Failed to import local TTS models:", error);
+    }
+  };
+
+  const speakText = async (text: string) => {
+    try {
+      setTts(await window.desktopPet.speakText(text));
+    } catch (error) {
+      console.error("Failed to speak text:", error);
+    }
+  };
+
+  const stopSpeaking = async () => {
+    try {
+      setTts(await window.desktopPet.stopSpeaking());
+    } catch (error) {
+      console.error("Failed to stop speaking:", error);
+    }
+  };
+
   useEffect(() => {
     const unsubscribeState = window.desktopPet.onSpeechState(setSpeech);
+    const unsubscribeTtsState = window.desktopPet.onTtsState(setTts);
     const unsubscribeEvent = window.desktopPet.onSpeechEvent((event: SpeechEvent) => {
       if (event.type === "setup-required") {
         void prepareSpeech();
@@ -169,6 +209,7 @@ export function App() {
     });
     return () => {
       unsubscribeState();
+      unsubscribeTtsState();
       unsubscribeEvent();
       if (globalSpeechTimerRef.current) clearTimeout(globalSpeechTimerRef.current);
     };
@@ -184,7 +225,9 @@ export function App() {
         ? "thinking"
         : runtime.phase === "stopped"
           ? "sleeping"
-          : "idle";
+          : tts?.phase === "speaking"
+            ? "talking"
+            : "idle";
 
   const finishOnboarding = async (nextConfig: RuntimeConfig) => {
     const data = await window.desktopPet.saveConfig(nextConfig);
@@ -253,7 +296,7 @@ export function App() {
     );
   }
 
-  if (!bootstrap || !runtime || !speech) {
+  if (!bootstrap || !runtime || !speech || !tts) {
     return (
       <main className="loading-screen" aria-busy="true">
         <div className="loading-pet" aria-hidden="true">
@@ -288,6 +331,7 @@ export function App() {
         <ChatPanel
           runtime={runtime}
           speech={speech}
+          tts={tts}
           draft={draft}
           images={draftImages}
           onDraftChange={updateDraft}
@@ -297,6 +341,8 @@ export function App() {
           onStartSpeech={startSpeech}
           onStopSpeech={stopSpeech}
           onCancelSpeech={cancelSpeech}
+          onSpeakText={speakText}
+          onStopSpeaking={stopSpeaking}
           onClose={() => void transitionToView("pet")}
           onSettings={() => void transitionToView("settings")}
           onStartRuntime={startRuntime}
@@ -313,8 +359,13 @@ export function App() {
           initialConfig={bootstrap.config}
           runtime={runtime}
           speech={speech}
+          tts={tts}
           onPrepareSpeech={prepareSpeech}
           onImportSpeech={importSpeechModels}
+          onPrepareTts={prepareTts}
+          onImportTts={importTtsModels}
+          onSpeakText={speakText}
+          onStopSpeaking={stopSpeaking}
           onClose={() => void transitionToView("pet")}
           onSave={saveSettings}
         />

@@ -12,7 +12,8 @@ export type PixelIconName =
   | "sparkle"
   | "history"
   | "plus"
-  | "trash";
+  | "trash"
+  | "volume";
 
 interface PixelIconProps {
   name: PixelIconName;
@@ -34,6 +35,7 @@ const ICON_PATHS = {
   history: "M3 2h10v2H3V2ZM2 5h12v9H2V5Zm2 2v5h8V7H4Zm2 1h4v2H6V8Z",
   plus: "M7 2h2v5h5v2H9v5H7V9H2V7h5V2Z",
   trash: "M5 1h6v2h3v2H2V3h3V1ZM3 6h10v9H3V6Zm3 2v5h1V8H6Zm3 0v5h1V8H9Z",
+  volume: "M1 5h4l4-4v14L5 11H1V5Zm9-1h1v8H9V4Zm2-2h1v12h-1V2Z",
 } satisfies Record<PixelIconName, string>;
 
 export function PixelIcon({ name, className }: PixelIconProps) {

@@ -28,6 +28,7 @@ import type {
   RuntimeConfig,
   SpeechEvent,
   SpeechState,
+  TtsState,
   WindowMode,
 } from "../shared/types";
 import {
@@ -44,6 +45,8 @@ import { migrateModelDirectory, resolveModelDirectory } from "./model-directory"
 import { ManagedModelDownloader } from "./model-downloader";
 import { SpeechModelManager } from "./speech-model-manager";
 import { SpeechRuntime } from "./speech-runtime";
+import { TtsModelManager } from "./tts-model-manager";
+import { TtsRuntime } from "./tts-runtime";
 
 const execFileAsync = promisify(execFile);
 app.setName("desk-pet");
@@ -67,6 +70,7 @@ let recommendationIdleTimer: ReturnType<typeof setInterval> | null = null;
 let config: RuntimeConfig;
 let runtime: LlamaRuntime;
 let speech: SpeechRuntime;
+let tts: TtsRuntime;
 let currentWindowMode: WindowMode = "pet";
 let shortcutHook: typeof import("uiohook-napi").uIOhook | undefined;
 let shortcutHookStarted = false;
@@ -384,6 +388,7 @@ function bootstrap(): BootstrapData {
     config,
     runtime: runtime.snapshot,
     speech: speech.snapshot,
+    tts: tts.snapshot,
     platform: process.platform,
     appVersion: app.getVersion(),
   };
@@ -424,9 +429,11 @@ function registerIpc(): void {
     config = await configStore.write({
       ...nextConfig,
       speech: { ...nextConfig.speech, modelDirectory: config.speech.modelDirectory },
+      tts: { ...nextConfig.tts, modelDirectory: config.tts.modelDirectory },
     });
     runtime.updateConfig(config);
     speech.updateConfig(config.speech);
+    tts.updateConfig(config.tts);
     configureSpeechShortcut();
     return bootstrap();
   });
@@ -468,6 +475,34 @@ function registerIpc(): void {
       speechComposerFocused = focused === true;
     }
   });
+  ipcMain.handle("tts:prepare", async (_event, force?: boolean) => {
+    config = await configStore.write({
+      ...config,
+      tts: { ...config.tts, modelDirectory: "" },
+    });
+    tts.updateConfig(config.tts);
+    return tts.prepare(force === true);
+  });
+  ipcMain.handle("tts:import", async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: "选择包含 TTS 模型（model.onnx、lexicon.txt、tokens.txt）的文件夹",
+      properties: ["openDirectory"],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    const directory = result.filePaths[0];
+    if (result.canceled || !directory) return null;
+    const state = await tts.importFromDirectory(directory);
+    config = await configStore.write({
+      ...config,
+      tts: { ...config.tts, modelDirectory: directory },
+    });
+    tts.updateConfig(config.tts);
+    return state;
+  });
+  ipcMain.handle("tts:speak", (_event, text: string) => tts.speakText(String(text)));
+  ipcMain.handle("tts:stop", () => tts.stopAll());
   ipcMain.handle("dialog:pick-executable", () =>
     pickFile("选择 llama.cpp 可执行文件", [
       { name: "llama.cpp", extensions: process.platform === "win32" ? ["exe"] : ["*"] },
@@ -516,15 +551,24 @@ function registerIpc(): void {
     await shell.openExternal(parsed.toString());
   });
   ipcMain.on("chat:start", (event, request: ChatRequest) => {
+    tts.onChatStart(request.requestId);
     void runtime.streamChat(request, (chatEvent) => {
+      tts.onChatEvent(chatEvent);
       if (!event.sender.isDestroyed()) event.sender.send("chat:event", chatEvent);
     });
   });
-  ipcMain.on("chat:abort", (_event, requestId: string) => runtime.abortChat(requestId));
+  ipcMain.on("chat:abort", (_event, requestId: string) => {
+    runtime.abortChat(requestId);
+    tts.interrupt(requestId);
+  });
 }
 
 function sendSpeechState(state: SpeechState): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("speech:state", state);
+}
+
+function sendTtsState(state: TtsState): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("tts:state", state);
 }
 
 function sendSpeechEvent(event: SpeechEvent): void {
@@ -694,6 +738,20 @@ async function initialize(): Promise<void> {
   );
   speech.on("state", sendSpeechState);
   speech.on("event", handleSpeechEvent);
+  tts = new TtsRuntime(
+    config.tts,
+    new TtsModelManager(
+      modelDirectory,
+      app.isPackaged ? join(process.resourcesPath, "scripts") : join(app.getAppPath(), "scripts"),
+      undefined,
+      config.tts.modelDirectory,
+    ),
+    {
+      threads: config.speech.threads,
+      shouldSilence: () => speech.snapshot.phase === "recording" || speech.snapshot.phase === "transcribing",
+    },
+  );
+  tts.on("state", sendTtsState);
   runtime.on("state", (state) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("runtime:state", state);
@@ -709,6 +767,7 @@ async function initialize(): Promise<void> {
   tray = createTray();
   configureSpeechShortcut();
   void speech.initializeAvailability();
+  void tts.initializeAvailability();
 
   globalShortcut.register("CommandOrControl+Shift+M", () => {
     if (mainWindow?.isVisible()) mainWindow.hide();
@@ -745,6 +804,7 @@ app.on("before-quit", () => {
   tray?.destroy();
   void runtime?.stop();
   void speech?.dispose();
+  void tts?.dispose();
   chatHistoryStore?.close();
   chatHistoryStore = null;
 });

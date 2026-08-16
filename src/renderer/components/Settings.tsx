@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { RuntimeConfig, RuntimeState, SpeechState } from "../../shared/types";
+import type { RuntimeConfig, RuntimeState, SpeechState, TtsState } from "../../shared/types";
 import { PixelIcon } from "./PixelIcon";
 import { RuntimeBadge } from "./RuntimeBadge";
 
@@ -7,13 +7,18 @@ interface SettingsProps {
   initialConfig: RuntimeConfig;
   runtime: RuntimeState;
   speech: SpeechState;
+  tts: TtsState;
   onClose: () => void;
   onSave: (config: RuntimeConfig, restart: boolean) => Promise<void>;
   onPrepareSpeech: (force?: boolean) => Promise<void>;
   onImportSpeech: () => Promise<void>;
+  onPrepareTts: (force?: boolean) => Promise<void>;
+  onImportTts: () => Promise<void>;
+  onSpeakText: (text: string) => Promise<void>;
+  onStopSpeaking: () => Promise<void>;
 }
 
-export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPrepareSpeech, onImportSpeech }: SettingsProps) {
+export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave, onPrepareSpeech, onImportSpeech, onPrepareTts, onImportTts, onSpeakText, onStopSpeaking }: SettingsProps) {
   const [config, setConfig] = useState(initialConfig);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -175,6 +180,69 @@ export function Settings({ initialConfig, runtime, speech, onClose, onSave, onPr
             ) : (
               <button className="button button--quiet" type="button" onClick={() => void onPrepareSpeech(true)} disabled={speech.phase !== "ready"}>重新下载模型</button>
             )}
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <div className="section-heading"><span>05</span><div><b>语音输出</b><small>回复由本地模型朗读，不出网</small></div></div>
+          <label className="switch-row">
+            <div><b>启用语音朗读</b><span>团子会用本地语音朗读聊天回复</span></div>
+            <input
+              type="checkbox"
+              checked={config.tts.enabled}
+              onChange={(event) => update("tts", { ...config.tts, enabled: event.target.checked })}
+            />
+          </label>
+          <div className="metric-grid metric-grid--two">
+            <label><span>语速</span><input type="number" min={0.5} max={2} step={0.1} value={config.tts.speed} onChange={(event) => update("tts", { ...config.tts, speed: Number(event.target.value) })} /></label>
+            <label><span>音色编号</span><input type="number" min={0} max={99} value={config.tts.speaker} onChange={(event) => update("tts", { ...config.tts, speaker: Math.round(Number(event.target.value)) })} /></label>
+          </div>
+          <p className="hint">官方语音朗读模型为单一音色，音色编号保持 0；导入多音色模型时可在此选择（超出范围会自动使用最后一个音色）。</p>
+          <div className="settings-info settings-info--path">
+            <span>语音朗读模型位置</span>
+            <strong title={tts.modelDirectory}>{tts.modelDirectory}</strong>
+          </div>
+          <p className={`compact-result ${tts.phase === "error" ? "failure" : tts.phase === "ready" || tts.phase === "speaking" ? "success" : ""}`}>
+            {tts.error ?? tts.message}
+            {tts.progress?.percent !== undefined ? ` ${tts.progress.percent.toFixed(1)}%` : ""}
+          </p>
+          {tts.progress && (
+            <div className={`runtime-progress ${tts.progress.percent === undefined ? "indeterminate" : ""}`}>
+              <i style={{ width: `${tts.progress.percent ?? 32}%` }} />
+            </div>
+          )}
+          <div className="button-row">
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={() => void onImportTts()}
+              disabled={tts.phase === "downloading" || tts.phase === "loading"}
+            >
+              使用本地模型
+            </button>
+            {tts.phase === "not-installed" || tts.phase === "error" ? (
+              <button className="button button--quiet" type="button" onClick={() => void onPrepareTts(false)}>自动下载</button>
+            ) : (
+              <button className="button button--quiet" type="button" onClick={() => void onPrepareTts(true)} disabled={tts.phase !== "ready"}>重新下载模型</button>
+            )}
+          </div>
+          <div className="button-row">
+            <button
+              className="button button--secondary"
+              type="button"
+              disabled={!tts.enabled || (tts.phase !== "ready" && tts.phase !== "speaking")}
+              onClick={() => void onSpeakText("你好，我是团子，很高兴见到你。")}
+            >
+              试听
+            </button>
+            <button
+              className="button button--quiet"
+              type="button"
+              disabled={tts.phase !== "speaking"}
+              onClick={() => void onStopSpeaking()}
+            >
+              停止朗读
+            </button>
           </div>
         </section>
       </div>

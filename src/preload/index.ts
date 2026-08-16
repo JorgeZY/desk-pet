@@ -7,6 +7,7 @@ import type {
   RuntimeState,
   SpeechEvent,
   SpeechState,
+  TtsState,
   WindowMode,
 } from "../shared/types";
 
@@ -23,6 +24,10 @@ const api: DesktopPetApi = {
   stopSpeech: (sessionId: string) => ipcRenderer.invoke("speech:stop", sessionId),
   cancelSpeech: (sessionId: string) => ipcRenderer.invoke("speech:cancel", sessionId),
   setSpeechComposerFocused: (focused: boolean) => ipcRenderer.send("speech:composer-focus", focused),
+  prepareTts: (force?: boolean) => ipcRenderer.invoke("tts:prepare", force),
+  importTtsModels: () => ipcRenderer.invoke("tts:import"),
+  speakText: (text: string) => ipcRenderer.invoke("tts:speak", text),
+  stopSpeaking: () => ipcRenderer.invoke("tts:stop"),
   pickExecutable: () => ipcRenderer.invoke("dialog:pick-executable"),
   pickModel: () => ipcRenderer.invoke("dialog:pick-model"),
   pickMmproj: () => ipcRenderer.invoke("dialog:pick-mmproj"),
@@ -64,6 +69,12 @@ const api: DesktopPetApi = {
       listener(payload);
     ipcRenderer.on("speech:event", wrapped);
     return () => ipcRenderer.removeListener("speech:event", wrapped);
+  },
+  onTtsState: (listener: (state: TtsState) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: TtsState): void =>
+      listener(payload);
+    ipcRenderer.on("tts:state", wrapped);
+    return () => ipcRenderer.removeListener("tts:state", wrapped);
   },
   onOpenView: (listener: (mode: WindowMode) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, mode: WindowMode): void => listener(mode);

@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   RuntimeState,
   SpeechState,
+  TtsState,
 } from "../../shared/types";
 import { clearLegacyChatHistory, readChatHistory, writeChatHistory } from "../chat-history";
 import { Pet, type PetMood } from "./Pet";
@@ -25,6 +26,7 @@ import {
 interface ChatPanelProps {
   runtime: RuntimeState;
   speech: SpeechState;
+  tts: TtsState;
   draft: string;
   images: ChatImage[];
   onDraftChange: (value: string) => void;
@@ -34,6 +36,8 @@ interface ChatPanelProps {
   onStartSpeech: () => Promise<string | undefined>;
   onStopSpeech: (sessionId: string) => Promise<void>;
   onCancelSpeech: (sessionId: string) => Promise<void>;
+  onSpeakText: (text: string) => Promise<void>;
+  onStopSpeaking: () => Promise<void>;
   onClose: () => void;
   onSettings: () => void;
   onStartRuntime: () => Promise<void>;
@@ -104,6 +108,7 @@ const ThinkingToggle = memo(function ThinkingToggle({ onChange }: ThinkingToggle
 export function ChatPanel({
   runtime,
   speech,
+  tts,
   draft,
   images,
   onDraftChange,
@@ -113,6 +118,8 @@ export function ChatPanel({
   onStartSpeech,
   onStopSpeech,
   onCancelSpeech,
+  onSpeakText,
+  onStopSpeaking,
   onClose,
   onSettings,
   onStartRuntime,
@@ -433,8 +440,9 @@ export function ChatPanel({
     if (activeRequest) {
       return messages.at(-1)?.content.trim() ? "talking" : "thinking";
     }
+    if (tts.phase === "speaking") return "talking";
     return "idle";
-  }, [activeRequest, messages, runtime.phase, speech.phase]);
+  }, [activeRequest, messages, runtime.phase, speech.phase, tts.phase]);
 
   const operationIsCurrent = (operation: ConversationOperation): boolean =>
     mountedRef.current && isCurrentConversationOperation(
@@ -861,6 +869,24 @@ export function ChatPanel({
                     </>
                   )}
                 </p>}
+                {message.role === "assistant" && message.content.trim() && (
+                  <button
+                    className={`message-speak${tts.phase === "speaking" ? " message-speak--active" : ""}`}
+                    type="button"
+                    disabled={!tts.enabled}
+                    aria-label={tts.phase === "speaking" ? "停止朗读" : "朗读这段回答"}
+                    title={
+                      !tts.enabled
+                        ? "请先在设置中启用语音朗读"
+                        : tts.phase === "speaking"
+                          ? "停止朗读"
+                          : "朗读这段回答"
+                    }
+                    onClick={() => void (tts.phase === "speaking" ? onStopSpeaking() : onSpeakText(message.content))}
+                  >
+                    <PixelIcon name={tts.phase === "speaking" ? "stop" : "volume"} />
+                  </button>
+                )}
               </div>
             </article>
           ))

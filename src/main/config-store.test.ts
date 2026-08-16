@@ -76,6 +76,34 @@ describe("runtime config", () => {
     expect(imported.speech.modelDirectory).toBe("D:\\speech-models");
   });
 
+  it("migrates tts defaults and clamps speed and speaker", () => {
+    const migrated = normalizeConfig({ ...DEFAULT_CONFIG, tts: undefined });
+    expect(migrated.tts).toEqual(DEFAULT_CONFIG.tts);
+    expect(migrated.tts.enabled).toBe(true);
+    expect(migrated.tts.speed).toBe(1);
+    expect(migrated.tts.speaker).toBe(0);
+
+    const configured = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      tts: { ...DEFAULT_CONFIG.tts, speed: 9, speaker: -4 },
+    });
+    expect(configured.tts.speed).toBe(2);
+    expect(configured.tts.speaker).toBe(0);
+
+    const slow = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      tts: { ...DEFAULT_CONFIG.tts, speed: 0.1, speaker: 300 },
+    });
+    expect(slow.tts.speed).toBe(0.5);
+    expect(slow.tts.speaker).toBe(200);
+
+    const imported = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      tts: { ...DEFAULT_CONFIG.tts, modelDirectory: " D:\\tts-models " },
+    });
+    expect(imported.tts.modelDirectory).toBe("D:\\tts-models");
+  });
+
   it("requires a GGUF file in local mode", () => {
     const missing = normalizeConfig({ ...DEFAULT_CONFIG, modelMode: "local", modelPath: "" });
     expect(validateConfig(missing)).toContain("请选择 llama.cpp 支持的 GGUF 模型。");

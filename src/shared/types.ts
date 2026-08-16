@@ -11,6 +11,13 @@ export interface SpeechConfig {
   modelDirectory: string;
 }
 
+export interface TtsConfig {
+  enabled: boolean;
+  speed: number;
+  speaker: number;
+  modelDirectory: string;
+}
+
 export interface RuntimeConfig {
   setupComplete: boolean;
   executable: string;
@@ -32,6 +39,7 @@ export interface RuntimeConfig {
   autoStart: boolean;
   systemPrompt: string;
   speech: SpeechConfig;
+  tts: TtsConfig;
 }
 
 export type RuntimePhase =
@@ -97,6 +105,31 @@ export interface SpeechState {
 
 export type SpeechSessionSource = "button" | "shortcut";
 
+export type TtsPhase =
+  | "not-installed"
+  | "downloading"
+  | "loading"
+  | "ready"
+  | "speaking"
+  | "error";
+
+export interface TtsDownloadProgress {
+  receivedBytes: number;
+  totalBytes?: number;
+  percent?: number;
+}
+
+export interface TtsState {
+  enabled: boolean;
+  phase: TtsPhase;
+  message: string;
+  modelDirectory: string;
+  speakingRequestId?: string;
+  progress?: TtsDownloadProgress;
+  error?: string;
+  updatedAt: number;
+}
+
 export type SpeechEvent =
   | { type: "setup-required" }
   | { type: "started"; sessionId: string; source: SpeechSessionSource }
@@ -115,6 +148,7 @@ export interface BootstrapData {
   config: RuntimeConfig;
   runtime: RuntimeState;
   speech: SpeechState;
+  tts: TtsState;
   platform: string;
   appVersion: string;
 }
@@ -184,6 +218,10 @@ export interface DesktopPetApi {
   stopSpeech(sessionId: string): Promise<SpeechState>;
   cancelSpeech(sessionId: string): Promise<SpeechState>;
   setSpeechComposerFocused(focused: boolean): void;
+  prepareTts(force?: boolean): Promise<TtsState>;
+  importTtsModels(): Promise<TtsState | null>;
+  speakText(text: string): Promise<TtsState>;
+  stopSpeaking(): Promise<TtsState>;
   pickExecutable(): Promise<FilePickResult | null>;
   pickModel(): Promise<FilePickResult | null>;
   pickMmproj(): Promise<FilePickResult | null>;
@@ -204,5 +242,6 @@ export interface DesktopPetApi {
   onRuntimeState(listener: (state: RuntimeState) => void): () => void;
   onSpeechState(listener: (state: SpeechState) => void): () => void;
   onSpeechEvent(listener: (event: SpeechEvent) => void): () => void;
+  onTtsState(listener: (state: TtsState) => void): () => void;
   onOpenView(listener: (mode: WindowMode) => void): () => void;
 }
