@@ -60,7 +60,6 @@ describe("PixelIcon", () => {
         onPrepare={async () => undefined}
         onStart={async () => undefined}
         onStop={async () => undefined}
-        onCancel={async () => undefined}
       />,
     );
 

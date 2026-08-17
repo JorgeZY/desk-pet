@@ -14,6 +14,7 @@ import {
   PET_YAWNING_DURATION_MS,
   petClipPlaybackSrc,
   preloadLoopingPetClips,
+  resolveSpeechPetClipMood,
 } from "./pet-clips";
 
 const clipPath = (src: string) => fileURLToPath(
@@ -90,6 +91,12 @@ function readGifDurationMs(data: Buffer) {
 }
 
 describe("pet GIF clips", () => {
+  it("keeps the idle body clip while recording", () => {
+    expect(resolveSpeechPetClipMood("recording")).toBe("idle");
+    expect(resolveSpeechPetClipMood("transcribing")).toBeUndefined();
+    expect(resolveSpeechPetClipMood("ready")).toBeUndefined();
+  });
+
   it("ships every clip as a bounded 432 x 540 GIF", () => {
     let totalBytes = 0;
     const measuredSources = new Set<string>();
@@ -148,17 +155,22 @@ describe("pet GIF clips", () => {
   });
 
   it.each([
-    ["thinking", [200, 650, 3_100, 650, 200]],
-    ["listening", [250, 900, 1_650, 900, 700]],
-  ] as const)("holds a resting endpoint around the %s action", (mood, expectedDurations) => {
+    ["thinking", [150, 400, 1_300, 400, 150]],
+    ["talking", [120, 110, 150, 100, 140, 110, 150]],
+    ["sleeping", [220, 300, 650, 480, 570, 480, 300]],
+    ["listening", [150, 450, 850, 450, 300]],
+  ] as const)("keeps the accelerated %s action cadence", (mood, expectedDurations) => {
     const data = readFileSync(clipPath(PET_CLIPS[mood].src));
     const durations = readGifFrameDurationsMs(data);
     expect(durations).toEqual(expectedDurations);
+    expect(Math.max(...durations)).toBeLessThanOrEqual(1_300);
   });
 
   it.each([
-    ["thinking", "8db7a77497a4"],
-    ["listening", "3adb18e68ec3"],
+    ["thinking", "8a452840090b"],
+    ["talking", "726019776518"],
+    ["sleeping", "af8c61e0db95"],
+    ["listening", "0c4109066f28"],
   ] as const)("binds the %s cache revision to its GIF content", (mood, revision) => {
     const media = PET_CLIPS[mood];
     const data = readFileSync(clipPath(media.src));

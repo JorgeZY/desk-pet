@@ -1,3 +1,5 @@
+import type { SpeechPhase } from "../../shared/types";
+
 export type PetMood =
   | "idle"
   | "thinking"
@@ -29,10 +31,10 @@ interface PetClip {
 export const PET_GROOMING_DURATION_MS = 2_900;
 export const PET_YAWNING_DURATION_MS = 2_560;
 export const PET_EAR_SCRATCHING_DURATION_MS = 2_500;
-export const PET_DAYDREAMING_DURATION_MS = 4_800;
-export const PET_CHEERING_DURATION_MS = 2_660;
-export const PET_DOZING_DURATION_MS = 4_700;
-export const PET_PERKING_UP_DURATION_MS = 4_400;
+export const PET_DAYDREAMING_DURATION_MS = 2_400;
+export const PET_CHEERING_DURATION_MS = 1_760;
+export const PET_DOZING_DURATION_MS = 3_000;
+export const PET_PERKING_UP_DURATION_MS = 2_200;
 
 const clip = (name: string, options: Omit<PetClip, "src">): PetClip => ({
   src: `./pet/moods/pet-${name}-v1.gif`,
@@ -42,8 +44,10 @@ const clip = (name: string, options: Omit<PetClip, "src">): PetClip => ({
 const refreshedClipSource = (name: string, revision: string) =>
   `./pet/moods/pet-${name}-v1.gif?rev=${revision}`;
 
-const THINKING_CLIP_SOURCE = refreshedClipSource("thinking", "8db7a77497a4");
-const LISTENING_CLIP_SOURCE = refreshedClipSource("listening", "3adb18e68ec3");
+const THINKING_CLIP_SOURCE = refreshedClipSource("thinking", "8a452840090b");
+const TALKING_CLIP_SOURCE = refreshedClipSource("talking", "726019776518");
+const SLEEPING_CLIP_SOURCE = refreshedClipSource("sleeping", "af8c61e0db95");
+const LISTENING_CLIP_SOURCE = refreshedClipSource("listening", "0c4109066f28");
 
 const reusedMoodClip = (
   source: string,
@@ -57,8 +61,8 @@ const reusedMoodClip = (
 export const PET_CLIPS = {
   idle: clip("idle", { loop: true }),
   thinking: { src: THINKING_CLIP_SOURCE, loop: true },
-  talking: clip("talking", { loop: true }),
-  sleeping: clip("sleeping", { loop: true }),
+  talking: { src: TALKING_CLIP_SOURCE, loop: true },
+  sleeping: { src: SLEEPING_CLIP_SOURCE, loop: true },
   sad: clip("sad", { loop: true }),
   listening: { src: LISTENING_CLIP_SOURCE, loop: true },
   transcribing: clip("transcribing", { loop: true }),
@@ -73,11 +77,11 @@ export const PET_CLIPS = {
     PET_DAYDREAMING_DURATION_MS,
   ),
   cheering: reusedMoodClip(
-    "./pet/moods/pet-talking-v1.gif",
+    TALKING_CLIP_SOURCE,
     PET_CHEERING_DURATION_MS,
   ),
   dozing: reusedMoodClip(
-    "./pet/moods/pet-sleeping-v1.gif",
+    SLEEPING_CLIP_SOURCE,
     PET_DOZING_DURATION_MS,
   ),
   "perking-up": reusedMoodClip(
@@ -91,6 +95,12 @@ export function resolvePetVisualState(
   idleAction: PetIdleAction | null,
 ): PetVisualState {
   return mood === "idle" && idleAction ? idleAction : mood;
+}
+
+export function resolveSpeechPetClipMood(phase: SpeechPhase): PetMood | undefined {
+  // Recording keeps the calm idle body and expresses listening through the
+  // SVG waves/bell. This prevents speech input from resembling a talking GIF.
+  return phase === "recording" ? "idle" : undefined;
 }
 
 export function petClipPlaybackSrc(state: PetVisualState, playbackId: string) {

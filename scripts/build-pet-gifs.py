@@ -296,6 +296,56 @@ def tint_sad(image: Image.Image) -> Image.Image:
     ).enhance(0.96)
 
 
+def visible_color_stats(image: Image.Image) -> tuple[float, float]:
+    """Return mean visible luminance and saturation for palette calibration."""
+    luminance_total = 0.0
+    saturation_total = 0.0
+    visible_pixels = 0
+    for red, green, blue, alpha in image.convert("RGBA").get_flattened_data():
+        if alpha < ALPHA_THRESHOLD:
+            continue
+        maximum = max(red, green, blue)
+        minimum = min(red, green, blue)
+        luminance_total += 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        saturation_total += 0 if maximum == 0 else (maximum - minimum) / maximum
+        visible_pixels += 1
+    if visible_pixels == 0:
+        raise ValueError("Cannot measure colors from an empty frame")
+    return luminance_total / visible_pixels, saturation_total / visible_pixels
+
+
+def match_frames_to_idle_color(
+    name: str,
+    frames: Sequence[Image.Image],
+    idle_reference: Image.Image,
+) -> list[Image.Image]:
+    """Calibrate action-sheet color grading to the established idle palette."""
+    idle_luminance, idle_saturation = visible_color_stats(idle_reference)
+    action_luminance, action_saturation = visible_color_stats(frames[0])
+    brightness = idle_luminance / action_luminance
+    saturation = idle_saturation / action_saturation
+    if not 0.8 <= brightness <= 1.25 or not 0.75 <= saturation <= 1.25:
+        raise ValueError(
+            f"{name} requires an unsafe idle color correction "
+            f"(brightness={brightness:.3f}, saturation={saturation:.3f})"
+        )
+
+    matched: list[Image.Image] = []
+    for frame in frames:
+        alpha = frame.getchannel("A")
+        rgb = ImageEnhance.Brightness(
+            ImageEnhance.Color(frame.convert("RGB")).enhance(saturation),
+        ).enhance(brightness)
+        adjusted = rgb.convert("RGBA")
+        adjusted.putalpha(alpha)
+        matched.append(adjusted)
+    print(
+        f"Matched {name} to idle colors "
+        f"(brightness={brightness:.3f}, saturation={saturation:.3f})"
+    )
+    return matched
+
+
 def build_palette(images: Iterable[Image.Image]) -> Image.Image:
     prepared: list[Image.Image] = []
     for image in images:
@@ -441,6 +491,19 @@ def validate_upright_loop_output(name: str) -> None:
         raise ValueError(f"{name} decoded action height changes too much during its loop")
 
 
+def validate_idle_color_match(name: str) -> None:
+    """Keep the rendered action palette perceptually aligned with idle."""
+    idle_frame = load_gif_frames(OUTPUT / "pet-idle-v1.gif")[0]
+    action_frames = load_gif_frames(OUTPUT / f"pet-{name}-v1.gif")
+    idle_luminance, idle_saturation = visible_color_stats(idle_frame)
+    for index, action_frame in enumerate(action_frames):
+        action_luminance, action_saturation = visible_color_stats(action_frame)
+        if abs(action_luminance - idle_luminance) > 8:
+            raise ValueError(f"{name} frame {index} luminance does not match idle")
+        if abs(action_saturation - idle_saturation) > 0.05:
+            raise ValueError(f"{name} frame {index} saturation does not match idle")
+
+
 def main() -> None:
     keyframes = load_keyframes()
     base = keyframes["base"]
@@ -479,7 +542,7 @@ def main() -> None:
         thinking_keyframes[1],
         thinking_keyframes[3],
     ]
-    thinking_durations = [200, 650, 3_100, 650, 200]
+    thinking_durations = [150, 400, 1_300, 400, 150]
 
     talking = [
         talking_keyframes[0],
@@ -490,7 +553,7 @@ def main() -> None:
         talking_keyframes[1],
         talking_keyframes[3],
     ]
-    talking_durations = [180, 170, 240, 140, 220, 160, 220]
+    talking_durations = [120, 110, 150, 100, 140, 110, 150]
 
     sleeping = [
         sleeping_keyframes[0],
@@ -501,7 +564,7 @@ def main() -> None:
         sleeping_keyframes[3],
         sleeping_keyframes[1],
     ]
-    sleeping_durations = [300, 450, 1100, 750, 900, 750, 450]
+    sleeping_durations = [220, 300, 650, 480, 570, 480, 300]
 
     sad_source = tint_sad(base)
     sad = breathe_frames(sad_source, 18, lift=0.7, stretch=0.0014, sway=0.05)
@@ -514,7 +577,9 @@ def main() -> None:
         listening_keyframes[1],
         listening_keyframes[3],
     ]
-    listening_durations = [250, 900, 1_650, 900, 700]
+    listening_durations = [150, 450, 850, 450, 300]
+    thinking = match_frames_to_idle_color("thinking", thinking, idle[0])
+    listening = match_frames_to_idle_color("listening", listening, idle[0])
     require_matching_loop_endpoints("thinking", thinking)
     require_matching_loop_endpoints("listening", listening)
 
@@ -580,6 +645,8 @@ def main() -> None:
     )
     validate_upright_loop_output("thinking")
     validate_upright_loop_output("listening")
+    validate_idle_color_match("thinking")
+    validate_idle_color_match("listening")
 
 
 if __name__ == "__main__":
