@@ -1,5 +1,6 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { SpeechState } from "../../shared/types";
+import { createHoldToTalkController } from "./hold-to-talk";
 import { PixelIcon } from "./PixelIcon";
 
 interface VoiceButtonProps {
@@ -8,7 +9,6 @@ interface VoiceButtonProps {
   onPrepare: () => Promise<void>;
   onStart: () => Promise<string | undefined>;
   onStop: (sessionId: string) => Promise<void>;
-  onCancel: (sessionId: string) => Promise<void>;
 }
 
 export function VoiceButton({
@@ -17,10 +17,12 @@ export function VoiceButton({
   onPrepare,
   onStart,
   onStop,
-  onCancel,
 }: VoiceButtonProps) {
-  const sessionRef = useRef<string | undefined>(undefined);
-  const releasedRef = useRef(false);
+  const controllerRef = useRef<ReturnType<typeof createHoldToTalkController> | null>(null);
+  if (!controllerRef.current) controllerRef.current = createHoldToTalkController();
+  useEffect(() => () => {
+    void controllerRef.current?.release();
+  }, []);
 
   const begin = async () => {
     if (speech.phase === "not-installed") {
@@ -28,28 +30,10 @@ export function VoiceButton({
       return;
     }
     if (speech.phase !== "ready" && speech.phase !== "error") return;
-    releasedRef.current = false;
-    const sessionId = await onStart();
-    sessionRef.current = sessionId;
-    if (releasedRef.current && sessionId) {
-      sessionRef.current = undefined;
-      await onStop(sessionId);
-    }
+    await controllerRef.current?.press({ start: onStart, stop: onStop });
   };
 
-  const finish = async () => {
-    releasedRef.current = true;
-    const sessionId = sessionRef.current;
-    sessionRef.current = undefined;
-    if (sessionId) await onStop(sessionId);
-  };
-
-  const cancel = async () => {
-    releasedRef.current = true;
-    const sessionId = sessionRef.current;
-    sessionRef.current = undefined;
-    if (sessionId) await onCancel(sessionId);
-  };
+  const finish = () => controllerRef.current?.release();
 
   const busy = !speech.enabled || speech.phase === "downloading" || speech.phase === "loading" || speech.phase === "transcribing";
   const label =
@@ -78,10 +62,9 @@ export function VoiceButton({
         void begin();
       }}
       onPointerUp={() => void finish()}
-      onPointerCancel={() => void cancel()}
-      onLostPointerCapture={() => {
-        if (sessionRef.current) void finish();
-      }}
+      onPointerCancel={() => void finish()}
+      onLostPointerCapture={() => void finish()}
+      onBlur={() => void finish()}
       onKeyDown={(event) => {
         if ((event.key === " " || event.key === "Enter") && !event.repeat) {
           event.preventDefault();

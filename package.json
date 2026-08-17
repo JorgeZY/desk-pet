@@ -1,7 +1,7 @@
 {
   "name": "desk-pet",
   "productName": "desk-pet",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "A model-agnostic local desktop pet powered by llama.cpp.",
   "author": "desk-pet contributors",
@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "npm run build:main && concurrently -k \"tsc -p tsconfig.main.json --watch --preserveWatchOutput\" \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
-    "build:main": "tsc -p tsconfig.main.json",
+    "clean:main": "node scripts/clean-main-build.cjs",
+    "build:main": "npm run clean:main && tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "build": "npm run typecheck && npm run build:main && npm run build:renderer",
     "test": "vitest run --root .",
@@ -36,6 +37,8 @@
     "node-cpal": "^0.1.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "sherpa-onnx-node": "^1.13.4",
     "uiohook-napi": "^1.5.5"
   },

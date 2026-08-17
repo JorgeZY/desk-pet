@@ -12,6 +12,7 @@ import type {
 import { ChatPanel } from "./components/ChatPanel";
 import { Onboarding } from "./components/Onboarding";
 import { Pet, type PetMood } from "./components/Pet";
+import { resolveSpeechPetClipMood } from "./components/pet-clips";
 import { Settings } from "./components/Settings";
 
 interface GlobalSpeechFeedback {
@@ -49,7 +50,6 @@ export function App() {
   };
 
   const transitionToView = async (nextView: WindowMode) => {
-    if (nextView === "chat") window.desktopPet.notifyChatUserActivity();
     if (viewTransitionRef.current || nextView === view) return;
     viewTransitionRef.current = true;
     const root = document.documentElement;
@@ -263,10 +263,6 @@ export function App() {
     setSpeech(await window.desktopPet.stopSpeech(sessionId));
   };
 
-  const cancelSpeech = async (sessionId: string) => {
-    setSpeech(await window.desktopPet.cancelSpeech(sessionId));
-  };
-
   const globalSpeechPhase = globalSpeech?.phase === "recording" && speech?.phase === "transcribing"
     ? "transcribing"
     : globalSpeech?.phase;
@@ -332,6 +328,7 @@ export function App() {
           runtime={runtime}
           speech={speech}
           tts={tts}
+          chatTemplates={bootstrap.config.chatTemplates}
           draft={draft}
           images={draftImages}
           onDraftChange={updateDraft}
@@ -340,7 +337,6 @@ export function App() {
           onPrepareSpeech={prepareSpeech}
           onStartSpeech={startSpeech}
           onStopSpeech={stopSpeech}
-          onCancelSpeech={cancelSpeech}
           onSpeakText={speakText}
           onStopSpeaking={stopSpeaking}
           onClose={() => void transitionToView("pet")}
@@ -382,7 +378,7 @@ export function App() {
           : speech.phase === "transcribing"
             ? "transcribing"
             : mood}
-        clipMood={speech.phase === "recording" ? "idle" : undefined}
+        clipMood={resolveSpeechPetClipMood(speech.phase)}
         windowDrag
         onClick={() => void transitionToView("chat")}
       />

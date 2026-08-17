@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { RuntimeConfig, RuntimeState, SpeechState, TtsState } from "../../shared/types";
+import { CHAT_TEMPLATE_COUNT, CHAT_TEMPLATE_MAX_LENGTH } from "../../shared/chat-templates";
 import { PixelIcon } from "./PixelIcon";
 import { RuntimeBadge } from "./RuntimeBadge";
 
@@ -18,6 +19,31 @@ interface SettingsProps {
   onStopSpeaking: () => Promise<void>;
 }
 
+interface ParameterLabelProps {
+  label: string;
+  tooltip: string;
+}
+
+function ParameterLabel({ label, tooltip }: ParameterLabelProps) {
+  const tooltipId = useId();
+  return (
+    <span className="parameter-label">
+      <span>{label}</span>
+      <span
+        className="parameter-tooltip"
+        tabIndex={0}
+        aria-label={`${label}参数说明`}
+        aria-describedby={tooltipId}
+      >
+        ?
+        <span className="parameter-tooltip__content" id={tooltipId} role="tooltip">
+          {tooltip}
+        </span>
+      </span>
+    </span>
+  );
+}
+
 export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave, onPrepareSpeech, onImportSpeech, onPrepareTts, onImportTts, onSpeakText, onStopSpeaking }: SettingsProps) {
   const [config, setConfig] = useState(initialConfig);
   const [busy, setBusy] = useState(false);
@@ -25,6 +51,15 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
 
   const update = <K extends keyof RuntimeConfig>(key: K, value: RuntimeConfig[K]) =>
     setConfig((current) => ({ ...current, [key]: value }));
+
+  const updateChatTemplate = (index: number, value: string) => {
+    const chatTemplates = Array.from(
+      { length: CHAT_TEMPLATE_COUNT },
+      (_item, templateIndex) => config.chatTemplates[templateIndex] ?? "",
+    );
+    chatTemplates[index] = value;
+    update("chatTemplates", chatTemplates);
+  };
 
   const pickModel = async () => {
     const result = await window.desktopPet.pickModel();
@@ -104,20 +139,20 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
         <section className="settings-section">
           <div className="section-heading"><span>02</span><div><b>模型参数</b><small>运行参数与常用采样设置</small></div></div>
           <div className="metric-grid metric-grid--three">
-            <label><span>上下文</span><input type="number" min={512} max={131072} step={512} value={config.contextSize} onChange={(event) => update("contextSize", Number(event.target.value))} /></label>
-            <label><span>GPU 层数</span><input type="number" min={0} max={999} value={config.gpuLayers} onChange={(event) => update("gpuLayers", Number(event.target.value))} /></label>
-            <label><span>CPU 线程</span><input type="number" min={1} max={256} value={config.threads} onChange={(event) => update("threads", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="上下文" tooltip="模型一次可参考的最大 token 数。越大越能保留长对话，但会占用更多内存或显存。" /><input type="number" min={512} max={131072} step={512} value={config.contextSize} onChange={(event) => update("contextSize", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="GPU 层数" tooltip="交给 GPU 计算的模型层数。数值越高通常越快，但需要更多显存；999 表示尽量全部卸载。" /><input type="number" min={0} max={999} value={config.gpuLayers} onChange={(event) => update("gpuLayers", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="CPU 线程" tooltip="llama.cpp 推理使用的 CPU 线程数。过高可能抢占系统资源，通常接近性能核心数即可。" /><input type="number" min={1} max={256} value={config.threads} onChange={(event) => update("threads", Number(event.target.value))} /></label>
           </div>
           <div className="metric-grid metric-grid--three">
-            <label><span>最大输出</span><input type="number" min={32} max={8192} value={config.maxTokens} onChange={(event) => update("maxTokens", Number(event.target.value))} /></label>
-            <label><span>温度</span><input type="number" min={0} max={2} step={0.1} value={config.temperature} onChange={(event) => update("temperature", Number(event.target.value))} /></label>
-            <label><span>端口</span><input type="number" min={1024} max={65535} value={config.port} onChange={(event) => update("port", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="最大输出" tooltip="每次回答最多生成的 token 数。提高后回答可以更长，也会增加生成时间。" /><input type="number" min={32} max={8192} value={config.maxTokens} onChange={(event) => update("maxTokens", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="温度" tooltip="控制随机性。较低更稳定和确定，较高更有变化但也更容易偏离事实。" /><input type="number" min={0} max={2} step={0.1} value={config.temperature} onChange={(event) => update("temperature", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="端口" tooltip="本地 llama.cpp 服务监听的端口。仅在端口冲突或连接外部本地服务时需要调整。" /><input type="number" min={1024} max={65535} value={config.port} onChange={(event) => update("port", Number(event.target.value))} /></label>
           </div>
           <div className="metric-grid metric-grid--four">
-            <label><span>Top K</span><input type="number" min={0} max={1000} value={config.topK} onChange={(event) => update("topK", Number(event.target.value))} /></label>
-            <label><span>Top P</span><input type="number" min={0} max={1} step={0.05} value={config.topP} onChange={(event) => update("topP", Number(event.target.value))} /></label>
-            <label><span>Min P</span><input type="number" min={0} max={1} step={0.01} value={config.minP} onChange={(event) => update("minP", Number(event.target.value))} /></label>
-            <label><span>重复惩罚</span><input type="number" min={0} max={2} step={0.05} value={config.repeatPenalty} onChange={(event) => update("repeatPenalty", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="Top K" tooltip="每一步只从概率最高的 K 个 token 中采样。较小更保守；0 通常表示关闭此筛选。" /><input type="number" min={0} max={1000} value={config.topK} onChange={(event) => update("topK", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="Top P" tooltip="只保留累计概率达到该值的候选 token。越低越聚焦，常与温度一起调节。" /><input type="number" min={0} max={1} step={0.05} value={config.topP} onChange={(event) => update("topP", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="Min P" tooltip="过滤相对概率过低的 token。提高可减少离题候选，但过高可能让表达单一。" /><input type="number" min={0} max={1} step={0.01} value={config.minP} onChange={(event) => update("minP", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="重复惩罚" tooltip="降低近期已出现 token 再次被选中的概率。1 表示不惩罚，略高可减少复读。" /><input type="number" min={0} max={2} step={0.05} value={config.repeatPenalty} onChange={(event) => update("repeatPenalty", Number(event.target.value))} /></label>
           </div>
         </section>
 
@@ -131,22 +166,32 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
         </section>
 
         <section className="settings-section">
-          <div className="section-heading"><span>04</span><div><b>本地语音</b><small>录音和识别均在本机完成</small></div></div>
+          <div className="section-heading"><span>04</span><div><b>快捷模板</b><small>自定义聊天首页的一键填充内容</small></div></div>
+          <div className="chat-template-settings">
+            {Array.from({ length: CHAT_TEMPLATE_COUNT }, (_item, index) => (
+              <label key={index}>
+                <span>模板 {index + 1}</span>
+                <input
+                  type="text"
+                  maxLength={CHAT_TEMPLATE_MAX_LENGTH}
+                  value={config.chatTemplates[index] ?? ""}
+                  placeholder="留空即隐藏这条模板"
+                  onChange={(event) => updateChatTemplate(index, event.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+          <p className="hint">点击模板只会填入聊天输入框，不会自动发送。</p>
+        </section>
+
+        <section className="settings-section">
+          <div className="section-heading"><span>05</span><div><b>本地语音</b><small>录音和识别均在本机完成</small></div></div>
           <label className="switch-row">
-            <div><b>启用语音输入</b><span>录音和识别始终在本机完成</span></div>
+            <div><b>启用本地语音输入</b><span>同时启用聊天框麦克风与全局 F8 按住说话</span></div>
             <input
               type="checkbox"
               checked={config.speech.enabled}
               onChange={(event) => update("speech", { ...config.speech, enabled: event.target.checked })}
-            />
-          </label>
-          <label className="switch-row">
-            <div><b>全局 F8 按住说话</b><span>在任意应用的当前输入框中输入，流式文字显示在橘猫气泡中</span></div>
-            <input
-              type="checkbox"
-              checked={config.speech.globalShortcut}
-              disabled={!config.speech.enabled}
-              onChange={(event) => update("speech", { ...config.speech, globalShortcut: event.target.checked })}
             />
           </label>
           <div className="speech-settings-row">
@@ -184,7 +229,7 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
         </section>
 
         <section className="settings-section">
-          <div className="section-heading"><span>05</span><div><b>语音输出</b><small>回复由本地模型朗读，不出网</small></div></div>
+          <div className="section-heading"><span>06</span><div><b>语音输出</b><small>回复由本地模型朗读，不出网</small></div></div>
           <label className="switch-row">
             <div><b>启用语音朗读</b><span>团子会用本地语音朗读聊天回复</span></div>
             <input
@@ -194,8 +239,8 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
             />
           </label>
           <div className="metric-grid metric-grid--two">
-            <label><span>语速</span><input type="number" min={0.5} max={2} step={0.1} value={config.tts.speed} onChange={(event) => update("tts", { ...config.tts, speed: Number(event.target.value) })} /></label>
-            <label><span>音色编号</span><input type="number" min={0} max={99} value={config.tts.speaker} onChange={(event) => update("tts", { ...config.tts, speaker: Math.round(Number(event.target.value)) })} /></label>
+            <label><ParameterLabel label="语速" tooltip="TTS 合成语音的播放节奏。1 为模型默认速度，小于 1 更慢，大于 1 更快。" /><input type="number" min={0.5} max={2} step={0.1} value={config.tts.speed} onChange={(event) => update("tts", { ...config.tts, speed: Number(event.target.value) })} /></label>
+            <label><ParameterLabel label="音色编号" tooltip="选择多音色 TTS 模型中的说话人编号。官方默认模型只有 0 号音色。" /><input type="number" min={0} max={99} value={config.tts.speaker} onChange={(event) => update("tts", { ...config.tts, speaker: Math.round(Number(event.target.value)) })} /></label>
           </div>
           <p className="hint">官方语音朗读模型为单一音色，音色编号保持 0；导入多音色模型时可在此选择（超出范围会自动使用最后一个音色）。</p>
           <div className="settings-info settings-info--path">

@@ -1,13 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { ChatConversation, ChatImage, ChatMessage } from "../shared/types";
 
 const MAX_CONVERSATIONS = 30;
-const RECOMMENDATION_CONVERSATIONS = 5;
-const RECOMMENDATION_MESSAGES = 6;
-// Keep background prompt ingestion short so it yields quickly when the user
-// returns to the composer, especially on CPU-only llama.cpp installations.
-const RECOMMENDATION_CHARACTER_LIMIT = 1600;
 
 interface ConversationRow {
   id: string;
@@ -24,11 +19,6 @@ interface MessageRow {
   reasoning: string | null;
   images_json: string | null;
   created_at: number;
-}
-
-export interface RecommendationContext {
-  fingerprint: string;
-  transcript: string;
 }
 
 interface ChatHistoryStoreOptions {
@@ -102,11 +92,6 @@ export class ChatHistoryStore {
       );
       CREATE INDEX IF NOT EXISTS messages_conversation_position
         ON messages(conversation_id, position);
-      CREATE TABLE IF NOT EXISTS recommendation_cache (
-        fingerprint TEXT PRIMARY KEY,
-        recommendations_json TEXT NOT NULL,
-        generated_at INTEGER NOT NULL
-      );
     `);
   }
 
@@ -201,78 +186,6 @@ export class ChatHistoryStore {
 
   deleteConversation(conversationId: string): void {
     this.database.prepare("DELETE FROM conversations WHERE id = ?").run(conversationId);
-  }
-
-  getRecommendationContext(): RecommendationContext | null {
-    const conversations = this.listConversations()
-      .filter((conversation) => conversation.messageCount > 0)
-      .slice(0, RECOMMENDATION_CONVERSATIONS);
-    if (!conversations.length) return null;
-
-    const transcriptParts: string[] = [];
-    let remaining = RECOMMENDATION_CHARACTER_LIMIT;
-    for (const [conversationIndex, conversation] of conversations.entries()) {
-      if (remaining <= 0) break;
-      const messages = this.database.prepare(`
-        SELECT role, content FROM (
-          SELECT role, content, position
-          FROM messages
-          WHERE conversation_id = ? AND trim(content) <> ''
-          ORDER BY position DESC
-          LIMIT ?
-        ) ORDER BY position ASC
-      `).all(conversation.id, RECOMMENDATION_MESSAGES) as unknown as Array<{
-        role: ChatMessage["role"];
-        content: string;
-      }>;
-      const section = [
-        `近期会话 ${conversationIndex + 1}`,
-        ...messages.map((message) => `${message.role === "user" ? "用户" : "助手"}：${message.content}`),
-      ].join("\n");
-      const clipped = section.slice(0, remaining);
-      if (clipped) transcriptParts.push(clipped);
-      remaining -= clipped.length;
-    }
-    if (!transcriptParts.length) return null;
-
-    const fingerprintSource = conversations
-      .map((conversation) => `${conversation.id}:${conversation.updatedAt}`)
-      .join("|");
-    return {
-      fingerprint: createHash("sha256").update(fingerprintSource).digest("hex"),
-      transcript: transcriptParts.join("\n\n").slice(0, RECOMMENDATION_CHARACTER_LIMIT),
-    };
-  }
-
-  getCachedRecommendations(fingerprint: string): string[] | null {
-    const row = this.database.prepare(`
-      SELECT recommendations_json FROM recommendation_cache WHERE fingerprint = ?
-    `).get(fingerprint) as { recommendations_json: string } | undefined;
-    if (!row) return null;
-    try {
-      const parsed = JSON.parse(row.recommendations_json) as unknown;
-      return Array.isArray(parsed) && parsed.every((item) => typeof item === "string")
-        ? parsed
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  cacheRecommendations(fingerprint: string, recommendations: string[]): void {
-    this.database.prepare(`
-      INSERT INTO recommendation_cache (fingerprint, recommendations_json, generated_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(fingerprint) DO UPDATE SET
-        recommendations_json = excluded.recommendations_json,
-        generated_at = excluded.generated_at
-    `).run(fingerprint, JSON.stringify(recommendations), this.now());
-    this.database.prepare(`
-      DELETE FROM recommendation_cache
-      WHERE fingerprint NOT IN (
-        SELECT fingerprint FROM recommendation_cache ORDER BY generated_at DESC LIMIT 10
-      )
-    `).run();
   }
 
   private requireConversation(conversationId: string): ConversationRow {

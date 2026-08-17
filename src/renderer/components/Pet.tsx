@@ -185,7 +185,7 @@ export function Pet({
             <circle cx="89" cy="10" r="5" />
           </g>
 
-          <g className="pet-talk-marks">
+          <g className="pet-talk-marks" transform="translate(6 -1)">
             <path d="M68 44c5 1 8 3 11 6" />
             <path d="M70 39c7 0 12 3 16 7" />
             <path d="M69 50c5 2 8 4 11 8" />

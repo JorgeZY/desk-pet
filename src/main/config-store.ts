@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { cpus } from "node:os";
 import { dirname, join } from "node:path";
 import type { RuntimeConfig } from "../shared/types";
+import { DEFAULT_CHAT_TEMPLATES, normalizeChatTemplates } from "../shared/chat-templates";
 
 const LEGACY_DEFAULT_SYSTEM_PROMPT =
   "你是一只住在用户桌面上的 AI 小猫，名字叫团子。你温暖、机灵、简洁，优先用中文回答。不要假装能看到屏幕或执行未提供的操作。一般回答控制在 1 到 4 个短段落；遇到技术问题时可以更详细。";
@@ -26,9 +27,9 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
   minP: 0.05,
   repeatPenalty: 1.0,
   autoStart: true,
+  chatTemplates: [...DEFAULT_CHAT_TEMPLATES],
   speech: {
     enabled: true,
-    globalShortcut: true,
     shortcut: "F8",
     threads: 2,
     language: "auto",
@@ -59,6 +60,9 @@ function normalizeSystemPrompt(value: unknown): string {
 
 export function normalizeConfig(value: unknown): RuntimeConfig {
   const raw = value && typeof value === "object" ? (value as Partial<RuntimeConfig>) : {};
+  const rawSpeech = raw.speech as
+    | (Partial<RuntimeConfig["speech"]> & { globalShortcut?: unknown })
+    | undefined;
   return {
     setupComplete: raw.setupComplete === true,
     executable:
@@ -90,15 +94,18 @@ export function normalizeConfig(value: unknown): RuntimeConfig {
       Math.max(0, asFiniteNumber(raw.repeatPenalty, DEFAULT_CONFIG.repeatPenalty)),
     ),
     autoStart: raw.autoStart !== false,
+    chatTemplates: normalizeChatTemplates(raw.chatTemplates),
     speech: {
-      enabled: raw.speech?.enabled !== false,
-      globalShortcut: raw.speech?.globalShortcut !== false,
+      // v0.1.6 exposed microphone input and the global F8 hook separately.
+      // Preserve the safest prior choice when folding them into one switch:
+      // either legacy switch being off keeps the combined feature off.
+      enabled: rawSpeech?.enabled !== false && rawSpeech?.globalShortcut !== false,
       shortcut: "F8",
-      threads: clampInt(raw.speech?.threads, DEFAULT_CONFIG.speech.threads, 1, 16),
+      threads: clampInt(rawSpeech?.threads, DEFAULT_CONFIG.speech.threads, 1, 16),
       language: "auto",
       modelDirectory:
-        typeof raw.speech?.modelDirectory === "string"
-          ? raw.speech.modelDirectory.trim()
+        typeof rawSpeech?.modelDirectory === "string"
+          ? rawSpeech.modelDirectory.trim()
           : "",
     },
     tts: {

@@ -10,11 +10,13 @@ import type {
 } from "../../shared/types";
 import { clearLegacyChatHistory, readChatHistory, writeChatHistory } from "../chat-history";
 import { Pet, type PetMood } from "./Pet";
+import { resolveSpeechPetClipMood } from "./pet-clips";
 import { RuntimeBadge } from "./RuntimeBadge";
 import { VoiceButton } from "./VoiceButton";
 import { ImageAttachButton, ImageAttachmentTray } from "./ImageAttachments";
 import { PixelIcon } from "./PixelIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { MarkdownMessage } from "./MarkdownMessage";
 import {
   conversationOperationUiPolicy,
   type ConversationOperationKind,
@@ -27,6 +29,7 @@ interface ChatPanelProps {
   runtime: RuntimeState;
   speech: SpeechState;
   tts: TtsState;
+  chatTemplates: string[];
   draft: string;
   images: ChatImage[];
   onDraftChange: (value: string) => void;
@@ -35,7 +38,6 @@ interface ChatPanelProps {
   onPrepareSpeech: () => Promise<void>;
   onStartSpeech: () => Promise<string | undefined>;
   onStopSpeech: (sessionId: string) => Promise<void>;
-  onCancelSpeech: (sessionId: string) => Promise<void>;
   onSpeakText: (text: string) => Promise<void>;
   onStopSpeaking: () => Promise<void>;
   onClose: () => void;
@@ -46,12 +48,6 @@ interface ChatPanelProps {
 interface ThinkingToggleProps {
   onChange: (thinking: boolean) => void;
 }
-
-const DEFAULT_SUGGESTIONS = [
-  "给今天的我来一句橘猫式鼓励",
-  "用橘猫口吻吐槽一下加班",
-  "编一个橘猫偷吃却拒不承认的故事",
-];
 
 type PersistenceMode = "loading" | "database" | "legacy";
 
@@ -109,6 +105,7 @@ export function ChatPanel({
   runtime,
   speech,
   tts,
+  chatTemplates,
   draft,
   images,
   onDraftChange,
@@ -117,7 +114,6 @@ export function ChatPanel({
   onPrepareSpeech,
   onStartSpeech,
   onStopSpeech,
-  onCancelSpeech,
   onSpeakText,
   onStopSpeaking,
   onClose,
@@ -134,7 +130,6 @@ export function ChatPanel({
   const [deleteTarget, setDeleteTarget] = useState<ChatConversation | null>(null);
   const [deletePending, setDeletePending] = useState(false);
   const [deleteDialogError, setDeleteDialogError] = useState("");
-  const [recommendations, setRecommendations] = useState(DEFAULT_SUGGESTIONS);
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState("");
   const assistantByRequest = useRef(new Map<string, string>());
@@ -150,7 +145,6 @@ export function ChatPanel({
   const initializationRef = useRef<Promise<ChatInitialization> | null>(null);
   const conversationOperationTokenRef = useRef(0);
   const conversationOperationPendingRef = useRef(false);
-  const recommendationRequestTokenRef = useRef(0);
   const composerRevisionRef = useRef(0);
   const observedDraftRef = useRef(draft);
   const observedImagesRef = useRef(images);
@@ -190,30 +184,6 @@ export function ChatPanel({
     }
     onImagesChangeRef.current(nextImages);
   }, []);
-
-  const readCachedRecommendations = useCallback(async (): Promise<string[]> => {
-    try {
-      const nextRecommendations = await window.desktopPet.getChatRecommendations();
-      return nextRecommendations.length === 3 ? nextRecommendations : DEFAULT_SUGGESTIONS;
-    } catch {
-      return DEFAULT_SUGGESTIONS;
-    }
-  }, []);
-
-  const refreshCachedRecommendations = useCallback((
-    expectedConversationId: string | null,
-  ): void => {
-    const requestToken = ++recommendationRequestTokenRef.current;
-    void readCachedRecommendations().then((nextRecommendations) => {
-      if (
-        !mountedRef.current ||
-        requestToken !== recommendationRequestTokenRef.current ||
-        conversationIdRef.current !== expectedConversationId ||
-        messagesRef.current.length
-      ) return;
-      setRecommendations(nextRecommendations);
-    });
-  }, [readCachedRecommendations]);
 
   const persistMessages = useCallback((
     refreshConversations = false,
@@ -358,17 +328,6 @@ export function ChatPanel({
     textareaRef.current?.focus({ preventScroll: true });
   }, [conversationId, historyOpen]);
 
-  useEffect(() => {
-    if (persistenceMode !== "database" || messages.length) {
-      recommendationRequestTokenRef.current += 1;
-      setRecommendations(DEFAULT_SUGGESTIONS);
-      return;
-    }
-    // Cache-only IPC: this never starts model inference from the interactive
-    // Chat Panel. Idle precomputation is owned by the main process.
-    refreshCachedRecommendations(conversationId);
-  }, [conversationId, messages.length, persistenceMode, refreshCachedRecommendations]);
-
   useEffect(
     () =>
       window.desktopPet.onChatEvent((event: ChatEvent) => {
@@ -498,7 +457,6 @@ export function ChatPanel({
       const nextConversations = await window.desktopPet.listChatConversations();
       if (!operationIsCurrent(operation)) return;
       setConversations(nextConversations);
-      setRecommendations(DEFAULT_SUGGESTIONS);
       loadIntoState(
         created.id,
         [],
@@ -533,7 +491,6 @@ export function ChatPanel({
       if (!operationIsCurrent(operation)) return;
       const savedMessages = await window.desktopPet.loadChatConversation(nextConversationId);
       if (!operationIsCurrent(operation)) return;
-      setRecommendations(DEFAULT_SUGGESTIONS);
       loadIntoState(
         nextConversationId,
         savedMessages,
@@ -605,7 +562,6 @@ export function ChatPanel({
         nextMessages = await window.desktopPet.loadChatConversation(next.id);
         if (!operationIsCurrent(operation)) return;
       }
-      const visibleMessages = nextMessages ?? messagesRef.current;
       if (nextMessages && nextConversationId) {
         loadIntoState(
           nextConversationId,
@@ -614,12 +570,6 @@ export function ChatPanel({
         );
       }
       setConversations(nextConversations);
-      setRecommendations(DEFAULT_SUGGESTIONS);
-      if (visibleMessages.length) {
-        recommendationRequestTokenRef.current += 1;
-      } else {
-        refreshCachedRecommendations(nextConversationId);
-      }
       succeeded = true;
     } catch (error) {
       if (operationIsCurrent(operation)) {
@@ -683,6 +633,10 @@ export function ChatPanel({
   };
 
   const speechBusy = speech.phase === "recording" || speech.phase === "transcribing";
+  const visibleChatTemplates = useMemo(
+    () => chatTemplates.map((template) => template.trim()).filter(Boolean),
+    [chatTemplates],
+  );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -824,21 +778,27 @@ export function ChatPanel({
           <div className="empty-chat">
             <Pet
               mood={mood}
-              clipMood={speech.phase === "recording" ? "idle" : undefined}
+              clipMood={resolveSpeechPetClipMood(speech.phase)}
               compact
             />
             <h2>今天想聊点什么？</h2>
-            <p></p>
-            <div className="suggestion-grid">
-              {recommendations.map((suggestion) => (
+            <p className="empty-chat__voice-status" aria-live="polite">
+              {speech.phase === "recording"
+                ? "团子在认真听…"
+                : speech.phase === "transcribing"
+                  ? "团子正在转成文字…"
+                  : "\u00a0"}
+            </p>
+            <div className="chat-template-grid" aria-label="快捷模板">
+              {visibleChatTemplates.map((template, index) => (
                 <button
-                  key={suggestion}
+                  key={`${index}-${template}`}
                   type="button"
                   onClick={() => {
-                    changeDraft(suggestion);
+                    changeDraft(template);
                   }}
                 >
-                  {suggestion}
+                  {template}
                 </button>
               ))}
             </div>
@@ -857,18 +817,22 @@ export function ChatPanel({
                 {message.reasoning && (
                   <details className="reasoning">
                     <summary>团子的思考</summary>
-                    <p>{message.reasoning}</p>
+                    <MarkdownMessage content={message.reasoning} className="reasoning__content" />
                   </details>
                 )}
-                {(message.content || message.role === "assistant") && <p className={!message.content ? "typing-dots" : ""}>
-                  {message.content || (
-                    <>
+                {message.role === "assistant" ? (
+                  message.content ? (
+                    <MarkdownMessage content={message.content} />
+                  ) : (
+                    <p className="typing-dots">
                       <i />
                       <i />
                       <i />
-                    </>
-                  )}
-                </p>}
+                    </p>
+                  )
+                ) : message.content ? (
+                  <p className="message-plain-text">{message.content}</p>
+                ) : null}
                 {message.role === "assistant" && message.content.trim() && (
                   <button
                     className={`message-speak${tts.phase === "speaking" ? " message-speak--active" : ""}`}
@@ -927,11 +891,11 @@ export function ChatPanel({
         </section>
       )}
 
-      {(speech.phase === "recording" || speech.phase === "transcribing") && (
+      {messages.length > 0 && (speech.phase === "recording" || speech.phase === "transcribing") && (
         <section className={`voice-pet-indicator phase-${speech.phase}`} aria-live="polite">
           <Pet
             mood={speech.phase === "recording" ? "listening" : "transcribing"}
-            clipMood={speech.phase === "recording" ? "idle" : undefined}
+            clipMood={resolveSpeechPetClipMood(speech.phase)}
             compact
           />
           <div>
@@ -980,7 +944,7 @@ export function ChatPanel({
         <div className="composer__input">
           <textarea
             ref={textareaRef}
-            rows={2}
+            rows={3}
             value={draft}
             onChange={(event) => changeDraft(event.target.value)}
             onFocus={() => {
@@ -1005,7 +969,6 @@ export function ChatPanel({
             onPrepare={onPrepareSpeech}
             onStart={onStartSpeech}
             onStop={onStopSpeech}
-            onCancel={onCancelSpeech}
           />
           {activeRequest ? (
             <button

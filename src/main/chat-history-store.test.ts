@@ -86,29 +86,4 @@ describe("ChatHistoryStore", () => {
     expect(conversations[0]?.id).toBe("conversation-30");
   });
 
-  it("builds a bounded recommendation context and caches its result", () => {
-    const store = createStore();
-    for (let conversationIndex = 0; conversationIndex < 6; conversationIndex += 1) {
-      const conversation = store.createConversation();
-      store.saveMessages(conversation.id, Array.from({ length: 8 }, (_, messageIndex) =>
-        message(
-          `m-${conversationIndex}-${messageIndex}`,
-          messageIndex % 2 ? "assistant" : "user",
-          `会话${conversationIndex}消息${messageIndex}`,
-          { reasoning: "不应进入推荐上下文" },
-        )));
-    }
-
-    const context = store.getRecommendationContext();
-    expect(context).not.toBeNull();
-    expect(context?.transcript.length).toBeLessThanOrEqual(1600);
-    expect(context?.transcript).not.toContain("会话0消息");
-    expect(context?.transcript).not.toContain("消息0");
-    expect(context?.transcript).not.toContain("不应进入推荐上下文");
-    expect(store.getCachedRecommendations(context!.fingerprint)).toBeNull();
-
-    const recommendations = ["继续完善桌面宠物", "回顾最近的技术问题", "聊聊下一步计划"];
-    store.cacheRecommendations(context!.fingerprint, recommendations);
-    expect(store.getCachedRecommendations(context!.fingerprint)).toEqual(recommendations);
-  });
 });

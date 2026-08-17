@@ -79,9 +79,9 @@ function delta(requestId: string, text: string): ChatEvent {
 }
 
 describe("DedicatedPlayback", () => {
-  it("copies PCM chunks, writes them in order, and waits for native drain", async () => {
+  it("primes cold output once, copies PCM chunks, and preserves write order", async () => {
     const { speaker, writeAsync, drainAsync } = fakeSpeaker();
-    const playback = new DedicatedPlayback({ speaker, shouldStop: () => false });
+    const playback = new DedicatedPlayback({ speaker, sampleRate: 1_000, shouldStop: () => false });
     const first = new Float32Array([0.1, -0.2]);
     const second = new Float32Array([0.3]);
 
@@ -93,10 +93,14 @@ describe("DedicatedPlayback", () => {
     expect(writeAsync).toHaveBeenCalledTimes(2);
     const firstWritten = writeAsync.mock.calls[0]![0];
     const secondWritten = writeAsync.mock.calls[1]![0];
-    expect([...new Float32Array(firstWritten.buffer, firstWritten.byteOffset, firstWritten.byteLength / 4)]).toEqual([
-      expect.closeTo(0.1),
-      expect.closeTo(-0.2),
-    ]);
+    const firstSamples = new Float32Array(
+      firstWritten.buffer,
+      firstWritten.byteOffset,
+      firstWritten.byteLength / 4,
+    );
+    expect(firstSamples).toHaveLength(202);
+    expect([...firstSamples.slice(0, 200)]).toEqual(Array.from({ length: 200 }, () => 0));
+    expect([...firstSamples.slice(200)]).toEqual([expect.closeTo(0.1), expect.closeTo(-0.2)]);
     expect([...new Float32Array(secondWritten.buffer, secondWritten.byteOffset, secondWritten.byteLength / 4)]).toEqual([
       expect.closeTo(0.3),
     ]);
@@ -105,7 +109,7 @@ describe("DedicatedPlayback", () => {
 
   it("stops native playback immediately", async () => {
     const { speaker, stop, writeAsync } = fakeSpeaker();
-    const playback = new DedicatedPlayback({ speaker, shouldStop: () => false });
+    const playback = new DedicatedPlayback({ speaker, sampleRate: 1_000, shouldStop: () => false });
 
     playback.stop();
     playback.push(new Float32Array([0.1]));

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG, normalizeConfig, validateConfig } from "./config-store";
+import { DEFAULT_CHAT_TEMPLATES } from "../shared/chat-templates";
 
 describe("runtime config", () => {
   it("keeps a lightweight GGUF as the replaceable remote default", () => {
@@ -13,6 +14,7 @@ describe("runtime config", () => {
     expect(config.minP).toBe(0.05);
     expect(config.repeatPenalty).toBe(1);
     expect(config.speech.modelDirectory).toBe("");
+    expect(config.chatTemplates).toEqual(DEFAULT_CHAT_TEMPLATES);
   });
 
   it("defaults to the orange-cat personality without overwriting a custom prompt", () => {
@@ -62,10 +64,9 @@ describe("runtime config", () => {
 
     const configured = normalizeConfig({
       ...DEFAULT_CONFIG,
-      speech: { ...DEFAULT_CONFIG.speech, enabled: false, globalShortcut: false, threads: 99 },
+      speech: { ...DEFAULT_CONFIG.speech, enabled: false, threads: 99 },
     });
     expect(configured.speech.enabled).toBe(false);
-    expect(configured.speech.globalShortcut).toBe(false);
     expect(configured.speech.threads).toBe(16);
     expect(configured.speech.modelDirectory).toBe("");
 
@@ -74,6 +75,29 @@ describe("runtime config", () => {
       speech: { ...DEFAULT_CONFIG.speech, modelDirectory: " D:\\speech-models " },
     });
     expect(imported.speech.modelDirectory).toBe("D:\\speech-models");
+  });
+
+  it("uses the single speech switch when migrating the legacy shortcut toggle", () => {
+    const legacySpeech = {
+      ...DEFAULT_CONFIG.speech,
+      enabled: true,
+      globalShortcut: false,
+    };
+    const migrated = normalizeConfig({ ...DEFAULT_CONFIG, speech: legacySpeech });
+
+    expect(migrated.speech.enabled).toBe(false);
+    expect(migrated.speech).not.toHaveProperty("globalShortcut");
+  });
+
+  it("migrates and bounds the three editable chat templates", () => {
+    expect(normalizeConfig({ ...DEFAULT_CONFIG, chatTemplates: undefined }).chatTemplates)
+      .toEqual(DEFAULT_CHAT_TEMPLATES);
+
+    const configured = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      chatTemplates: ["  模板一  ", "", "x".repeat(120), "不会保存"],
+    });
+    expect(configured.chatTemplates).toEqual(["模板一", "", "x".repeat(80)]);
   });
 
   it("migrates tts defaults and clamps speed and speaker", () => {

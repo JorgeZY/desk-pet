@@ -19,7 +19,7 @@ describe("Pet", () => {
 
     expect(markup).toContain("pet--decorative");
     expect(markup).toContain("mood-sleeping");
-    expect(markup).toContain('src="./pet/moods/pet-sleeping-v1.gif"');
+    expect(markup).toContain('src="./pet/moods/pet-sleeping-v1.gif?rev=');
     expect(markup).toContain('alt="橘猫团子，正在休息"');
     expect(markup).not.toContain("<button");
   });
@@ -85,6 +85,14 @@ describe("Pet", () => {
     expect(markup).not.toContain(`src="${PET_CLIPS.listening.src}"`);
     expect(markup).toContain("voice-wave--outer");
     expect(markup).toContain("pet-listen-bell");
+  });
+
+  it("offsets the talking marks away from the pet body", () => {
+    const markup = renderToStaticMarkup(<Pet mood="talking" compact />);
+
+    expect(markup).toContain(
+      'class="pet-talk-marks" transform="translate(6 -1)"',
+    );
   });
 
   it.each(moods)("maps the %s mood to its dedicated GIF", (mood) => {

@@ -76,12 +76,14 @@ interface QueueItem {
 }
 
 const PREVIEW_REQUEST_ID = "preview";
+const PLAYBACK_PREROLL_MS = 200;
 // A few hundred inserted samples can occur while WASAPI starts. Only report
 // sustained underruns that could be audible (about 23 ms at 44.1 kHz).
 const REPORTABLE_UNDERRUN_SAMPLES = 1024;
 
 interface DedicatedPlaybackOptions {
   speaker: DedicatedSpeakerLike;
+  sampleRate: number;
   shouldStop: () => boolean;
 }
 
@@ -95,6 +97,7 @@ export class DedicatedPlayback {
   private pending: Promise<void> = Promise.resolve();
   private error?: Error;
   private stopped = false;
+  private firstChunk = true;
 
   constructor(private readonly options: DedicatedPlaybackOptions) {}
 
@@ -104,8 +107,19 @@ export class DedicatedPlayback {
 
   push(samples: Float32Array): void {
     if (this.stopped || !samples.length) return;
-    const bytes = Buffer.allocUnsafe(samples.byteLength);
-    bytes.set(new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength));
+    let output = samples;
+    if (this.firstChunk) {
+      this.firstChunk = false;
+      const silenceSamples = Math.round(this.options.sampleRate * PLAYBACK_PREROLL_MS / 1_000);
+      output = new Float32Array(silenceSamples + samples.length);
+      output.set(samples, silenceSamples);
+    }
+    // Keep the startup silence and first speech samples in one native write.
+    // This lets cold/BT output endpoints wake up without clipping the opening
+    // syllable, while avoiding a fresh underrun between a separate primer and
+    // the TTS engine's first generated chunk.
+    const bytes = Buffer.allocUnsafe(output.byteLength);
+    bytes.set(new Uint8Array(output.buffer, output.byteOffset, output.byteLength));
     this.pending = this.pending
       .then(async () => {
         if (this.stopped || this.options.shouldStop()) return;
@@ -363,6 +377,7 @@ export class TtsRuntime extends EventEmitter {
     });
     return new DedicatedPlayback({
       speaker,
+      sampleRate,
       shouldStop: () => generation !== this.playbackGeneration,
     });
   }
