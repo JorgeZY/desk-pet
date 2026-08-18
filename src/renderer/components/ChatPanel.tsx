@@ -1,24 +1,31 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatConversation,
+  ChatDocument,
   ChatEvent,
   ChatImage,
   ChatMessage,
   RuntimeState,
   SpeechState,
   TtsState,
+  ThinkingEffort,
 } from "../../shared/types";
 import { clearLegacyChatHistory, readChatHistory, writeChatHistory } from "../chat-history";
+import { thinkingBudgetLimitForDisplay } from "../../shared/thinking-effort";
 import { Pet, type PetMood } from "./Pet";
 import { resolveSpeechPetClipMood } from "./pet-clips";
 import { RuntimeBadge } from "./RuntimeBadge";
 import { VoiceButton } from "./VoiceButton";
 import { ImageAttachButton, ImageAttachmentTray } from "./ImageAttachments";
+import { DocumentAttachButton, DocumentAttachmentTray } from "./DocumentAttachments";
 import { PixelIcon } from "./PixelIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { ToolCallCard } from "./ToolCallCard";
 import {
   conversationOperationUiPolicy,
+  isNearChatBottom,
+  regenerationBaseMessages,
   type ConversationOperationKind,
   isCurrentConversationOperation,
   shouldResetComposer,
@@ -30,10 +37,13 @@ interface ChatPanelProps {
   speech: SpeechState;
   tts: TtsState;
   chatTemplates: string[];
+  maxTokens: number;
   draft: string;
   images: ChatImage[];
+  documents: ChatDocument[];
   onDraftChange: (value: string) => void;
   onImagesChange: (images: ChatImage[]) => void;
+  onDocumentsChange: (documents: ChatDocument[]) => void;
   visionEnabled: boolean;
   onPrepareSpeech: () => Promise<void>;
   onStartSpeech: () => Promise<string | undefined>;
@@ -46,7 +56,8 @@ interface ChatPanelProps {
 }
 
 interface ThinkingToggleProps {
-  onChange: (thinking: boolean) => void;
+  onChange: (thinking: boolean, effort: ThinkingEffort) => void;
+  maxTokens: number;
 }
 
 type PersistenceMode = "loading" | "database" | "legacy";
@@ -72,32 +83,96 @@ function formatConversationTime(timestamp: number): string {
   }).format(timestamp);
 }
 
-const ThinkingToggle = memo(function ThinkingToggle({ onChange }: ThinkingToggleProps) {
+const THINKING_EFFORTS: Array<{ value: ThinkingEffort; label: string }> = [
+  { value: "minimal", label: "极简" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  { value: "xhigh", label: "极高" },
+  { value: "max", label: "最大" },
+];
+
+const ThinkingToggle = memo(function ThinkingToggle({ onChange, maxTokens }: ThinkingToggleProps) {
   const [thinking, setThinking] = useState(false);
+  const [effort, setEffort] = useState<ThinkingEffort>("medium");
+  const effortMenuRef = useRef<HTMLDetailsElement>(null);
 
   const toggle = () => {
     const nextThinking = !thinking;
     setThinking(nextThinking);
-    onChange(nextThinking);
+    if (!nextThinking && effortMenuRef.current) effortMenuRef.current.open = false;
+    onChange(nextThinking, effort);
   };
 
+  const selectedLabel = THINKING_EFFORTS.find((option) => option.value === effort)?.label;
+  const selectedBudget = thinkingBudgetLimitForDisplay(effort, maxTokens);
+  const selectedBudgetDescription = effort === "max"
+    ? `不单独限制思考预算，总输出最多 ${selectedBudget} token`
+    : `思考预算最多 ${selectedBudget} token`;
+
   return (
-    <button
-      type="button"
-      className="thinking-toggle"
-      onClick={toggle}
-      aria-pressed={thinking}
-      aria-label={thinking ? "当前为深度思考，点击切换到快速回答" : "当前为快速回答，点击切换到深度思考"}
-    >
-      <span className={`thinking-toggle__option thinking-toggle__option--quick ${!thinking ? "active" : ""}`}>
-        <PixelIcon name="bolt" />
-        快速回答
-      </span>
-      <span className={`thinking-toggle__option thinking-toggle__option--deep ${thinking ? "active" : ""}`}>
-        <PixelIcon name="sparkle" />
-        深度思考
-      </span>
-    </button>
+    <div className="thinking-controls">
+      <button
+        type="button"
+        className="thinking-toggle"
+        onClick={toggle}
+        aria-pressed={thinking}
+        aria-label={thinking ? "当前为深度思考，点击切换到快速回答" : "当前为快速回答，点击切换到深度思考"}
+      >
+        <span className={`thinking-toggle__option thinking-toggle__option--quick ${!thinking ? "active" : ""}`}>
+          <PixelIcon name="bolt" />
+          快速回答
+        </span>
+        <span className={`thinking-toggle__option thinking-toggle__option--deep ${thinking ? "active" : ""}`}>
+          <PixelIcon name="sparkle" />
+          深度思考
+        </span>
+      </button>
+      <details
+        ref={effortMenuRef}
+        className={`thinking-effort${thinking ? " thinking-effort--active" : ""}`}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+        }}
+      >
+        <summary
+          aria-label={`推理强度：${selectedLabel}，${selectedBudgetDescription}`}
+          aria-disabled={!thinking}
+          title={thinking ? "选择推理强度" : "切换到深度思考后可调整"}
+          onClick={(event) => {
+            if (!thinking) event.preventDefault();
+          }}
+        >
+          <span className="thinking-effort__value">
+            <PixelIcon name="sparkle" className="thinking-effort__icon" />
+            <span>{selectedLabel}</span>
+          </span>
+          <PixelIcon name="chevron-down" className="thinking-effort__chevron" />
+        </summary>
+        <div className="thinking-effort__menu" role="listbox" aria-label="推理强度选项">
+          {THINKING_EFFORTS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === effort}
+              onClick={() => {
+                setEffort(option.value);
+                onChange(thinking, option.value);
+                if (effortMenuRef.current) effortMenuRef.current.open = false;
+              }}
+            >
+              <span>{option.label}</span>
+              <small>
+                {option.value === "max" ? "总输出" : "预算"} ≤{
+                  ` ${thinkingBudgetLimitForDisplay(option.value, maxTokens).toLocaleString("en-US")}`
+                }
+              </small>
+            </button>
+          ))}
+        </div>
+      </details>
+    </div>
   );
 });
 
@@ -106,10 +181,13 @@ export function ChatPanel({
   speech,
   tts,
   chatTemplates,
+  maxTokens,
   draft,
   images,
+  documents,
   onDraftChange,
   onImagesChange,
+  onDocumentsChange,
   visionEnabled,
   onPrepareSpeech,
   onStartSpeech,
@@ -132,9 +210,12 @@ export function ChatPanel({
   const [deleteDialogError, setDeleteDialogError] = useState("");
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState("");
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const assistantByRequest = useRef(new Map<string, string>());
   const scrollRef = useRef<HTMLDivElement>(null);
   const thinkingRef = useRef(false);
+  const thinkingEffortRef = useRef<ThinkingEffort>("medium");
+  const autoScrollRef = useRef(true);
   const mountedRef = useRef(true);
   const messagesRef = useRef<ChatMessage[]>([]);
   const conversationIdRef = useRef<string | null>(null);
@@ -148,14 +229,17 @@ export function ChatPanel({
   const composerRevisionRef = useRef(0);
   const observedDraftRef = useRef(draft);
   const observedImagesRef = useRef(images);
+  const observedDocumentsRef = useRef(documents);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const historyNewButtonRef = useRef<HTMLButtonElement>(null);
   const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const focusAfterHistoryCloseRef = useRef(false);
   const onDraftChangeRef = useRef(onDraftChange);
   const onImagesChangeRef = useRef(onImagesChange);
+  const onDocumentsChangeRef = useRef(onDocumentsChange);
   onDraftChangeRef.current = onDraftChange;
   onImagesChangeRef.current = onImagesChange;
+  onDocumentsChangeRef.current = onDocumentsChange;
   if (observedDraftRef.current !== draft) {
     observedDraftRef.current = draft;
     composerRevisionRef.current += 1;
@@ -164,9 +248,14 @@ export function ChatPanel({
     observedImagesRef.current = images;
     composerRevisionRef.current += 1;
   }
+  if (observedDocumentsRef.current !== documents) {
+    observedDocumentsRef.current = documents;
+    composerRevisionRef.current += 1;
+  }
 
-  const handleThinkingChange = useCallback((thinking: boolean) => {
+  const handleThinkingChange = useCallback((thinking: boolean, effort: ThinkingEffort) => {
     thinkingRef.current = thinking;
+    thinkingEffortRef.current = effort;
   }, []);
 
   const changeDraft = useCallback((value: string) => {
@@ -183,6 +272,14 @@ export function ChatPanel({
       composerRevisionRef.current += 1;
     }
     onImagesChangeRef.current(nextImages);
+  }, []);
+
+  const changeDocuments = useCallback((nextDocuments: ChatDocument[]) => {
+    if (observedDocumentsRef.current !== nextDocuments) {
+      observedDocumentsRef.current = nextDocuments;
+      composerRevisionRef.current += 1;
+    }
+    onDocumentsChangeRef.current(nextDocuments);
   }, []);
 
   const persistMessages = useCallback((
@@ -258,18 +355,23 @@ export function ChatPanel({
     dirtyRef.current = false;
     setConversationId(id);
     setMessages(nextMessages);
+    autoScrollRef.current = true;
+    setShowScrollToLatest(false);
     setAttachmentError("");
     if (resetComposer) {
       changeDraft("");
       changeImages([]);
+      changeDocuments([]);
     }
-  }, [changeDraft, changeImages]);
+  }, [changeDocuments, changeDraft, changeImages]);
 
   useEffect(() => {
     let cancelled = false;
     const initializationComposerRevision = composerRevisionRef.current;
     const initializationComposerWasEmpty =
-      observedDraftRef.current.length === 0 && observedImagesRef.current.length === 0;
+      observedDraftRef.current.length === 0 &&
+      observedImagesRef.current.length === 0 &&
+      observedDocumentsRef.current.length === 0;
     initializationRef.current ??= (async () => {
       try {
         let nextConversations = await window.desktopPet.listChatConversations();
@@ -319,8 +421,30 @@ export function ChatPanel({
   }, [loadIntoState]);
 
   useLayoutEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (scrollRef.current && autoScrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
   }, [messages]);
+
+  const handleChatScroll = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const nearBottom = isNearChatBottom(
+      element.scrollHeight,
+      element.scrollTop,
+      element.clientHeight,
+    );
+    autoScrollRef.current = nearBottom;
+    setShowScrollToLatest(!nearBottom);
+  }, []);
+
+  const scrollToLatest = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    autoScrollRef.current = true;
+    setShowScrollToLatest(false);
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+  }, []);
 
   useLayoutEffect(() => {
     if (historyOpen || !focusAfterHistoryCloseRef.current) return;
@@ -346,6 +470,35 @@ export function ChatPanel({
                   }
                 : message,
             ),
+          );
+        }
+        if (event.type === "tool-call") {
+          updateMessages((current) =>
+            current.map((message) => {
+              if (message.id !== assistantId) return message;
+              const calls = [...(message.toolCalls ?? [])];
+              const index = calls.findIndex((call) => call.id === event.call.id);
+              if (index >= 0) calls[index] = event.call;
+              else calls.push(event.call);
+              return { ...message, toolCalls: calls };
+            }),
+          );
+        }
+        if (event.type === "tool-result") {
+          updateMessages((current) =>
+            current.map((message) => message.id === assistantId
+              ? {
+                  ...message,
+                  toolCalls: (message.toolCalls ?? []).map((call) => call.id === event.toolCallId
+                    ? {
+                        ...call,
+                        status: event.status,
+                        ...(event.result ? { result: event.result } : {}),
+                        ...(event.error ? { error: event.error } : {}),
+                      }
+                    : call),
+                }
+              : message),
           );
         }
         if (event.type === "done" || event.type === "error") {
@@ -591,46 +744,80 @@ export function ChatPanel({
     }
   };
 
-  const send = () => {
-    const text = draft.trim();
-    if (
-      (!text && !images.length) ||
-      activeRequest ||
-      conversationOperationPendingRef.current ||
-      runtime.phase !== "ready" ||
-      persistenceMode === "loading"
-    ) return;
+  const startGeneration = (nextMessages: ChatMessage[]) => {
     const requestId = crypto.randomUUID();
-    const user: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: text,
-      images: images.length ? images : undefined,
-      createdAt: Date.now(),
-    };
     const assistant: ChatMessage = {
       id: crypto.randomUUID(),
       role: "assistant",
       content: "",
       createdAt: Date.now(),
     };
-    const nextMessages = [...messagesRef.current, user];
     assistantByRequest.current.set(requestId, assistant.id);
+    autoScrollRef.current = true;
+    setShowScrollToLatest(false);
     updateMessages([...nextMessages, assistant], true, true);
-    changeDraft("");
-    changeImages([]);
-    setAttachmentError("");
     setActiveRequest(requestId);
     window.desktopPet.startChat({
       requestId,
       messages: nextMessages,
       thinking: thinkingRef.current,
+      thinkingEffort: thinkingEffortRef.current,
     });
+  };
+
+  const send = () => {
+    const text = draft.trim();
+    if (
+      (!text && !images.length && !documents.length) ||
+      activeRequest ||
+      conversationOperationPendingRef.current ||
+      runtime.phase !== "ready" ||
+      persistenceMode === "loading"
+    ) return;
+    const user: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: text,
+      images: images.length ? images : undefined,
+      documents: documents.length ? documents : undefined,
+      createdAt: Date.now(),
+    };
+    startGeneration([...messagesRef.current, user]);
+    changeDraft("");
+    changeImages([]);
+    changeDocuments([]);
+    setAttachmentError("");
+  };
+
+  const regenerate = () => {
+    if (
+      activeRequest ||
+      conversationOperationPendingRef.current ||
+      runtime.phase !== "ready" ||
+      persistenceMode === "loading"
+    ) return;
+    const baseMessages = regenerationBaseMessages(messagesRef.current);
+    if (!baseMessages) return;
+    if (tts.phase === "speaking") void onStopSpeaking();
+    setAttachmentError("");
+    startGeneration(baseMessages);
   };
 
   const removeImage = (index: number) => {
     changeImages(images.filter((_image, imageIndex) => imageIndex !== index));
   };
+
+  const removeDocument = (index: number) => {
+    changeDocuments(documents.filter((_document, documentIndex) => documentIndex !== index));
+  };
+
+  const resolveToolApproval = useCallback((
+    requestId: string,
+    toolCallId: string,
+    approved: boolean,
+  ) => {
+    window.desktopPet.resolveToolApproval(requestId, toolCallId, approved);
+  }, []);
 
   const speechBusy = speech.phase === "recording" || speech.phase === "transcribing";
   const visibleChatTemplates = useMemo(
@@ -773,7 +960,7 @@ export function ChatPanel({
         />
       )}
 
-      <section className="chat-log" ref={scrollRef}>
+      <section className="chat-log" ref={scrollRef} onScroll={handleChatScroll}>
         {messages.length === 0 ? (
           <div className="empty-chat">
             <Pet
@@ -804,7 +991,7 @@ export function ChatPanel({
             </div>
           </div>
         ) : (
-          messages.map((message) => (
+          messages.map((message, messageIndex) => (
             <article
               key={message.id}
               className={`message message--${message.role}`}
@@ -814,16 +1001,29 @@ export function ChatPanel({
               )}
               <div className="message-content">
                 <ImageAttachmentTray images={message.images ?? []} />
+                <DocumentAttachmentTray documents={message.documents ?? []} />
                 {message.reasoning && (
                   <details className="reasoning">
                     <summary>团子的思考</summary>
                     <MarkdownMessage content={message.reasoning} className="reasoning__content" />
                   </details>
                 )}
+                {message.toolCalls?.map((call) => (
+                  <ToolCallCard
+                    key={call.id}
+                    call={call}
+                    requestId={
+                      activeRequest && assistantByRequest.current.get(activeRequest) === message.id
+                        ? activeRequest
+                        : undefined
+                    }
+                    onApproval={resolveToolApproval}
+                  />
+                ))}
                 {message.role === "assistant" ? (
                   message.content ? (
                     <MarkdownMessage content={message.content} />
-                  ) : (
+                  ) : message.toolCalls?.length ? null : (
                     <p className="typing-dots">
                       <i />
                       <i />
@@ -833,29 +1033,53 @@ export function ChatPanel({
                 ) : message.content ? (
                   <p className="message-plain-text">{message.content}</p>
                 ) : null}
-                {message.role === "assistant" && message.content.trim() && (
-                  <button
-                    className={`message-speak${tts.phase === "speaking" ? " message-speak--active" : ""}`}
-                    type="button"
-                    disabled={!tts.enabled}
-                    aria-label={tts.phase === "speaking" ? "停止朗读" : "朗读这段回答"}
-                    title={
-                      !tts.enabled
-                        ? "请先在设置中启用语音朗读"
-                        : tts.phase === "speaking"
-                          ? "停止朗读"
-                          : "朗读这段回答"
-                    }
-                    onClick={() => void (tts.phase === "speaking" ? onStopSpeaking() : onSpeakText(message.content))}
-                  >
-                    <PixelIcon name={tts.phase === "speaking" ? "stop" : "volume"} />
-                  </button>
+                {message.role === "assistant" && (message.content.trim() || (
+                  messageIndex === messages.length - 1 && !activeRequest
+                )) && (
+                  <div className="message-actions">
+                    {message.content.trim() && (
+                      <button
+                        className={`message-action${tts.phase === "speaking" ? " message-action--active" : ""}`}
+                        type="button"
+                        disabled={!tts.enabled}
+                        aria-label={tts.phase === "speaking" ? "停止朗读" : "朗读这段回答"}
+                        title={
+                          !tts.enabled
+                            ? "请先在设置中启用语音朗读"
+                            : tts.phase === "speaking"
+                              ? "停止朗读"
+                              : "朗读这段回答"
+                        }
+                        onClick={() => void (tts.phase === "speaking" ? onStopSpeaking() : onSpeakText(message.content))}
+                      >
+                        <PixelIcon name={tts.phase === "speaking" ? "stop" : "volume"} />
+                      </button>
+                    )}
+                    {messageIndex === messages.length - 1 && !activeRequest && (
+                      <button
+                        className="message-action message-action--regenerate"
+                        type="button"
+                        disabled={runtime.phase !== "ready" || conversationOperationPending}
+                        aria-label="重新生成回答"
+                        title="重新生成回答"
+                        onClick={regenerate}
+                      >
+                        <PixelIcon name="refresh" />
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             </article>
           ))
         )}
       </section>
+
+      {showScrollToLatest ? (
+        <button className="scroll-to-latest" type="button" onClick={scrollToLatest}>
+          回到最新
+        </button>
+      ) : null}
 
       {runtime.phase !== "ready" && (
         <section
@@ -908,7 +1132,7 @@ export function ChatPanel({
       <footer className="composer">
         <div className="composer__toolbar">
           <div className="composer__tools">
-            <ThinkingToggle onChange={handleThinkingChange} />
+            <ThinkingToggle onChange={handleThinkingChange} maxTokens={maxTokens} />
             <ImageAttachButton
               images={images}
               disabled={
@@ -919,6 +1143,17 @@ export function ChatPanel({
                 speechBusy
               }
               onChange={changeImages}
+              onError={setAttachmentError}
+            />
+            <DocumentAttachButton
+              documents={documents}
+              disabled={
+                runtime.phase !== "ready" ||
+                Boolean(activeRequest) ||
+                conversationOperationPending ||
+                speechBusy
+              }
+              onChange={changeDocuments}
               onError={setAttachmentError}
             />
           </div>
@@ -940,6 +1175,7 @@ export function ChatPanel({
           )}
         </div>
         <ImageAttachmentTray images={images} onRemove={removeImage} />
+        <DocumentAttachmentTray documents={documents} onRemove={removeDocument} />
         {attachmentError && <p className="composer__error">{attachmentError}</p>}
         <div className="composer__input">
           <textarea
@@ -985,7 +1221,7 @@ export function ChatPanel({
               type="button"
               onClick={send}
               disabled={
-                (!draft.trim() && !images.length) ||
+                (!draft.trim() && !images.length && !documents.length) ||
                 runtime.phase !== "ready" ||
                 conversationOperationPending ||
                 speechBusy

@@ -15,6 +15,7 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
   hfRepo: "openbmb/MiniCPM5-1B-GGUF:Q4_K_M",
   modelPath: "",
   mmprojPath: "",
+  mcpServersConfigPath: "",
   host: "127.0.0.1",
   port: 18766,
   contextSize: 8192,
@@ -26,6 +27,7 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
   topP: 0.95,
   minP: 0.05,
   repeatPenalty: 1.0,
+  presencePenalty: 0.0,
   autoStart: true,
   chatTemplates: [...DEFAULT_CHAT_TEMPLATES],
   speech: {
@@ -76,6 +78,8 @@ export function normalizeConfig(value: unknown): RuntimeConfig {
         : DEFAULT_CONFIG.hfRepo,
     modelPath: typeof raw.modelPath === "string" ? raw.modelPath.trim() : "",
     mmprojPath: typeof raw.mmprojPath === "string" ? raw.mmprojPath.trim() : "",
+    mcpServersConfigPath:
+      typeof raw.mcpServersConfigPath === "string" ? raw.mcpServersConfigPath.trim() : "",
     host: "127.0.0.1",
     port: clampInt(raw.port, DEFAULT_CONFIG.port, 1024, 65535),
     contextSize: clampInt(raw.contextSize, DEFAULT_CONFIG.contextSize, 512, 131072),
@@ -92,6 +96,10 @@ export function normalizeConfig(value: unknown): RuntimeConfig {
     repeatPenalty: Math.min(
       2,
       Math.max(0, asFiniteNumber(raw.repeatPenalty, DEFAULT_CONFIG.repeatPenalty)),
+    ),
+    presencePenalty: Math.min(
+      2,
+      Math.max(-2, asFiniteNumber(raw.presencePenalty, DEFAULT_CONFIG.presencePenalty)),
     ),
     autoStart: raw.autoStart !== false,
     chatTemplates: normalizeChatTemplates(raw.chatTemplates),
@@ -138,6 +146,12 @@ export function validateConfig(config: RuntimeConfig): string[] {
   }
   if (config.mmprojPath && !config.mmprojPath.toLowerCase().endsWith(".gguf")) {
     errors.push("视觉投影模型必须是 .gguf 文件。");
+  }
+  if (
+    config.mcpServersConfigPath &&
+    !config.mcpServersConfigPath.toLowerCase().endsWith(".json")
+  ) {
+    errors.push("MCP Servers 配置必须是 .json 文件。");
   }
   return errors;
 }

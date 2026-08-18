@@ -36,10 +36,13 @@ describe("ChatPanel empty state", () => {
         speech={recordingSpeech}
         tts={tts}
         chatTemplates={["模板甲", "  ", "模板丙"]}
+        maxTokens={2048}
         draft=""
         images={[]}
+        documents={[]}
         onDraftChange={() => undefined}
         onImagesChange={() => undefined}
+        onDocumentsChange={() => undefined}
         visionEnabled={false}
         onPrepareSpeech={async () => undefined}
         onStartSpeech={async () => undefined}
@@ -64,6 +67,11 @@ describe("ChatPanel empty state", () => {
     expect(markup).not.toContain("pet-listening-v1.gif");
     expect(markup).not.toContain("voice-pet-indicator");
     expect(markup).toContain('rows="3"');
+    expect(markup).toContain('aria-label="推理强度：中，思考预算最多 1024 token"');
+    expect(markup).toContain("预算 ≤ 1,024");
+    expect(markup).toContain("总输出 ≤ 2,048");
+    expect(markup).toContain('class="thinking-effort__menu"');
+    expect(markup).not.toContain("<select");
     expect(markup.indexOf("chat-template-grid")).toBeLessThan(
       markup.indexOf('class="composer"'),
     );

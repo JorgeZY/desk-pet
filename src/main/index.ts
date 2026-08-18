@@ -18,6 +18,7 @@ import { promisify } from "node:util";
 import { basename, extname, join } from "node:path";
 import type {
   BootstrapData,
+  ChatDocument,
   ChatMessage,
   ChatImage,
   ChatImageMimeType,
@@ -37,9 +38,17 @@ import {
 } from "../shared/pet-window";
 import { ConfigStore } from "./config-store";
 import { ChatHistoryStore } from "./chat-history-store";
+import {
+  CHAT_TEXT_EXTENSIONS,
+  MAX_CHAT_DOCUMENTS,
+  MAX_CHAT_DOCUMENT_TOTAL_BYTES,
+  MAX_CHAT_DOCUMENT_TOTAL_CHARACTERS,
+  readChatDocument,
+} from "./chat-documents";
 import { pasteDictationText, resolveShortcutSpeechSource } from "./global-dictation";
 import { LlamaRuntime } from "./llama-runtime";
 import { migrateModelDirectory, resolveModelDirectory } from "./model-directory";
+import { validateMcpServersConfigContents } from "./mcp-servers-config";
 import { ManagedModelDownloader } from "./model-downloader";
 import { SpeechModelManager } from "./speech-model-manager";
 import { SpeechRuntime } from "./speech-runtime";
@@ -326,6 +335,37 @@ async function pickChatImages(): Promise<ChatImage[]> {
   return images;
 }
 
+async function pickChatDocuments(): Promise<ChatDocument[]> {
+  const options: Electron.OpenDialogOptions = {
+    title: "选择要加入对话的文本或 PDF 文档",
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "文本与 PDF", extensions: [...CHAT_TEXT_EXTENSIONS, "pdf"] }],
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled) return [];
+  if (result.filePaths.length > MAX_CHAT_DOCUMENTS) {
+    throw new Error(`一次最多选择 ${MAX_CHAT_DOCUMENTS} 个文档。`);
+  }
+
+  let totalBytes = 0;
+  for (const path of result.filePaths) totalBytes += (await fs.stat(path)).size;
+  if (totalBytes > MAX_CHAT_DOCUMENT_TOTAL_BYTES) {
+    throw new Error("所选文档合计不能超过 20 MB。");
+  }
+
+  const perDocumentLimit = Math.max(
+    1,
+    Math.floor(MAX_CHAT_DOCUMENT_TOTAL_CHARACTERS / Math.max(1, result.filePaths.length)),
+  );
+  const documents: ChatDocument[] = [];
+  for (const path of result.filePaths) {
+    documents.push(await readChatDocument(path, perDocumentLimit));
+  }
+  return documents;
+}
+
 async function probeExecutable(requested?: string): Promise<ProbeResult> {
   const candidates = requested?.trim() ? [requested.trim()] : ["llama", "llama-server"];
   let lastError = "未找到 llama.cpp。";
@@ -408,6 +448,7 @@ function registerIpc(): void {
   ipcMain.handle("runtime:start", () => runtime.start());
   ipcMain.handle("runtime:stop", () => runtime.stop());
   ipcMain.handle("runtime:restart", () => runtime.restart());
+  ipcMain.handle("runtime:list-tools", () => runtime.listTools());
   ipcMain.handle("speech:prepare", async (_event, force?: boolean) => {
     config = await configStore.write({
       ...config,
@@ -481,7 +522,17 @@ function registerIpc(): void {
   ipcMain.handle("dialog:pick-mmproj", () =>
     pickFile("选择视觉投影模型（mmproj）", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
   );
+  ipcMain.handle("dialog:pick-mcp-servers-config", async () => {
+    const selection = await pickFile(
+      "选择 MCP Servers 配置",
+      [{ name: "JSON 配置", extensions: ["json"] }],
+    );
+    if (!selection) return null;
+    validateMcpServersConfigContents(await fs.readFile(selection.path, "utf8"));
+    return selection;
+  });
   ipcMain.handle("dialog:pick-chat-images", () => pickChatImages());
+  ipcMain.handle("dialog:pick-chat-documents", () => pickChatDocuments());
   ipcMain.handle("chat-history:list", () => {
     if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
     return chatHistoryStore.listConversations();
@@ -523,6 +574,12 @@ function registerIpc(): void {
     runtime.abortChat(requestId);
     tts.interrupt(requestId);
   });
+  ipcMain.on(
+    "chat:tool-approval",
+    (_event, payload: { requestId: string; toolCallId: string; approved: boolean }) => {
+      runtime.resolveToolApproval(payload.requestId, payload.toolCallId, payload.approved === true);
+    },
+  );
 }
 
 function sendSpeechState(state: SpeechState): void {

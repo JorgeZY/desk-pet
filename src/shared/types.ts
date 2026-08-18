@@ -24,6 +24,7 @@ export interface RuntimeConfig {
   hfRepo: string;
   modelPath: string;
   mmprojPath: string;
+  mcpServersConfigPath: string;
   host: "127.0.0.1";
   port: number;
   contextSize: number;
@@ -35,6 +36,7 @@ export interface RuntimeConfig {
   topP: number;
   minP: number;
   repeatPenalty: number;
+  presencePenalty: number;
   autoStart: boolean;
   chatTemplates: string[];
   systemPrompt: string;
@@ -158,7 +160,9 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   images?: ChatImage[];
+  documents?: ChatDocument[];
   reasoning?: string;
+  toolCalls?: ChatToolCall[];
   createdAt: number;
 }
 
@@ -179,10 +183,49 @@ export interface ChatImage {
   previewUrl?: string;
 }
 
+export type ChatDocumentMimeType = "text/plain" | "application/pdf";
+
+export interface ChatDocument {
+  path: string;
+  name: string;
+  mimeType: ChatDocumentMimeType;
+  text: string;
+  characterCount: number;
+  truncated?: boolean;
+}
+
+export type ThinkingEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export type ChatToolCallStatus =
+  | "pending-approval"
+  | "running"
+  | "completed"
+  | "denied"
+  | "error";
+
+export interface ChatToolCall {
+  id: string;
+  name: string;
+  displayName: string;
+  arguments: string;
+  status: ChatToolCallStatus;
+  requiresApproval: boolean;
+  result?: string;
+  error?: string;
+}
+
+export interface ChatToolDefinition {
+  id: string;
+  displayName: string;
+  source: "builtin" | "mcp";
+  requiresApproval: boolean;
+}
+
 export interface ChatRequest {
   requestId: string;
   messages: ChatMessage[];
   thinking: boolean;
+  thinkingEffort: ThinkingEffort;
 }
 
 export type ChatEvent =
@@ -190,6 +233,15 @@ export type ChatEvent =
   | { requestId: string; type: "warning"; message: string }
   | { requestId: string; type: "delta"; text: string }
   | { requestId: string; type: "reasoning"; text: string }
+  | { requestId: string; type: "tool-call"; call: ChatToolCall }
+  | {
+      requestId: string;
+      type: "tool-result";
+      toolCallId: string;
+      status: Extract<ChatToolCallStatus, "completed" | "denied" | "error">;
+      result?: string;
+      error?: string;
+    }
   | { requestId: string; type: "done"; timings?: Record<string, unknown> }
   | { requestId: string; type: "error"; message: string };
 
@@ -225,7 +277,10 @@ export interface DesktopPetApi {
   pickExecutable(): Promise<FilePickResult | null>;
   pickModel(): Promise<FilePickResult | null>;
   pickMmproj(): Promise<FilePickResult | null>;
+  pickMcpServersConfig(): Promise<FilePickResult | null>;
+  listRuntimeTools(): Promise<ChatToolDefinition[]>;
   pickChatImages(): Promise<ChatImage[]>;
+  pickChatDocuments(): Promise<ChatDocument[]>;
   listChatConversations(): Promise<ChatConversation[]>;
   createChatConversation(): Promise<ChatConversation>;
   loadChatConversation(conversationId: string): Promise<ChatMessage[]>;
@@ -236,6 +291,7 @@ export interface DesktopPetApi {
   openExternal(url: string): Promise<void>;
   startChat(request: ChatRequest): void;
   abortChat(requestId: string): void;
+  resolveToolApproval(requestId: string, toolCallId: string, approved: boolean): void;
   onChatEvent(listener: (event: ChatEvent) => void): () => void;
   onRuntimeState(listener: (state: RuntimeState) => void): () => void;
   onSpeechState(listener: (state: SpeechState) => void): () => void;

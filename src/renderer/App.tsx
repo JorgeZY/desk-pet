@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   BootstrapData,
+  ChatDocument,
   ChatImage,
   RuntimeConfig,
   RuntimeState,
@@ -30,6 +31,7 @@ export function App() {
   const [fatalError, setFatalError] = useState("");
   const [draft, setDraft] = useState("");
   const [draftImages, setDraftImages] = useState<ChatImage[]>([]);
+  const [draftDocuments, setDraftDocuments] = useState<ChatDocument[]>([]);
   const draftRef = useRef("");
   const speechBaseDraftRef = useRef("");
   const activeSpeechRef = useRef<string | null>(null);
@@ -243,8 +245,12 @@ export function App() {
     setRuntime(data.runtime);
     setSpeech(data.speech);
     if (!data.config.mmprojPath) setDraftImages([]);
-    if (restart) setRuntime(await window.desktopPet.restartRuntime());
-    await transitionToView("pet");
+    if (restart) {
+      setRuntime(await window.desktopPet.restartRuntime());
+      await transitionToView("pet");
+    } else {
+      await transitionToView("chat");
+    }
   };
 
   const startRuntime = async () => setRuntime(await window.desktopPet.startRuntime());
@@ -329,10 +335,13 @@ export function App() {
           speech={speech}
           tts={tts}
           chatTemplates={bootstrap.config.chatTemplates}
+          maxTokens={bootstrap.config.maxTokens}
           draft={draft}
           images={draftImages}
+          documents={draftDocuments}
           onDraftChange={updateDraft}
           onImagesChange={setDraftImages}
+          onDocumentsChange={setDraftDocuments}
           visionEnabled={runtime.visionEnabled}
           onPrepareSpeech={prepareSpeech}
           onStartSpeech={startSpeech}
@@ -362,7 +371,7 @@ export function App() {
           onImportTts={importTtsModels}
           onSpeakText={speakText}
           onStopSpeaking={stopSpeaking}
-          onClose={() => void transitionToView("pet")}
+          onClose={() => void transitionToView("chat")}
           onSave={saveSettings}
         />
         {globalSpeechBubble}

@@ -942,6 +942,7 @@ select:focus {
 }
 
 .image-attach-button:hover:not(:disabled),
+.document-attach-button:hover:not(:disabled),
 .voice-button:hover:not(:disabled):not(.phase-recording) {
   color: #673423;
   background: var(--pixel-amber-light);
@@ -953,6 +954,25 @@ select:focus {
 .image-attach-button:active:not(:disabled) {
   box-shadow: none;
   transform: translate(2px, 2px);
+}
+
+.document-attach-button {
+  color: #704839;
+  background: #ffe6b7;
+  border: 2px solid var(--pixel-outline-soft);
+  border-radius: 4px;
+  box-shadow: 2px 2px 0 rgba(75, 48, 40, 0.24);
+}
+
+.document-attach-button:active:not(:disabled) {
+  box-shadow: none;
+  transform: translate(2px, 2px);
+}
+
+.document-attach-button b {
+  background: var(--pixel-orange);
+  border: 1px solid var(--pixel-outline);
+  border-radius: 2px;
 }
 
 .image-attach-button b {
@@ -988,10 +1008,75 @@ select:focus {
 }
 
 .thinking-toggle[aria-pressed="true"]::before {
+  right: 2px;
+  left: auto;
   background: #ffc477;
   border-color: #97481f;
   box-shadow: none;
-  transform: translate3d(100%, 0, 0);
+  transform: none;
+}
+
+.thinking-effort {
+  background: #f1deb3;
+  border: 2px solid var(--pixel-outline-soft);
+  border-radius: 3px;
+  box-shadow: 1px 1px 0 rgba(75, 48, 40, 0.18);
+}
+
+.thinking-effort--active {
+  background: #ffe0a5;
+  border-color: var(--pixel-outline);
+}
+
+.thinking-effort__menu {
+  background: #fff3ce;
+  border: 2px solid var(--pixel-outline);
+  border-radius: 3px;
+  box-shadow: 3px 3px 0 rgba(75, 48, 40, 0.24);
+}
+
+.thinking-effort__menu button {
+  border-radius: 2px;
+}
+
+.thinking-effort__menu button:hover,
+.thinking-effort__menu button[aria-selected="true"] {
+  color: var(--pixel-outline);
+  background: #ffc477;
+}
+
+.thinking-effort__menu button:hover small,
+.thinking-effort__menu button[aria-selected="true"] small {
+  color: var(--pixel-outline);
+}
+
+.message-action--regenerate {
+  color: #7d432d;
+  background: #fff3ce;
+  border: 2px solid var(--pixel-outline-soft);
+  border-radius: 3px;
+  box-shadow: 1px 1px 0 rgba(75, 48, 40, 0.18);
+}
+
+.message-action--regenerate:hover:not(:disabled) {
+  color: #6f321f;
+  background: #ffe0a5;
+  border-color: var(--pixel-outline);
+}
+
+.document-attachment,
+.tool-call {
+  border-width: 2px;
+  border-radius: 3px;
+  box-shadow: 2px 2px 0 rgba(75, 48, 40, 0.16);
+}
+
+.scroll-to-latest {
+  color: var(--pixel-outline);
+  background: #fff3ce;
+  border: 2px solid var(--pixel-outline);
+  border-radius: 3px;
+  box-shadow: 2px 2px 0 rgba(75, 48, 40, 0.25);
 }
 
 .thinking-toggle__option--quick.active {

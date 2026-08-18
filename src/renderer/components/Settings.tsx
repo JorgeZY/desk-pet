@@ -1,5 +1,5 @@
-import { useId, useState } from "react";
-import type { RuntimeConfig, RuntimeState, SpeechState, TtsState } from "../../shared/types";
+import { useEffect, useId, useState } from "react";
+import type { ChatToolDefinition, RuntimeConfig, RuntimeState, SpeechState, TtsState } from "../../shared/types";
 import { CHAT_TEMPLATE_COUNT, CHAT_TEMPLATE_MAX_LENGTH } from "../../shared/chat-templates";
 import { PixelIcon } from "./PixelIcon";
 import { RuntimeBadge } from "./RuntimeBadge";
@@ -22,6 +22,58 @@ interface SettingsProps {
 interface ParameterLabelProps {
   label: string;
   tooltip: string;
+}
+
+interface NumericTextInputProps {
+  value: number;
+  min: number;
+  max: number;
+  integer?: boolean;
+  onChange: (value: number) => void;
+}
+
+export function normalizeNumericDraft(
+  draft: string,
+  fallback: number,
+  min: number,
+  max: number,
+  integer = false,
+): number {
+  const parsed = draft.trim() === "" ? fallback : Number(draft);
+  const finite = Number.isFinite(parsed) ? parsed : fallback;
+  const normalized = integer ? Math.round(finite) : finite;
+  return Math.min(max, Math.max(min, normalized));
+}
+
+function NumericTextInput({ value, min, max, integer = false, onChange }: NumericTextInputProps) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => setDraft(String(value)), [value]);
+
+  const commit = () => {
+    const next = normalizeNumericDraft(draft, value, min, max, integer);
+    setDraft(String(next));
+    onChange(next);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode={integer ? "numeric" : "decimal"}
+      value={draft}
+      onChange={(event) => {
+        const nextDraft = event.target.value;
+        setDraft(nextDraft);
+        if (nextDraft.trim() === "") return;
+        const parsed = Number(nextDraft);
+        if (Number.isFinite(parsed)) onChange(parsed);
+      }}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+      }}
+    />
+  );
 }
 
 function ParameterLabel({ label, tooltip }: ParameterLabelProps) {
@@ -48,6 +100,29 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
   const [config, setConfig] = useState(initialConfig);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [tools, setTools] = useState<ChatToolDefinition[]>([]);
+  const [toolsStatus, setToolsStatus] = useState("正在读取当前工具…");
+
+  useEffect(() => {
+    let cancelled = false;
+    if (runtime.phase !== "ready") {
+      setTools([]);
+      setToolsStatus("启动模型后可查看 llama-server 当前公开的工具。");
+      return () => { cancelled = true; };
+    }
+    setToolsStatus("正在读取当前工具…");
+    void window.desktopPet.listRuntimeTools().then((currentTools) => {
+      if (cancelled) return;
+      setTools(currentTools);
+      setToolsStatus(currentTools.length ? "" : "当前 llama-server 没有公开可用工具。");
+    }).catch((toolError) => {
+      if (!cancelled) {
+        setTools([]);
+        setToolsStatus(`读取工具失败：${toolError instanceof Error ? toolError.message : String(toolError)}`);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [runtime.phase, runtime.updatedAt]);
 
   const update = <K extends keyof RuntimeConfig>(key: K, value: RuntimeConfig[K]) =>
     setConfig((current) => ({ ...current, [key]: value }));
@@ -69,6 +144,16 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
   const pickMmproj = async () => {
     const result = await window.desktopPet.pickMmproj();
     if (result) update("mmprojPath", result.path);
+  };
+
+  const pickMcpServersConfig = async () => {
+    setError("");
+    try {
+      const result = await window.desktopPet.pickMcpServersConfig();
+      if (result) update("mcpServersConfigPath", result.path);
+    } catch (pickError) {
+      setError(pickError instanceof Error ? pickError.message : String(pickError));
+    }
   };
 
   const save = async (restart: boolean) => {
@@ -139,25 +224,58 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
         <section className="settings-section">
           <div className="section-heading"><span>02</span><div><b>模型参数</b><small>运行参数与常用采样设置</small></div></div>
           <div className="metric-grid metric-grid--three">
-            <label><ParameterLabel label="上下文" tooltip="模型一次可参考的最大 token 数。越大越能保留长对话，但会占用更多内存或显存。" /><input type="number" min={512} max={131072} step={512} value={config.contextSize} onChange={(event) => update("contextSize", Number(event.target.value))} /></label>
-            <label><ParameterLabel label="GPU 层数" tooltip="交给 GPU 计算的模型层数。数值越高通常越快，但需要更多显存；999 表示尽量全部卸载。" /><input type="number" min={0} max={999} value={config.gpuLayers} onChange={(event) => update("gpuLayers", Number(event.target.value))} /></label>
-            <label><ParameterLabel label="CPU 线程" tooltip="llama.cpp 推理使用的 CPU 线程数。过高可能抢占系统资源，通常接近性能核心数即可。" /><input type="number" min={1} max={256} value={config.threads} onChange={(event) => update("threads", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="上下文" tooltip="模型一次可参考的最大 token 数。越大越能保留长对话，但会占用更多内存或显存。" /><NumericTextInput value={config.contextSize} min={512} max={131072} integer onChange={(value) => update("contextSize", value)} /></label>
+            <label><ParameterLabel label="GPU 层数" tooltip="交给 GPU 计算的模型层数。数值越高通常越快，但需要更多显存；999 表示尽量全部卸载。" /><NumericTextInput value={config.gpuLayers} min={0} max={999} integer onChange={(value) => update("gpuLayers", value)} /></label>
+            <label><ParameterLabel label="CPU 线程" tooltip="llama.cpp 推理使用的 CPU 线程数。过高可能抢占系统资源，通常接近性能核心数即可。" /><NumericTextInput value={config.threads} min={1} max={256} integer onChange={(value) => update("threads", value)} /></label>
           </div>
           <div className="metric-grid metric-grid--three">
-            <label><ParameterLabel label="最大输出" tooltip="每次回答最多生成的 token 数。提高后回答可以更长，也会增加生成时间。" /><input type="number" min={32} max={8192} value={config.maxTokens} onChange={(event) => update("maxTokens", Number(event.target.value))} /></label>
-            <label><ParameterLabel label="温度" tooltip="控制随机性。较低更稳定和确定，较高更有变化但也更容易偏离事实。" /><input type="number" min={0} max={2} step={0.1} value={config.temperature} onChange={(event) => update("temperature", Number(event.target.value))} /></label>
-            <label><ParameterLabel label="端口" tooltip="本地 llama.cpp 服务监听的端口。仅在端口冲突或连接外部本地服务时需要调整。" /><input type="number" min={1024} max={65535} value={config.port} onChange={(event) => update("port", Number(event.target.value))} /></label>
+            <label><ParameterLabel label="最大输出" tooltip="每次回答最多生成的 token 数。提高后回答可以更长，也会增加生成时间。" /><NumericTextInput value={config.maxTokens} min={32} max={8192} integer onChange={(value) => update("maxTokens", value)} /></label>
+            <label><ParameterLabel label="温度" tooltip="控制随机性。较低更稳定和确定，较高更有变化但也更容易偏离事实。" /><NumericTextInput value={config.temperature} min={0} max={2} onChange={(value) => update("temperature", value)} /></label>
+            <label><ParameterLabel label="端口" tooltip="本地 llama.cpp 服务监听的端口。仅在端口冲突或连接外部本地服务时需要调整。" /><NumericTextInput value={config.port} min={1024} max={65535} integer onChange={(value) => update("port", value)} /></label>
           </div>
-          <div className="metric-grid metric-grid--four">
-            <label><ParameterLabel label="Top K" tooltip="每一步只从概率最高的 K 个 token 中采样。较小更保守；0 通常表示关闭此筛选。" /><input type="number" min={0} max={1000} value={config.topK} onChange={(event) => update("topK", Number(event.target.value))} /></label>
-            <label><ParameterLabel label="Top P" tooltip="只保留累计概率达到该值的候选 token。越低越聚焦，常与温度一起调节。" /><input type="number" min={0} max={1} step={0.05} value={config.topP} onChange={(event) => update("topP", Number(event.target.value))} /></label>
-            <label><ParameterLabel label="Min P" tooltip="过滤相对概率过低的 token。提高可减少离题候选，但过高可能让表达单一。" /><input type="number" min={0} max={1} step={0.01} value={config.minP} onChange={(event) => update("minP", Number(event.target.value))} /></label>
-            <label><ParameterLabel label="重复惩罚" tooltip="降低近期已出现 token 再次被选中的概率。1 表示不惩罚，略高可减少复读。" /><input type="number" min={0} max={2} step={0.05} value={config.repeatPenalty} onChange={(event) => update("repeatPenalty", Number(event.target.value))} /></label>
+          <div className="metric-grid metric-grid--three">
+            <label><ParameterLabel label="Top K" tooltip="每一步只从概率最高的 K 个 token 中采样。较小更保守；0 通常表示关闭此筛选。" /><NumericTextInput value={config.topK} min={0} max={1000} integer onChange={(value) => update("topK", value)} /></label>
+            <label><ParameterLabel label="Top P" tooltip="只保留累计概率达到该值的候选 token。越低越聚焦，常与温度一起调节。" /><NumericTextInput value={config.topP} min={0} max={1} onChange={(value) => update("topP", value)} /></label>
+            <label><ParameterLabel label="Min P" tooltip="过滤相对概率过低的 token。提高可减少离题候选，但过高可能让表达单一。" /><NumericTextInput value={config.minP} min={0} max={1} onChange={(value) => update("minP", value)} /></label>
+          </div>
+          <div className="metric-grid metric-grid--two">
+            <label><ParameterLabel label="重复惩罚" tooltip="降低近期已出现 token 再次被选中的概率。1 表示不惩罚，略高可减少复读。" /><NumericTextInput value={config.repeatPenalty} min={0} max={2} onChange={(value) => update("repeatPenalty", value)} /></label>
+            <label><ParameterLabel label="存在惩罚" tooltip="对已经出现过的 token 施加固定惩罚。0 表示关闭；正值鼓励引入新内容，负值会增强已有主题。" /><NumericTextInput value={config.presencePenalty} min={-2} max={2} onChange={(value) => update("presencePenalty", value)} /></label>
           </div>
         </section>
 
         <section className="settings-section">
-          <div className="section-heading"><span>03</span><div><b>人格</b><small>桌宠的系统提示词</small></div></div>
+          <div className="section-heading"><span>03</span><div><b>工具</b><small>查看 builtin tools，并通过 MCP 扩展</small></div></div>
+          <div className="settings-value-row">
+            <div>
+              <span>MCP Servers 配置（可选）</span>
+              <strong title={config.mcpServersConfigPath}>{config.mcpServersConfigPath || "未添加自定义工具"}</strong>
+            </div>
+            <div className="settings-value-actions">
+              {config.mcpServersConfigPath && (
+                <button className="button button--quiet" type="button" onClick={() => update("mcpServersConfigPath", "")}>清除</button>
+              )}
+              <button className="button button--quiet" type="button" onClick={pickMcpServersConfig}>选择 JSON</button>
+            </div>
+          </div>
+          <p className="hint">使用 Cursor 兼容的 MCP 配置。保存并重启模型后，自定义 MCP tools 会与 builtin tools 一起显示并参与调用。</p>
+          {tools.length ? (
+            <ul className="runtime-tool-list" aria-label="当前工具列表">
+              {tools.map((tool) => (
+                <li key={tool.id}>
+                  <div><b>{tool.displayName}</b><code>{tool.id}</code></div>
+                  <span className={`runtime-tool-source runtime-tool-source--${tool.source}`}>{tool.source === "mcp" ? "MCP" : "BUILTIN"}</span>
+                  <span>{tool.requiresApproval ? "写入需确认" : "自动执行"}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="compact-result">{toolsStatus}</p>
+          )}
+        </section>
+
+        <section className="settings-section">
+          <div className="section-heading"><span>04</span><div><b>人格</b><small>桌宠的系统提示词</small></div></div>
           <textarea rows={5} value={config.systemPrompt} onChange={(event) => update("systemPrompt", event.target.value)} />
           <label className="switch-row">
             <div><b>自动启动模型</b><span>打开桌宠时准备本地模型</span></div>
@@ -166,7 +284,7 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
         </section>
 
         <section className="settings-section">
-          <div className="section-heading"><span>04</span><div><b>快捷模板</b><small>自定义聊天首页的一键填充内容</small></div></div>
+          <div className="section-heading"><span>05</span><div><b>快捷模板</b><small>自定义聊天首页的一键填充内容</small></div></div>
           <div className="chat-template-settings">
             {Array.from({ length: CHAT_TEMPLATE_COUNT }, (_item, index) => (
               <label key={index}>
@@ -185,7 +303,7 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
         </section>
 
         <section className="settings-section">
-          <div className="section-heading"><span>05</span><div><b>本地语音</b><small>录音和识别均在本机完成</small></div></div>
+          <div className="section-heading"><span>06</span><div><b>本地语音</b><small>录音和识别均在本机完成</small></div></div>
           <label className="switch-row">
             <div><b>启用本地语音输入</b><span>同时启用聊天框麦克风与全局 F8 按住说话</span></div>
             <input
@@ -229,7 +347,7 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
         </section>
 
         <section className="settings-section">
-          <div className="section-heading"><span>06</span><div><b>语音输出</b><small>回复由本地模型朗读，不出网</small></div></div>
+          <div className="section-heading"><span>07</span><div><b>语音输出</b><small>回复由本地模型朗读，不出网</small></div></div>
           <label className="switch-row">
             <div><b>启用语音朗读</b><span>团子会用本地语音朗读聊天回复</span></div>
             <input

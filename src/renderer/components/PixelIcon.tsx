@@ -8,12 +8,15 @@ export type PixelIconName =
   | "dot"
   | "upload"
   | "image"
+  | "document"
   | "bolt"
   | "sparkle"
   | "history"
   | "plus"
   | "trash"
-  | "volume";
+  | "volume"
+  | "refresh"
+  | "chevron-down";
 
 interface PixelIconProps {
   name: PixelIconName;
@@ -30,28 +33,37 @@ const ICON_PATHS = {
   dot: "M6 5h4v1h1v4h-1v1H6v-1H5V6h1V5Z",
   upload: "M7 1h2v2h2v2h2v2h-3V6H9v6H7V6H6v1H3V5h2V3h2V1ZM2 10h2v3h8v-3h2v5H2v-5Z",
   image: "M2 2h12v12H2V2Zm2 2v8h8V4H4Zm1 6 2-2 2 2 1-1 2 2v1H4v-1l1-1Zm5-4h1v1h-1V6Z",
+  document: "M3 1h7l3 3v11H3V1Zm2 2v10h6V6H8V3H5Zm1 5h4v1H6V8Zm0 3h4v1H6v-1Z",
   bolt: "M8 1h4v4h-2v2h3v2h-2v2H9v2H7v2H4v-4h2V9H3V6h2V4h3V1Z",
   sparkle: "M7 1h2v4h2v2h4v2h-4v2H9v4H7v-4H5V9H1V7h4V5h2V1Zm6 10h1v1h1v1h-1v1h-1v-1h-1v-1h1v-1Z",
   history: "M3 2h10v2H3V2ZM2 5h12v9H2V5Zm2 2v5h8V7H4Zm2 1h4v2H6V8Z",
   plus: "M7 2h2v5h5v2H9v5H7V9H2V7h5V2Z",
   trash: "M5 1h6v2h3v2H2V3h3V1ZM3 6h10v9H3V6Zm3 2v5h1V8H6Zm3 0v5h1V8H9Z",
   volume: "M1 5h4l4-4v14L5 11H1V5Zm9-1h1v8H9V4Zm2-2h1v12h-1V2Z",
+  refresh: "M13 8A5 5 0 1 0 13 11M9 4h4v4",
+  "chevron-down": "M4 6l4 4 4-4",
 } satisfies Record<PixelIconName, string>;
 
 export function PixelIcon({ name, className }: PixelIconProps) {
+  const outlined = name === "refresh" || name === "chevron-down";
+
   return (
     <svg
       className={className}
       width="16"
       height="16"
       viewBox="0 0 16 16"
-      fill="currentColor"
-      shapeRendering="crispEdges"
+      fill={outlined ? "none" : "currentColor"}
+      stroke={outlined ? "currentColor" : undefined}
+      strokeWidth={outlined ? "2" : undefined}
+      strokeLinecap={outlined ? "round" : undefined}
+      strokeLinejoin={outlined ? "round" : undefined}
+      shapeRendering={outlined ? "geometricPrecision" : "crispEdges"}
       aria-hidden="true"
       focusable="false"
       data-pixel-icon={name}
     >
-      <path d={ICON_PATHS[name]} fillRule="evenodd" />
+      <path d={ICON_PATHS[name]} fillRule={outlined ? undefined : "evenodd"} />
     </svg>
   );
 }

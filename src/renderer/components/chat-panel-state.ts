@@ -1,3 +1,5 @@
+import type { ChatMessage } from "../../shared/types";
+
 export function isCurrentConversationOperation(
   operationToken: number,
   currentToken: number,
@@ -24,6 +26,21 @@ export function shouldResetComposerAfterInitialization(
 }
 
 export type ConversationOperationKind = "create" | "switch" | "delete";
+
+export function isNearChatBottom(
+  scrollHeight: number,
+  scrollTop: number,
+  clientHeight: number,
+  threshold = 36,
+): boolean {
+  return scrollHeight - scrollTop - clientHeight <= threshold;
+}
+
+export function regenerationBaseMessages(messages: ChatMessage[]): ChatMessage[] | null {
+  if (messages.length < 2 || messages.at(-1)?.role !== "assistant") return null;
+  const baseMessages = messages.slice(0, -1);
+  return baseMessages.at(-1)?.role === "user" ? baseMessages : null;
+}
 export type ConversationOperationPhase = "start" | "commit";
 
 export interface ConversationOperationUiPolicy {

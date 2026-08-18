@@ -9,10 +9,12 @@ describe("runtime config", () => {
     expect(config.hfRepo).toBe("openbmb/MiniCPM5-1B-GGUF:Q4_K_M");
     expect(config.contextSize).toBe(8192);
     expect(config.mmprojPath).toBe("");
+    expect(config.mcpServersConfigPath).toBe("");
     expect(config.topK).toBe(40);
     expect(config.topP).toBe(0.95);
     expect(config.minP).toBe(0.05);
     expect(config.repeatPenalty).toBe(1);
+    expect(config.presencePenalty).toBe(0);
     expect(config.speech.modelDirectory).toBe("");
     expect(config.chatTemplates).toEqual(DEFAULT_CHAT_TEMPLATES);
   });
@@ -45,6 +47,7 @@ describe("runtime config", () => {
       topP: -1,
       minP: 4,
       repeatPenalty: -3,
+      presencePenalty: 9,
       threads: 0,
     });
     expect(config.port).toBe(1024);
@@ -54,6 +57,7 @@ describe("runtime config", () => {
     expect(config.topP).toBe(0);
     expect(config.minP).toBe(1);
     expect(config.repeatPenalty).toBe(0);
+    expect(config.presencePenalty).toBe(2);
     expect(config.threads).toBe(1);
     expect(config.speech.threads).toBe(2);
   });
@@ -146,6 +150,17 @@ describe("runtime config", () => {
       hfRepo: "someone/another-model:Q4_K_M",
     });
     expect(validateConfig(config)).toEqual([]);
+  });
+
+  it("normalizes and validates the optional MCP servers config", () => {
+    const config = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      mcpServersConfigPath: " D:\\tools\\mcp.json ",
+    });
+    expect(config.mcpServersConfigPath).toBe("D:\\tools\\mcp.json");
+    expect(validateConfig(config)).toEqual([]);
+    expect(validateConfig({ ...config, mcpServersConfigPath: "D:\\tools\\mcp.yaml" }))
+      .toContain("MCP Servers 配置必须是 .json 文件。");
   });
 
   it("accepts an optional GGUF mmproj and rejects other file types", () => {

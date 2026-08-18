@@ -33,7 +33,15 @@ describe("ChatHistoryStore", () => {
     const store = createStore();
     const conversation = store.createConversation();
     store.saveMessages(conversation.id, [
-      message("message-1", "user", "  帮我继续完善桌面宠物的聊天历史  "),
+      message("message-1", "user", "  帮我继续完善桌面宠物的聊天历史  ", {
+        documents: [{
+          path: "D:\\requirements.pdf",
+          name: "requirements.pdf",
+          mimeType: "application/pdf",
+          text: "附件需求正文",
+          characterCount: 6,
+        }],
+      }),
       message("message-2", "assistant", "没问题", {
         reasoning: "内部思考",
         images: [{
@@ -41,6 +49,15 @@ describe("ChatHistoryStore", () => {
           name: "cat.png",
           mimeType: "image/png",
           previewUrl: "data:image/png;base64,large",
+        }],
+        toolCalls: [{
+          id: "tool-1",
+          name: "read_file",
+          displayName: "读取文件",
+          arguments: "{\"path\":\"README.md\"}",
+          status: "completed",
+          requiresApproval: false,
+          result: "文件内容",
         }],
       }),
     ]);
@@ -50,10 +67,27 @@ describe("ChatHistoryStore", () => {
       messageCount: 2,
     });
     expect(store.loadMessages(conversation.id)).toEqual([
-      message("message-1", "user", "  帮我继续完善桌面宠物的聊天历史  "),
+      message("message-1", "user", "  帮我继续完善桌面宠物的聊天历史  ", {
+        documents: [{
+          path: "D:\\requirements.pdf",
+          name: "requirements.pdf",
+          mimeType: "application/pdf",
+          text: "附件需求正文",
+          characterCount: 6,
+        }],
+      }),
       message("message-2", "assistant", "没问题", {
         reasoning: "内部思考",
         images: [{ path: "D:\\cat.png", name: "cat.png", mimeType: "image/png" }],
+        toolCalls: [{
+          id: "tool-1",
+          name: "read_file",
+          displayName: "读取文件",
+          arguments: "{\"path\":\"README.md\"}",
+          status: "completed",
+          requiresApproval: false,
+          result: "文件内容",
+        }],
       }),
     ]);
 
