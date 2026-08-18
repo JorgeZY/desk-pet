@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../../main/config-store";
 import type { RuntimeState, SpeechState, TtsState } from "../../shared/types";
-import { Settings } from "./Settings";
+import { normalizeNumericDraft, Settings } from "./Settings";
 
 const runtime: RuntimeState = {
   phase: "ready",
@@ -51,7 +51,7 @@ describe("Settings", () => {
   it("shows help tooltips for every model and TTS parameter", () => {
     const markup = renderSettings();
 
-    expect(markup.match(/role="tooltip"/g)).toHaveLength(12);
+    expect(markup.match(/role="tooltip"/g)).toHaveLength(13);
     for (const label of [
       "上下文",
       "GPU 层数",
@@ -63,6 +63,7 @@ describe("Settings", () => {
       "Top P",
       "Min P",
       "重复惩罚",
+      "存在惩罚",
       "语速",
       "音色编号",
     ]) {
@@ -80,5 +81,25 @@ describe("Settings", () => {
     expect(markup.match(/全局 F8/g)).toHaveLength(1);
     expect(markup).toContain("同时启用聊天框麦克风与全局 F8 按住说话");
     expect(markup.match(/type="checkbox"/g)).toHaveLength(3);
+  });
+
+  it("uses editable text fields for model numbers and normalizes only when committed", () => {
+    const markup = renderSettings();
+
+    expect(markup).toContain('inputMode="numeric"');
+    expect(markup).toContain('inputMode="decimal"');
+    expect(markup).toContain('value="0"');
+    expect(normalizeNumericDraft("", 0, 0, 999, true)).toBe(0);
+    expect(normalizeNumericDraft("1", 0, 0, 999, true)).toBe(1);
+    expect(normalizeNumericDraft("01", 0, 0, 999, true)).toBe(1);
+    expect(normalizeNumericDraft("-0.5", 0, -2, 2)).toBe(-0.5);
+    expect(normalizeNumericDraft("9", 0, -2, 2)).toBe(2);
+  });
+
+  it("shows the current tools area and MCP configuration control", () => {
+    const markup = renderSettings();
+    expect(markup).toContain("正在读取当前工具");
+    expect(markup).toContain("MCP Servers 配置");
+    expect(markup).toContain("选择 JSON");
   });
 });

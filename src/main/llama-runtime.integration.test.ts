@@ -25,6 +25,23 @@ describe("LlamaRuntime local HTTP integration", () => {
         response.end('{"status":"ok"}');
         return;
       }
+      if (request.url === "/tools" && request.method === "GET") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify([{
+          tool: "read_file",
+          display_name: "Read file",
+          permissions: { write: false },
+          definition: {
+            type: "function",
+            function: {
+              name: "read_file",
+              description: "Read a local file",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        }]));
+        return;
+      }
       if (request.url === "/v1/chat/completions") {
         requestPayload = JSON.parse(await readBody(request)) as Record<string, unknown>;
         response.writeHead(200, {
@@ -68,6 +85,7 @@ describe("LlamaRuntime local HTTP integration", () => {
       {
         requestId: "integration-request",
         thinking: true,
+        thinkingEffort: "medium",
         messages: [
           {
             id: "user-message",
@@ -96,8 +114,114 @@ describe("LlamaRuntime local HTTP integration", () => {
       top_p: DEFAULT_CONFIG.topP,
       min_p: DEFAULT_CONFIG.minP,
       repeat_penalty: DEFAULT_CONFIG.repeatPenalty,
-      chat_template_kwargs: { enable_thinking: true },
+      presence_penalty: DEFAULT_CONFIG.presencePenalty,
+      reasoning_effort: "medium",
+      thinking_budget_tokens: 256,
+      chat_template_kwargs: { enable_thinking: true, reasoning_effort: "medium" },
     });
+  });
+
+  it("runs a streamed builtin tool call and continues to the final answer", async () => {
+    let completionCount = 0;
+    let toolPayload: Record<string, unknown> | undefined;
+    const server = createServer(async (request, response) => {
+      if (request.url === "/health") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end('{"status":"ok"}');
+        return;
+      }
+      if (request.url === "/tools" && request.method === "GET") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify([{
+          tool: "read_file",
+          display_name: "读取文件",
+          permissions: { write: false },
+          definition: {
+            type: "function",
+            function: {
+              name: "read_file",
+              description: "Read a local file",
+              parameters: {
+                type: "object",
+                properties: { path: { type: "string" } },
+                required: ["path"],
+              },
+            },
+          },
+        }]));
+        return;
+      }
+      if (request.url === "/tools" && request.method === "POST") {
+        toolPayload = JSON.parse(await readBody(request)) as Record<string, unknown>;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ plain_text_response: "文件里的内容" }));
+        return;
+      }
+      if (request.url === "/v1/chat/completions") {
+        completionCount += 1;
+        const body = JSON.parse(await readBody(request)) as { messages?: unknown[] };
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        if (completionCount === 1) {
+          response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_file","arguments":"{\\"path\\":"}}]}}]}\n\n');
+          response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"notes.txt\\"}"}}]}}]}\n\n');
+          response.end("data: [DONE]\n\n");
+        } else {
+          expect(body.messages?.at(-1)).toEqual({
+            role: "tool",
+            content: "文件里的内容",
+            tool_call_id: "call-1",
+          });
+          response.write('data: {"choices":[{"delta":{"content":"已经读取完成"}}]}\n\n');
+          response.end("data: [DONE]\n\n");
+        }
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    ));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing test server port");
+    const runtime = new LlamaRuntime({ ...DEFAULT_CONFIG, port: address.port });
+    cleanups.push(async () => { await runtime.stop(); });
+    expect((await runtime.start()).phase).toBe("ready");
+
+    const events: ChatEvent[] = [];
+    await runtime.streamChat({
+      requestId: "tool-request",
+      thinking: false,
+      thinkingEffort: "medium",
+      messages: [{
+        id: "user-message",
+        role: "user",
+        content: "读取 notes.txt",
+        createdAt: 1,
+      }],
+    }, (event) => events.push(event));
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "tool-call",
+      "tool-result",
+      "delta",
+      "done",
+    ]);
+    expect(events[1]).toMatchObject({
+      type: "tool-call",
+      call: { id: "call-1", name: "read_file", status: "running" },
+    });
+    expect(events[2]).toMatchObject({
+      type: "tool-result",
+      toolCallId: "call-1",
+      status: "completed",
+      result: "文件里的内容",
+    });
+    expect(toolPayload).toEqual({ tool: "read_file", params: { path: "notes.txt" } });
+    expect(completionCount).toBe(2);
   });
 
 });

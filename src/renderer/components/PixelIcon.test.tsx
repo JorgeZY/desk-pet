@@ -16,6 +16,8 @@ const ICONS: PixelIconName[] = [
   "image",
   "bolt",
   "sparkle",
+  "refresh",
+  "chevron-down",
 ];
 
 describe("PixelIcon", () => {
@@ -25,11 +27,20 @@ describe("PixelIcon", () => {
     expect(markup).toContain('width="16"');
     expect(markup).toContain('height="16"');
     expect(markup).toContain('viewBox="0 0 16 16"');
-    expect(markup).toContain('shape-rendering="crispEdges"');
+    expect(markup).toContain(`shape-rendering="${name === "refresh" || name === "chevron-down" ? "geometricPrecision" : "crispEdges"}"`);
     expect(markup).toContain(`data-pixel-icon="${name}"`);
     expect(markup).toContain('aria-hidden="true"');
     expect(markup).toContain("<path");
     expect(markup).not.toMatch(/\d\.\d/u);
+  });
+
+  it.each(["refresh", "chevron-down"] satisfies PixelIconName[])("renders %s as a clean outlined icon", (name) => {
+    const markup = renderToStaticMarkup(<PixelIcon name={name} />);
+
+    expect(markup).toContain('fill="none"');
+    expect(markup).toContain('stroke="currentColor"');
+    expect(markup).toContain('stroke-linecap="round"');
+    expect(markup).toContain('stroke-linejoin="round"');
   });
 
   it("exposes stable centering hooks for attachment removal", () => {

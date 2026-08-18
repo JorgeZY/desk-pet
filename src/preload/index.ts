@@ -31,7 +31,10 @@ const api: DesktopPetApi = {
   pickExecutable: () => ipcRenderer.invoke("dialog:pick-executable"),
   pickModel: () => ipcRenderer.invoke("dialog:pick-model"),
   pickMmproj: () => ipcRenderer.invoke("dialog:pick-mmproj"),
+  pickMcpServersConfig: () => ipcRenderer.invoke("dialog:pick-mcp-servers-config"),
+  listRuntimeTools: () => ipcRenderer.invoke("runtime:list-tools"),
   pickChatImages: () => ipcRenderer.invoke("dialog:pick-chat-images"),
+  pickChatDocuments: () => ipcRenderer.invoke("dialog:pick-chat-documents"),
   listChatConversations: () => ipcRenderer.invoke("chat-history:list"),
   createChatConversation: () => ipcRenderer.invoke("chat-history:create"),
   loadChatConversation: (conversationId: string) =>
@@ -45,6 +48,8 @@ const api: DesktopPetApi = {
   openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url),
   startChat: (request: ChatRequest) => ipcRenderer.send("chat:start", request),
   abortChat: (requestId: string) => ipcRenderer.send("chat:abort", requestId),
+  resolveToolApproval: (requestId: string, toolCallId: string, approved: boolean) =>
+    ipcRenderer.send("chat:tool-approval", { requestId, toolCallId, approved }),
   onChatEvent: (listener: (event: ChatEvent) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: ChatEvent): void => listener(payload);
     ipcRenderer.on("chat:event", wrapped);

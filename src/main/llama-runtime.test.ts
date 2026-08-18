@@ -4,6 +4,7 @@ import {
   buildChatCompletionMessages,
   buildLlamaCommand,
   LlamaRuntime,
+  reasoningBudgetFor,
 } from "./llama-runtime";
 
 afterEach(() => vi.restoreAllMocks());
@@ -18,6 +19,8 @@ describe("buildLlamaCommand", () => {
       "openbmb/MiniCPM5-1B-GGUF:Q4_K_M",
     ]);
     expect(command.args).toContain("--jinja");
+    expect(command.args.slice(command.args.indexOf("--tools"), command.args.indexOf("--tools") + 2))
+      .toEqual(["--tools", "all"]);
     expect(command.args).toContain("desk-pet-model");
     expect(command.args).toContain("--cors-origins");
     expect(command.args).toContain("localhost");
@@ -164,6 +167,125 @@ describe("buildLlamaCommand", () => {
 
     expect(readImage).not.toHaveBeenCalled();
     expect(messages[1]).toEqual({ role: "user", content: "只保留文本" });
+  });
+
+  it("adds an MCP servers config only when custom tools are configured", () => {
+    const path = "D:\\tools\\mcp.json";
+    const command = buildLlamaCommand({ ...DEFAULT_CONFIG, mcpServersConfigPath: path });
+    expect(command.args.slice(
+      command.args.indexOf("--mcp-servers-config"),
+      command.args.indexOf("--mcp-servers-config") + 2,
+    )).toEqual(["--mcp-servers-config", path]);
+    expect(buildLlamaCommand(DEFAULT_CONFIG).args).not.toContain("--mcp-servers-config");
+  });
+
+  it("injects document text and replays completed tool calls", async () => {
+    const messages = await buildChatCompletionMessages(DEFAULT_CONFIG, [
+      {
+        id: "document",
+        role: "user",
+        content: "总结附件",
+        documents: [{
+          path: "D:\\docs\\notes.pdf",
+          name: "notes.pdf",
+          mimeType: "application/pdf",
+          text: "附件正文",
+          characterCount: 4,
+        }],
+        createdAt: 1,
+      },
+      {
+        id: "assistant",
+        role: "assistant",
+        content: "最终回答",
+        toolCalls: [{
+          id: "call-1",
+          name: "read_file",
+          displayName: "Read file",
+          arguments: "{\"path\":\"notes.txt\"}",
+          status: "completed",
+          requiresApproval: false,
+          result: "文件内容",
+        }],
+        createdAt: 2,
+      },
+    ], { visionEnabled: false });
+
+    expect(messages[1]?.content).toContain("<document name=\"notes.pdf\">");
+    expect(messages.slice(2)).toEqual([
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: "call-1",
+          type: "function",
+          function: { name: "read_file", arguments: "{\"path\":\"notes.txt\"}" },
+        }],
+      },
+      { role: "tool", content: "文件内容", tool_call_id: "call-1" },
+      { role: "assistant", content: "最终回答" },
+    ]);
+  });
+
+  it("budgets documents across the request context and keeps the newest attachment first", async () => {
+    const warnings: string[] = [];
+    const config = {
+      ...DEFAULT_CONFIG,
+      contextSize: 1024,
+      maxTokens: 128,
+      systemPrompt: "系统",
+    };
+    const messages = await buildChatCompletionMessages(config, [
+      {
+        id: "old-document",
+        role: "user",
+        content: "旧问题",
+        documents: [{
+          path: "D:\\docs\\old.txt",
+          name: "old.txt",
+          mimeType: "text/plain",
+          text: "旧".repeat(400),
+          characterCount: 400,
+        }],
+        createdAt: 1,
+      },
+      { id: "answer", role: "assistant", content: "旧回答", createdAt: 2 },
+      {
+        id: "new-document",
+        role: "user",
+        content: "新问题",
+        documents: [{
+          path: "D:\\docs\\new.txt",
+          name: "new.txt",
+          mimeType: "text/plain",
+          text: "新".repeat(400),
+          characterCount: 400,
+        }],
+        createdAt: 3,
+      },
+    ], {
+      visionEnabled: false,
+      onWarning: (message) => warnings.push(message),
+    });
+
+    expect(messages[3]?.content).toContain("新".repeat(20));
+    expect(messages[1]).toEqual({ role: "user", content: "旧问题" });
+    const requestTextBytes = messages.reduce((total, message) => (
+      total + (typeof message.content === "string" ? Buffer.byteLength(message.content, "utf8") : 0)
+    ), 0);
+    expect(requestTextBytes).toBeLessThanOrEqual(
+      config.contextSize - config.maxTokens - 3 * 16 - 256,
+    );
+    expect(warnings).toEqual([
+      "附件内容已按 1,024 token 上下文预算截断，优先保留最近消息中的文档。",
+    ]);
+  });
+
+  it("keeps medium reasoning within half of the configured output budget", () => {
+    expect(reasoningBudgetFor("minimal", 512)).toBe(51);
+    expect(reasoningBudgetFor("medium", 512)).toBe(256);
+    expect(reasoningBudgetFor("xhigh", 512)).toBe(460);
+    expect(reasoningBudgetFor("max", 512)).toBe(-1);
   });
 
   it("does not download an uncached remote model during automatic startup", async () => {

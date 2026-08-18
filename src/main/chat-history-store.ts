@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type { ChatConversation, ChatImage, ChatMessage } from "../shared/types";
+import type {
+  ChatConversation,
+  ChatDocument,
+  ChatImage,
+  ChatMessage,
+  ChatToolCall,
+} from "../shared/types";
 
 const MAX_CONVERSATIONS = 30;
 
@@ -18,6 +24,8 @@ interface MessageRow {
   content: string;
   reasoning: string | null;
   images_json: string | null;
+  documents_json: string | null;
+  tool_calls_json: string | null;
   created_at: number;
 }
 
@@ -41,6 +49,24 @@ function serializeImages(images?: ChatImage[]): string | null {
   return JSON.stringify(images.map(({ path, name, mimeType }) => ({ path, name, mimeType })));
 }
 
+function parseJsonArray<T>(value: string | null): T[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as T[];
+    return Array.isArray(parsed) && parsed.length ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function serializeDocuments(documents?: ChatDocument[]): string | null {
+  return documents?.length ? JSON.stringify(documents) : null;
+}
+
+function serializeToolCalls(toolCalls?: ChatToolCall[]): string | null {
+  return toolCalls?.length ? JSON.stringify(toolCalls) : null;
+}
+
 function conversationFromRow(row: ConversationRow): ChatConversation {
   return {
     id: row.id,
@@ -58,6 +84,9 @@ function titleForMessages(messages: ChatMessage[]): string {
   if (firstText) return firstText.slice(0, 30);
   if (messages.some((message) => message.role === "user" && message.images?.length)) {
     return "图片对话";
+  }
+  if (messages.some((message) => message.role === "user" && message.documents?.length)) {
+    return "文档对话";
   }
   return "新对话";
 }
@@ -87,12 +116,16 @@ export class ChatHistoryStore {
         content TEXT NOT NULL,
         reasoning TEXT,
         images_json TEXT,
+        documents_json TEXT,
+        tool_calls_json TEXT,
         created_at INTEGER NOT NULL,
         UNIQUE(conversation_id, position)
       );
       CREATE INDEX IF NOT EXISTS messages_conversation_position
         ON messages(conversation_id, position);
     `);
+    this.ensureMessageColumn("documents_json", "TEXT");
+    this.ensureMessageColumn("tool_calls_json", "TEXT");
   }
 
   close(): void {
@@ -124,19 +157,23 @@ export class ChatHistoryStore {
   loadMessages(conversationId: string): ChatMessage[] {
     this.requireConversation(conversationId);
     const rows = this.database.prepare(`
-      SELECT id, role, content, reasoning, images_json, created_at
+      SELECT id, role, content, reasoning, images_json, documents_json, tool_calls_json, created_at
       FROM messages
       WHERE conversation_id = ?
       ORDER BY position ASC
     `).all(conversationId) as unknown as MessageRow[];
     return rows.map((row) => {
       const images = parseImages(row.images_json);
+      const documents = parseJsonArray<ChatDocument>(row.documents_json);
+      const toolCalls = parseJsonArray<ChatToolCall>(row.tool_calls_json);
       return {
         id: row.id,
         role: row.role,
         content: row.content,
         ...(row.reasoning ? { reasoning: row.reasoning } : {}),
         ...(images ? { images } : {}),
+        ...(documents ? { documents } : {}),
+        ...(toolCalls ? { toolCalls } : {}),
         createdAt: row.created_at,
       };
     });
@@ -147,8 +184,9 @@ export class ChatHistoryStore {
     const nextUpdatedAt = Math.max(this.now(), current.updated_at + 1);
     const insert = this.database.prepare(`
       INSERT INTO messages (
-        id, conversation_id, position, role, content, reasoning, images_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        id, conversation_id, position, role, content, reasoning, images_json,
+        documents_json, tool_calls_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.database.exec("BEGIN IMMEDIATE");
@@ -163,6 +201,8 @@ export class ChatHistoryStore {
           message.content,
           message.reasoning ?? null,
           serializeImages(message.images),
+          serializeDocuments(message.documents),
+          serializeToolCalls(message.toolCalls),
           message.createdAt,
         );
       });
@@ -196,6 +236,13 @@ export class ChatHistoryStore {
     `).get(conversationId) as unknown as ConversationRow | undefined;
     if (!row) throw new Error("找不到指定的聊天会话。");
     return row;
+  }
+
+  private ensureMessageColumn(name: "documents_json" | "tool_calls_json", type: "TEXT"): void {
+    const columns = this.database.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === name)) {
+      this.database.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
+    }
   }
 
   private pruneConversations(currentConversationId: string): void {
