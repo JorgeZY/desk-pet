@@ -227,6 +227,60 @@ describe("buildLlamaCommand", () => {
     ]);
   });
 
+  it("budgets documents across the request context and keeps the newest attachment first", async () => {
+    const warnings: string[] = [];
+    const config = {
+      ...DEFAULT_CONFIG,
+      contextSize: 1024,
+      maxTokens: 128,
+      systemPrompt: "系统",
+    };
+    const messages = await buildChatCompletionMessages(config, [
+      {
+        id: "old-document",
+        role: "user",
+        content: "旧问题",
+        documents: [{
+          path: "D:\\docs\\old.txt",
+          name: "old.txt",
+          mimeType: "text/plain",
+          text: "旧".repeat(400),
+          characterCount: 400,
+        }],
+        createdAt: 1,
+      },
+      { id: "answer", role: "assistant", content: "旧回答", createdAt: 2 },
+      {
+        id: "new-document",
+        role: "user",
+        content: "新问题",
+        documents: [{
+          path: "D:\\docs\\new.txt",
+          name: "new.txt",
+          mimeType: "text/plain",
+          text: "新".repeat(400),
+          characterCount: 400,
+        }],
+        createdAt: 3,
+      },
+    ], {
+      visionEnabled: false,
+      onWarning: (message) => warnings.push(message),
+    });
+
+    expect(messages[3]?.content).toContain("新".repeat(20));
+    expect(messages[1]).toEqual({ role: "user", content: "旧问题" });
+    const requestTextBytes = messages.reduce((total, message) => (
+      total + (typeof message.content === "string" ? Buffer.byteLength(message.content, "utf8") : 0)
+    ), 0);
+    expect(requestTextBytes).toBeLessThanOrEqual(
+      config.contextSize - config.maxTokens - 3 * 16 - 256,
+    );
+    expect(warnings).toEqual([
+      "附件内容已按 1,024 token 上下文预算截断，优先保留最近消息中的文档。",
+    ]);
+  });
+
   it("keeps medium reasoning within half of the configured output budget", () => {
     expect(reasoningBudgetFor("minimal", 512)).toBe(51);
     expect(reasoningBudgetFor("medium", 512)).toBe(256);

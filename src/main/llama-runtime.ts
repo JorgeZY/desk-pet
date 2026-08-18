@@ -21,6 +21,8 @@ import { thinkingBudgetFor } from "../shared/thinking-effort";
 const MODEL_ALIAS = "desk-pet-model";
 const MAX_CHAT_REQUEST_IMAGES = 4;
 const MAX_CHAT_REQUEST_IMAGE_BYTES = 10 * 1024 * 1024;
+const CHAT_CONTEXT_SAFETY_TOKENS = 256;
+const CHAT_MESSAGE_OVERHEAD_TOKENS = 16;
 const SUPPORTED_IMAGE_MIME_TYPES = new Set<ChatImageMimeType>([
   "image/jpeg",
   "image/png",
@@ -77,9 +79,16 @@ export async function buildChatCompletionMessages(
   options: BuildChatCompletionOptions = {},
 ): Promise<ApiChatMessage[]> {
   const recentMessages = messages.slice(-20);
+  const warnings = new Set<string>();
+  const warn = (message: string): void => {
+    if (warnings.has(message)) return;
+    warnings.add(message);
+    options.onWarning?.(message);
+  };
+  const textContents = contentWithBudgetedDocuments(config, recentMessages, warn);
   const converted: ApiChatMessage[] = recentMessages.map((message) => ({
     role: message.role,
-    content: message.role === "user" ? contentWithDocuments(message) : message.content,
+    content: message.role === "user" ? textContents.get(message.id) ?? message.content : message.content,
   }));
   const visionEnabled = options.visionEnabled ?? Boolean(config.mmprojPath);
   if (!visionEnabled) {
@@ -88,12 +97,6 @@ export async function buildChatCompletionMessages(
 
   const readImage = options.readImage ?? fs.readFile;
   const getImageSize = options.getImageSize ?? (async (path: string) => (await fs.stat(path)).size);
-  const warnings = new Set<string>();
-  const warn = (message: string): void => {
-    if (warnings.has(message)) return;
-    warnings.add(message);
-    options.onWarning?.(message);
-  };
   let requestImageCount = 0;
   let requestImageBytes = 0;
 
@@ -104,7 +107,7 @@ export async function buildChatCompletionMessages(
     if (!images.length) continue;
 
     const content: Exclude<ApiMessageContent, string> = [];
-    const textContent = contentWithDocuments(message);
+    const textContent = textContents.get(message.id) ?? message.content;
     if (textContent.trim()) content.push({ type: "text", text: textContent });
 
     for (const image of images) {
@@ -203,16 +206,95 @@ function expandChatCompletionMessages(
   return expanded;
 }
 
-function contentWithDocuments(message: ChatMessage): string {
-  const documents = message.documents ?? [];
-  if (!documents.length) return message.content;
-  const blocks = documents.map((document) => {
-    const truncation = document.truncated
-      ? `（原文 ${document.characterCount} 字符，当前上下文仅包含前 ${document.text.length} 字符）`
-      : "";
-    return `<document name="${document.name}">${truncation}\n${document.text}\n</document>`;
-  });
-  return [message.content, ...blocks].filter(Boolean).join("\n\n");
+function contentWithBudgetedDocuments(
+  config: RuntimeConfig,
+  messages: ChatMessage[],
+  warn: (message: string) => void,
+): Map<string, string> {
+  const tokenUpperBound = (text: string): number => Buffer.byteLength(text, "utf8");
+  const truncateToTokenBudget = (text: string, budget: number): string => {
+    if (tokenUpperBound(text) <= budget) return text;
+    let used = 0;
+    let result = "";
+    for (const character of text) {
+      const size = tokenUpperBound(character);
+      if (used + size > budget) break;
+      result += character;
+      used += size;
+    }
+    return result;
+  };
+  const contents = new Map(messages.map((message) => [message.id, message.content]));
+  const fixedTokens = tokenUpperBound(config.systemPrompt)
+    + Math.min(config.maxTokens, config.contextSize)
+    + CHAT_CONTEXT_SAFETY_TOKENS
+    + messages.reduce((total, message) => {
+      const toolText = (message.toolCalls ?? []).reduce(
+        (callTotal, call) => callTotal
+          + tokenUpperBound(call.name)
+          + tokenUpperBound(call.arguments)
+          + tokenUpperBound(call.result ?? "")
+          + tokenUpperBound(call.error ?? ""),
+        0,
+      );
+      return total + tokenUpperBound(message.content) + toolText + CHAT_MESSAGE_OVERHEAD_TOKENS;
+    }, 0);
+  let remainingTokens = Math.max(0, config.contextSize - fixedTokens);
+  let contextTruncated = false;
+
+  // Spend the shared budget newest-first so the active prompt and its documents win over history.
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    if (message.role !== "user" || !message.documents?.length) continue;
+
+    const blocks: string[] = [];
+    for (const document of message.documents) {
+      const originalAvailableText = document.text;
+      const baseTruncated = document.truncated === true;
+      const blockFor = (text: string, truncated: boolean): string => {
+        const truncation = truncated
+          ? `（原文 ${document.characterCount} 字符，当前请求仅包含前 ${text.length} 字符）`
+          : "";
+        return `<document name="${document.name}">${truncation}\n${text}\n</document>`;
+      };
+
+      let text = truncateToTokenBudget(originalAvailableText, remainingTokens);
+      let block = blockFor(
+        text,
+        baseTruncated || text.length < originalAvailableText.length,
+      );
+      let blockTokens = tokenUpperBound(block);
+      const separatorTokens = message.content || blocks.length ? 2 : 0;
+      while (text && blockTokens + separatorTokens > remainingTokens) {
+        text = truncateToTokenBudget(
+          originalAvailableText,
+          Math.max(
+            0,
+            tokenUpperBound(text) - (blockTokens + separatorTokens - remainingTokens),
+          ),
+        );
+        block = blockFor(
+          text,
+          baseTruncated || text.length < originalAvailableText.length,
+        );
+        blockTokens = tokenUpperBound(block);
+      }
+
+      if (blockTokens + separatorTokens > remainingTokens) {
+        contextTruncated = true;
+        continue;
+      }
+      if (text.length < originalAvailableText.length) contextTruncated = true;
+      blocks.push(block);
+      remainingTokens -= blockTokens + separatorTokens;
+    }
+    contents.set(message.id, [message.content, ...blocks].filter(Boolean).join("\n\n"));
+  }
+
+  if (contextTruncated) {
+    warn(`附件内容已按 ${config.contextSize.toLocaleString("en-US")} token 上下文预算截断，优先保留最近消息中的文档。`);
+  }
+  return contents;
 }
 
 export function reasoningBudgetFor(effort: ThinkingEffort, maxTokens: number): number {
