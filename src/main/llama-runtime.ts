@@ -1,6 +1,8 @@
 import { EventEmitter } from "node:events";
+import { randomUUID } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
-import { basename, dirname, isAbsolute, win32 } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, win32 } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
   ChatEvent,
@@ -17,6 +19,7 @@ import type {
 import { formatBytes, type ResolveModelOptions } from "./model-downloader";
 import { SseDecoder } from "./sse";
 import { thinkingBudgetFor } from "../shared/thinking-effort";
+import { prepareMcpServersConfigContents } from "./mcp-servers-config";
 
 const MODEL_ALIAS = "desk-pet-model";
 const MAX_CHAT_REQUEST_IMAGES = 4;
@@ -312,8 +315,22 @@ export type ManagedModelResolver = (
 ) => Promise<string | null>;
 
 export function buildLlamaCommand(config: RuntimeConfig): LlamaCommand {
-  const executable = config.executable.trim();
-  const fileName = win32.basename(executable).toLowerCase() || basename(executable).toLowerCase();
+  let executable = config.executable.trim();
+  let fileName = win32.basename(executable).toLowerCase() || basename(executable).toLowerCase();
+
+  // Some llama.cpp distributions expose newer server-only options on
+  // llama-server before the unified `llama serve` entry point. In particular,
+  // the Windows winget build can accept --tools through `llama serve` while
+  // rejecting --mcp-servers-config. Prefer the dedicated server executable
+  // whenever an MCP config is enabled.
+  if (config.mcpServersConfigPath && (fileName === "llama" || fileName === "llama.exe")) {
+    executable = isAbsolute(executable)
+      ? join(dirname(executable), process.platform === "win32" ? "llama-server.exe" : "llama-server")
+      : process.platform === "win32"
+        ? "llama-server.exe"
+        : "llama-server";
+    fileName = win32.basename(executable).toLowerCase() || basename(executable).toLowerCase();
+  }
   const args: string[] = fileName === "llama" || fileName === "llama.exe" ? ["serve"] : [];
 
   if (config.modelMode === "huggingface") {
@@ -367,6 +384,7 @@ export class LlamaRuntime extends EventEmitter {
   private readonly abortControllers = new Map<string, AbortController>();
   private readonly toolApprovals = new Map<string, { resolve: (approved: boolean) => void }>();
   private toolCatalog: ServerTool[] | null = null;
+  private readonly temporaryMcpConfigs = new Set<string>();
 
   constructor(
     config: RuntimeConfig,
@@ -458,7 +476,7 @@ export class LlamaRuntime extends EventEmitter {
       return this.snapshot;
     }
 
-    this.launch(launchConfig, currentGeneration);
+    void this.launch(launchConfig, currentGeneration);
 
     return this.snapshot;
   }
@@ -472,6 +490,7 @@ export class LlamaRuntime extends EventEmitter {
     for (const approval of this.toolApprovals.values()) approval.resolve(false);
     this.toolApprovals.clear();
     this.toolCatalog = null;
+    await this.cleanupTemporaryMcpConfigs();
 
     if (!this.child) {
       this.setState(initialState(this.config));
@@ -974,7 +993,7 @@ export class LlamaRuntime extends EventEmitter {
         });
         return;
       }
-      this.launch(
+      await this.launch(
         modelPath ? { ...config, modelMode: "local", modelPath } : config,
         generation,
       );
@@ -1007,14 +1026,27 @@ export class LlamaRuntime extends EventEmitter {
     });
   }
 
-  private launch(config: RuntimeConfig, generation: number): void {
-    const { command, args } = buildLlamaCommand(config);
+  private async launch(config: RuntimeConfig, generation: number): Promise<void> {
+    let launchConfig = config;
+    try {
+      launchConfig = await this.prepareMcpConfig(config);
+    } catch (error) {
+      if (generation === this.generation) {
+        this.fail(`无法准备 MCP Servers 配置：${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
+    if (generation !== this.generation) {
+      await this.cleanupTemporaryMcpConfigs();
+      return;
+    }
+    const { command, args } = buildLlamaCommand(launchConfig);
     this.setState({
       phase: "starting",
       visionEnabled: false,
       endpoint: this.endpoint,
       message:
-        config.modelMode === "huggingface"
+        launchConfig.modelMode === "huggingface"
           ? "正在启动 llama.cpp 并准备远程模型"
           : "正在加载本地 GGUF 模型",
       download: undefined,
@@ -1038,7 +1070,7 @@ export class LlamaRuntime extends EventEmitter {
         const lastLog = lines.at(-1);
         if (!lastLog) return;
         const looksLikeDownload =
-          config.modelMode === "huggingface" &&
+          launchConfig.modelMode === "huggingface" &&
           /download|huggingface|\.gguf|%|MiB|GiB/i.test(lastLog);
         this.setState({
           ...this.state,
@@ -1056,11 +1088,13 @@ export class LlamaRuntime extends EventEmitter {
       child.once("error", (error) => {
         if (generation !== this.generation) return;
         this.child = null;
+        void this.cleanupTemporaryMcpConfigs();
         this.fail(`无法启动 llama.cpp：${error.message}`);
       });
       child.once("exit", (code, signal) => {
         if (generation !== this.generation) return;
         this.child = null;
+        void this.cleanupTemporaryMcpConfigs();
         if (this.state.phase === "stopping" || this.state.phase === "stopped") return;
         this.fail(
           `llama.cpp 已退出（${signal ? `信号 ${signal}` : `退出码 ${code ?? "未知"}`}）。`,
@@ -1070,7 +1104,34 @@ export class LlamaRuntime extends EventEmitter {
       void this.waitUntilReady(generation);
     } catch (error) {
       this.child = null;
+      await this.cleanupTemporaryMcpConfigs();
       this.fail(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private async prepareMcpConfig(config: RuntimeConfig): Promise<RuntimeConfig> {
+    if (!config.mcpServersConfigPath) return config;
+    const contents = await fs.readFile(config.mcpServersConfigPath, "utf8");
+    const prepared = prepareMcpServersConfigContents(contents);
+    if (prepared === contents) return config;
+
+    const directory = join(tmpdir(), "desk-pet-mcp");
+    await fs.mkdir(directory, { recursive: true });
+    const filePath = join(directory, `${process.pid}-${randomUUID()}.json`);
+    await fs.writeFile(filePath, prepared, { encoding: "utf8", mode: 0o600 });
+    this.temporaryMcpConfigs.add(filePath);
+    return { ...config, mcpServersConfigPath: filePath };
+  }
+
+  private async cleanupTemporaryMcpConfigs(): Promise<void> {
+    const paths = [...this.temporaryMcpConfigs];
+    this.temporaryMcpConfigs.clear();
+    await Promise.all(paths.map(async (filePath) => {
+      try {
+        await fs.unlink(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }));
   }
 }
