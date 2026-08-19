@@ -172,11 +172,24 @@ describe("buildLlamaCommand", () => {
   it("adds an MCP servers config only when custom tools are configured", () => {
     const path = "D:\\tools\\mcp.json";
     const command = buildLlamaCommand({ ...DEFAULT_CONFIG, mcpServersConfigPath: path });
+    expect(command.command).toBe(process.platform === "win32" ? "llama-server.exe" : "llama-server");
+    expect(command.args[0]).not.toBe("serve");
     expect(command.args.slice(
       command.args.indexOf("--mcp-servers-config"),
       command.args.indexOf("--mcp-servers-config") + 2,
     )).toEqual(["--mcp-servers-config", path]);
     expect(buildLlamaCommand(DEFAULT_CONFIG).args).not.toContain("--mcp-servers-config");
+  });
+
+  it("uses the sibling dedicated server for an absolute unified llama path with MCP", () => {
+    const command = buildLlamaCommand({
+      ...DEFAULT_CONFIG,
+      executable: "C:\\llama.cpp\\llama.exe",
+      mcpServersConfigPath: "D:\\tools\\mcp.json",
+    });
+
+    expect(command.command).toBe("C:\\llama.cpp\\llama-server.exe");
+    expect(command.args[0]).not.toBe("serve");
   });
 
   it("injects document text and replays completed tool calls", async () => {

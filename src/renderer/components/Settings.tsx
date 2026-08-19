@@ -258,7 +258,7 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
               <button className="button button--quiet" type="button" onClick={pickMcpServersConfig}>选择 JSON</button>
             </div>
           </div>
-          <p className="hint">使用 Cursor 兼容的 MCP 配置。保存并重启模型后，自定义 MCP tools 会与 builtin tools 一起显示并参与调用。</p>
+          <p className="hint">使用 Cursor 兼容的 MCP 配置，支持本地 command 及 remote http/https url（可附带 headers）。保存并重启模型后，自定义 MCP tools 会与 builtin tools 一起显示并参与调用。</p>
           {tools.length ? (
             <ul className="runtime-tool-list" aria-label="当前工具列表">
               {tools.map((tool) => (

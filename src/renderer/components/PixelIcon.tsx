@@ -40,22 +40,23 @@ const ICON_PATHS = {
   plus: "M7 2h2v5h5v2H9v5H7V9H2V7h5V2Z",
   trash: "M5 1h6v2h3v2H2V3h3V1ZM3 6h10v9H3V6Zm3 2v5h1V8H6Zm3 0v5h1V8H9Z",
   volume: "M1 5h4l4-4v14L5 11H1V5Zm9-1h1v8H9V4Zm2-2h1v12h-1V2Z",
-  refresh: "M13 8A5 5 0 1 0 13 11M9 4h4v4",
+  refresh: "M12.4 8.7A5.1 5.1 0 1 1 10.5 3.8",
   "chevron-down": "M4 6l4 4 4-4",
 } satisfies Record<PixelIconName, string>;
 
 export function PixelIcon({ name, className }: PixelIconProps) {
   const outlined = name === "refresh" || name === "chevron-down";
+  const viewBox = "0 0 16 16";
 
   return (
     <svg
       className={className}
       width="16"
       height="16"
-      viewBox="0 0 16 16"
+      viewBox={viewBox}
       fill={outlined ? "none" : "currentColor"}
       stroke={outlined ? "currentColor" : undefined}
-      strokeWidth={outlined ? "2" : undefined}
+      strokeWidth={outlined ? (name === "refresh" ? "2.2" : "2") : undefined}
       strokeLinecap={outlined ? "round" : undefined}
       strokeLinejoin={outlined ? "round" : undefined}
       shapeRendering={outlined ? "geometricPrecision" : "crispEdges"}
@@ -64,6 +65,9 @@ export function PixelIcon({ name, className }: PixelIconProps) {
       data-pixel-icon={name}
     >
       <path d={ICON_PATHS[name]} fillRule={outlined ? undefined : "evenodd"} />
+      {name === "refresh" && (
+        <path d="M10.7 1.5 14.4 5.5 9.1 6.5Z" fill="currentColor" stroke="none" />
+      )}
     </svg>
   );
 }
