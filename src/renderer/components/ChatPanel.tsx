@@ -205,9 +205,13 @@ export function ChatPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [conversationOperationPending, setConversationOperationPending] = useState(false);
   const [historyOperationError, setHistoryOperationError] = useState("");
-  const [deleteTarget, setDeleteTarget] = useState<ChatConversation | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<ChatConversation[]>([]);
   const [deletePending, setDeletePending] = useState(false);
   const [deleteDialogError, setDeleteDialogError] = useState("");
+  const [historyBatchMode, setHistoryBatchMode] = useState(false);
+  const [selectedConversationIds, setSelectedConversationIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState("");
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
@@ -564,6 +568,8 @@ export function ChatPanel({
 
   const closeHistoryAndFocusComposer = (): void => {
     focusAfterHistoryCloseRef.current = true;
+    setHistoryBatchMode(false);
+    setSelectedConversationIds(new Set());
     setHistoryOpen(false);
   };
 
@@ -673,14 +679,31 @@ export function ChatPanel({
     deleteTriggerRef.current = trigger;
     setHistoryOperationError("");
     setDeleteDialogError("");
-    setDeleteTarget(target);
+    setDeleteTargets([target]);
+  };
+
+  const toggleConversationSelection = (targetId: string): void => {
+    setSelectedConversationIds((current) => {
+      const next = new Set(current);
+      if (next.has(targetId)) next.delete(targetId);
+      else next.add(targetId);
+      return next;
+    });
+  };
+
+  const requestDeleteSelectedConversations = (): void => {
+    const targets = conversations.filter((conversation) => selectedConversationIds.has(conversation.id));
+    if (!targets.length || activeRequest || conversationOperationPendingRef.current) return;
+    setHistoryOperationError("");
+    setDeleteDialogError("");
+    setDeleteTargets(targets);
   };
 
   const closeDeleteDialog = (): void => {
     if (deletePending) return;
     const trigger = deleteTriggerRef.current;
     setDeleteDialogError("");
-    setDeleteTarget(null);
+    setDeleteTargets([]);
     requestAnimationFrame(() => {
       if (trigger?.isConnected) trigger.focus({ preventScroll: true });
       else historyNewButtonRef.current?.focus({ preventScroll: true });
@@ -688,8 +711,9 @@ export function ChatPanel({
   };
 
   const confirmDeleteConversation = async (): Promise<void> => {
-    const target = deleteTarget;
-    if (!target) return;
+    const targets = deleteTargets;
+    if (!targets.length) return;
+    const targetIds = new Set(targets.map((target) => target.id));
     const operation = beginConversationOperation("delete");
     if (!operation) return;
     setDeletePending(true);
@@ -698,13 +722,13 @@ export function ChatPanel({
     try {
       await persistMessages(false, true);
       if (!operationIsCurrent(operation)) return;
-      await window.desktopPet.deleteChatConversation(target.id);
+      await window.desktopPet.deleteChatConversations([...targetIds]);
       if (!operationIsCurrent(operation)) return;
       let nextConversations = await window.desktopPet.listChatConversations();
       if (!operationIsCurrent(operation)) return;
       let nextConversationId = conversationIdRef.current;
       let nextMessages: ChatMessage[] | null = null;
-      if (target.id === conversationIdRef.current) {
+      if (conversationIdRef.current && targetIds.has(conversationIdRef.current)) {
         let next = nextConversations[0];
         if (!next) {
           next = await window.desktopPet.createChatConversation();
@@ -733,8 +757,10 @@ export function ChatPanel({
       if (operationIsCurrent(operation)) {
         setDeletePending(false);
         if (succeeded) {
-          setDeleteTarget(null);
+          setDeleteTargets([]);
           setDeleteDialogError("");
+          setSelectedConversationIds(new Set());
+          setHistoryBatchMode(false);
           deleteTriggerRef.current = null;
           requestAnimationFrame(() => {
             historyNewButtonRef.current?.focus({ preventScroll: true });
@@ -889,50 +915,100 @@ export function ChatPanel({
 
       {historyOpen && (
         <section
-          className={`history-drawer${conversationOperationPending ? " history-drawer--busy" : ""}${deleteTarget ? " history-drawer--dialog-open" : ""}`}
+          className={`history-drawer${conversationOperationPending ? " history-drawer--busy" : ""}${deleteTargets.length ? " history-drawer--dialog-open" : ""}`}
           aria-label="聊天历史"
           aria-busy={conversationOperationPending}
-          inert={deleteTarget ? true : undefined}
+          inert={deleteTargets.length ? true : undefined}
         >
           <div className="history-drawer__header">
-            <div>
+            <div className="history-drawer__title">
               <b>聊天历史</b>
               <small>本地保存最近 30 个会话</small>
             </div>
-            <button
-              ref={historyNewButtonRef}
-              className="text-button text-button--with-icon"
-              type="button"
-              disabled={Boolean(activeRequest) || conversationOperationPending}
-              onClick={() => void createConversation("history")}
-            >
-              <PixelIcon name="plus" />
-              新建
-            </button>
+            <div className="history-drawer__actions">
+              <button
+                className="text-button"
+                type="button"
+                disabled={Boolean(activeRequest) || conversationOperationPending || conversations.length === 0}
+                onClick={() => {
+                  setHistoryBatchMode((current) => !current);
+                  setSelectedConversationIds(new Set());
+                }}
+              >
+                {historyBatchMode ? "完成" : "管理"}
+              </button>
+              <button
+                ref={historyNewButtonRef}
+                className="text-button text-button--with-icon"
+                type="button"
+                disabled={Boolean(activeRequest) || conversationOperationPending}
+                onClick={() => void createConversation("history")}
+              >
+                <PixelIcon name="plus" />
+                新建
+              </button>
+            </div>
           </div>
           {historyOperationError && (
             <p className="history-drawer__error" role="alert">
               {historyOperationError}
             </p>
           )}
+          {historyBatchMode && (
+            <div className="history-batch-toolbar">
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => setSelectedConversationIds(
+                  selectedConversationIds.size === conversations.length
+                    ? new Set()
+                    : new Set(conversations.map((conversation) => conversation.id)),
+                )}
+              >
+                {selectedConversationIds.size === conversations.length ? "取消全选" : "全选"}
+              </button>
+              <span>已选择 {selectedConversationIds.size} 个</span>
+              <button
+                className="button button--danger history-batch-toolbar__delete"
+                type="button"
+                disabled={selectedConversationIds.size === 0 || conversationOperationPending}
+                onClick={requestDeleteSelectedConversations}
+              >
+                <PixelIcon name="trash" />
+                删除
+              </button>
+            </div>
+          )}
           <div className="history-drawer__list">
             {conversations.map((conversation) => (
               <div
-                className={`history-item ${conversation.id === conversationId ? "history-item--active" : ""}`}
+                className={`history-item ${conversation.id === conversationId ? "history-item--active" : ""}${selectedConversationIds.has(conversation.id) ? " history-item--selected" : ""}`}
                 key={conversation.id}
               >
+                {historyBatchMode && (
+                  <label className="history-item__checkbox" aria-label={`选择 ${conversation.title}`}>
+                    <input
+                      type="checkbox"
+                      checked={selectedConversationIds.has(conversation.id)}
+                      disabled={Boolean(activeRequest) || conversationOperationPending}
+                      onChange={() => toggleConversationSelection(conversation.id)}
+                    />
+                  </label>
+                )}
                 <button
                   className="history-item__select"
                   type="button"
                   disabled={Boolean(activeRequest) || conversationOperationPending}
-                  onClick={() => void switchConversation(conversation.id)}
+                  onClick={() => historyBatchMode
+                    ? toggleConversationSelection(conversation.id)
+                    : void switchConversation(conversation.id)}
                 >
                   <b>{conversation.title}</b>
                   <small>
                     {formatConversationTime(conversation.updatedAt)} · {conversation.messageCount} 条消息
                   </small>
                 </button>
-                <button
+                {!historyBatchMode && <button
                   className="history-item__delete"
                   type="button"
                   disabled={Boolean(activeRequest) || conversationOperationPending}
@@ -940,18 +1016,20 @@ export function ChatPanel({
                   onClick={(event) => requestDeleteConversation(conversation, event.currentTarget)}
                 >
                   <PixelIcon name="trash" />
-                </button>
+                </button>}
               </div>
             ))}
           </div>
         </section>
       )}
 
-      {deleteTarget && (
+      {deleteTargets.length > 0 && (
         <ConfirmDialog
-          title="删除这个对话？"
-          description={`“${deleteTarget.title}”及其中 ${deleteTarget.messageCount} 条消息将被永久删除，无法恢复。`}
-          confirmLabel="删除对话"
+          title={deleteTargets.length === 1 ? "删除这个对话？" : `删除 ${deleteTargets.length} 个对话？`}
+          description={deleteTargets.length === 1
+            ? `“${deleteTargets[0].title}”及其中 ${deleteTargets[0].messageCount} 条消息将被永久删除，无法恢复。`
+            : `所选对话及其中 ${deleteTargets.reduce((total, target) => total + target.messageCount, 0)} 条消息将被永久删除，无法恢复。`}
+          confirmLabel={deleteTargets.length === 1 ? "删除对话" : "批量删除"}
           pendingLabel="删除中…"
           pending={deletePending}
           error={deleteDialogError}

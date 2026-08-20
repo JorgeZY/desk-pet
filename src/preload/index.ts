@@ -43,6 +43,8 @@ const api: DesktopPetApi = {
     ipcRenderer.invoke("chat-history:save", conversationId, messages),
   deleteChatConversation: (conversationId: string) =>
     ipcRenderer.invoke("chat-history:delete", conversationId),
+  deleteChatConversations: (conversationIds: string[]) =>
+    ipcRenderer.invoke("chat-history:delete-many", conversationIds),
   setWindowMode: (mode: WindowMode) => ipcRenderer.invoke("window:set-mode", mode),
   hideWindow: () => ipcRenderer.invoke("window:hide"),
   openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url),

@@ -556,6 +556,11 @@ function registerIpc(): void {
     if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
     chatHistoryStore.deleteConversation(conversationId);
   });
+  ipcMain.handle("chat-history:delete-many", (_event, conversationIds: string[]) => {
+    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
+    if (!Array.isArray(conversationIds)) throw new Error("批量删除参数无效。");
+    chatHistoryStore.deleteConversations(conversationIds);
+  });
   ipcMain.handle("window:set-mode", (_event, mode: WindowMode) => setWindowMode(mode));
   ipcMain.handle("window:hide", () => mainWindow?.hide());
   ipcMain.handle("app:open-external", async (_event, url: string) => {
