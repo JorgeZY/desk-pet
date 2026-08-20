@@ -843,10 +843,16 @@ select {
   border-bottom: 1px solid var(--line);
 }
 
-.history-drawer__header > div {
+.history-drawer__title {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+.history-drawer__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .history-drawer__header b {
@@ -867,6 +873,23 @@ select {
   background: #fff0eb;
   border: 1px solid rgba(142, 52, 56, 0.35);
   border-radius: 6px;
+}
+
+.history-batch-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 2px 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.history-batch-toolbar__delete {
+  min-height: 28px;
+  margin-left: auto;
+  padding: 5px 9px;
+  font-size: 9px;
 }
 
 .history-drawer__list {
@@ -890,6 +913,25 @@ select {
 .history-item--active {
   background: var(--peach-soft);
   border-color: rgba(216, 112, 78, 0.28);
+}
+
+.history-item--selected {
+  border-color: var(--orange);
+  box-shadow: inset 0 0 0 1px rgba(216, 112, 78, 0.2);
+}
+
+.history-item__checkbox {
+  display: grid;
+  width: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  cursor: pointer;
+}
+
+.history-item__checkbox input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--orange);
 }
 
 .history-item__select {

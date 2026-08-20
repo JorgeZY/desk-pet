@@ -1,231 +1,145 @@
 <p align="center">
-  <img src="assets/app-icon.png" width="128" alt="desk-pet 橘猫图标">
+  <img src="assets/app-icon.png" width="128" alt="desk-pet icon">
 </p>
 
-<h1 align="center">desk-pet 🐈</h1>
+<h1 align="center">desk-pet</h1>
+
+<p align="center">A local-first AI desktop pet powered by llama.cpp.</p>
 
 <p align="center">
-  <strong>一只不偷数据，只偷算力的橘猫。</strong>
+  <a href="https://github.com/JorgeZY/desk-pet/actions/workflows/ci.yml"><img src="https://github.com/JorgeZY/desk-pet/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  · <a href="#中文">中文</a>
 </p>
 
-<p align="center">
-  本地优先 · 模型可换 · 会聊天 · 会卖萌 · 偶尔吃满显存
-</p>
+desk-pet is a Windows desktop companion that runs GGUF models locally through
+`llama.cpp`. It provides quick chat and full conversations without a cloud API.
 
-<p align="center">
-  <a href="https://github.com/JorgeZY/desk-pet/actions/workflows/ci.yml">
-    <img src="https://github.com/JorgeZY/desk-pet/actions/workflows/ci.yml/badge.svg" alt="CI">
-  </a>
-</p>
+## Features
 
-desk-pet 是一只住在桌面上的 AI 橘猫，名字叫「团子」。平时它安静趴着陪你，需要时可以
-快速聊一句，也可以展开完整对话。它通过 `llama.cpp` 在本机运行 GGUF 模型——你的聊天
-不用飘到云端，只有电脑风扇知道你们聊了什么。🌬️
+- Local GGUF inference with managed `llama-server` lifecycle and streaming output
+- Quick chat, full chat, and SQLite conversation history with batch deletion
+- Image and document input for compatible models
+- Local speech recognition, global dictation, and text-to-speech
+- MCP tools over local stdio processes or remote servers
+- Configurable model parameters, system prompt, shortcuts, and runtime paths
+- Sandboxed Electron renderer with a narrow preload IPC API
 
-项目目前主要面向 Windows，但代码结构给 macOS / Linux 留了猫门。模型也不与 MiniCPM
-或其他单一模型绑定：推荐模型能吃，任意受当前 `llama.cpp` 支持的本地 `.gguf` 也能吃。
-毕竟橘猫不挑食，模型也不该挑。
+## Requirements
 
-> [!NOTE]
-> 当前是早期预览版。团子已经会聊天，但偶尔仍可能踩到键盘，请重要内容自行核实。
+- Windows 10/11 x64
+- Node.js 20 or later for development
+- A recent `llama-server.exe`
+- A compatible GGUF model and sufficient disk/RAM/VRAM capacity
 
-## 🐾 团子会干什么？
-
-- 🐈 **常驻桌面**：透明、置顶、可拖动，不用时缩成一只安静的橘猫
-- 💬 **两种聊天姿势**：桌宠状态快速聊一句，或者展开完整会话
-- 🧶 **记得刚才聊过什么**：快捷对话和完整会话共享本地历史与上下文
-- ✨ **边想边说**：流式回答会实时匹配 Markdown / GFM 样式，并支持停止生成和可折叠的思考内容
-- 📝 **自定义开场**：聊天首页提供 3 条可编辑快捷模板，点击只填入草稿、不自动发送
-- 🎙️ **按住就能说**：聊天按钮写入聊天草稿；全局 `F8` 可向当前前台输入框输入，流式文字显示在橘猫气泡中
-- 🛠️ **自己照顾 llama.cpp**：检测可执行文件并管理本地推理子进程
-- 📦 **模型不绑死**：支持推荐的 Hugging Face GGUF 和已有本地模型
-- 👀 **看图也在本地**：可为视觉模型选择匹配的 mmproj GGUF，并在快捷或完整聊天中发送图片
-- 🍚 **自己找猫粮**：自动下载、缓存、断点续传，并在 ModelScope /
-  Hugging Face 之间回退
-- 🎛️ **允许铲屎官微调**：CPU 线程、GPU 卸载、上下文、温度、Top K / P、Min P、重复惩罚、端口与人格均可配置
-- 🫥 **一键躲猫猫**：按 `Ctrl/Cmd + Shift + M` 显示或隐藏桌宠
-
-## 🚀 把团子领回桌面
-
-### 1. 下载源码
-
-前往 [Releases](https://github.com/JorgeZY/desk-pet/releases/latest)，下载 GitHub 自动生成的
-`Source code (zip)` 或 `Source code (tar.gz)`。也可以直接克隆仓库：
+Download the Windows installer from
+[Releases](https://github.com/JorgeZY/desk-pet/releases/latest), or run from source:
 
 ```powershell
 git clone https://github.com/JorgeZY/desk-pet.git
 cd desk-pet
-```
-
-项目目前只发布源码归档，不提供预编译安装包。这样没有证书警告，也不会让一只来历不明的
-橘猫突然住进系统目录。🐾
-
-### 2. 准备运行环境
-
-- Node.js 20+
-- Windows 10/11 x64（当前主要验证环境）
-- 较新版本的 `llama` 或 `llama-server`
-- 足够放下 GGUF 模型的磁盘空间
-- 默认麦克风，以及约 450 MB 的本地语音模型空间（按需下载）
-- 自动下载模型时可访问模型仓库的网络
-
-Windows 可以通过 winget 安装 llama.cpp：
-
-```powershell
-winget install llama.cpp
-llama --version
-```
-
-也可以从 [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases)
-下载预编译包，然后在首次引导中选择 `llama-server.exe`。
-
-### 3. 启动项目
-
-```powershell
-npm install
+npm ci
 npm run dev
 ```
 
-## 🍊 第一次投喂指南
+On first launch, select `llama-server.exe` and either a local GGUF file or a
+supported downloadable model. Development models are stored in `models/`;
+packaged builds use the `models/` directory beside the executable.
 
-首次启动时，团子会请你完成几件事：
-
-1. 检测系统里的 `llama`，或者选择下载好的 `llama-server.exe`。
-2. 使用推荐的远程 GGUF，或者选择电脑里已有的 `.gguf` 模型。
-3. 根据设备调整上下文长度、CPU 线程与 GPU 卸载层数；不确定就先保持默认。
-4. 选择“自动下载”或“本地 GGUF”，再点击完成并唤醒模型。自动下载时，状态区域会显示“猫粮到哪了”。
-
-日常相处方式也很简单：
-
-- 在桌宠下方输入一句话，进行快捷对话。
-- 配置视觉投影模型并重启后，可在快捷对话或完整会话中一次发送最多 4 张图片。
-- 按住聊天框里的麦克风按钮可写入聊天草稿；当 Quick Chat 或完整聊天输入框已有光标时，按住 `F8` 等同于按住该麦克风按钮。在其他应用的输入框中按住 `F8`，松开后识别结果会自动粘贴，识别过程显示在橘猫气泡中。
-- 点击桌宠或右上角箭头，展开完整会话。
-- 右键托盘图标，开始聊天、打开设置、重启模型或退出应用。
-- 在设置中随时换模型——团子可能认床，但不认模型。
-
-## 🧠 模型就是猫粮
-
-推荐模型通过 Electron 的 Chromium 网络栈下载，可以继承系统代理和 PAC 配置，并支持
-ModelScope / Hugging Face 回退与 `.part` 断点续传。其他 Hugging Face 标识会交给
-`llama.cpp -hf` 处理；网络受限时，建议先下载 GGUF，再切换到本地模式。
-
-程序启动时不会下载尚未缓存的 GGUF：自动启动只复用完整缓存或已经选择的本地 GGUF。
-联网下载只会在首次引导完成、手工启动或“保存并重启模型”等用户明确操作后发生。
-
-已经备好模型的话，可以在引导或设置中选择任意兼容文件，例如：
+## Architecture
 
 ```text
-my-local-model-Q4_K_M.gguf
+React renderer
+  -> contextBridge / typed IPC
+  -> Electron main
+       |- llama.cpp runtime and OpenAI-compatible streaming
+       |- SQLite history and local configuration
+       |- speech, TTS, downloads, and MCP lifecycle
+  -> llama-server on 127.0.0.1
 ```
 
-应用启动本地模型的等价命令如下：
+See [docs/architecture.md](docs/architecture.md) for component boundaries.
 
-```powershell
-llama-server `
-  -m D:\models\my-local-model-Q4_K_M.gguf `
-  --host 127.0.0.1 --port 18766 `
-  -c 8192 -ngl 999 -np 1 --alias desk-pet-model --jinja `
-  --cors-origins localhost
-```
-
-视觉模型还会在主模型参数后追加匹配的投影模型路径：
-
-```powershell
-llama-server `
-  -m D:\models\vision-model-Q4_K_M.gguf `
-  --mmproj D:\models\mmproj-model-f16.gguf `
-  --host 127.0.0.1 --port 18766
-```
-
-图片会在主进程中读取并转换为 OpenAI 兼容的 `image_url` 数据 URL；原图不会写入聊天历史。
-
-内置推荐模型不会把下载委托给 `llama serve -hf`，这样可以避开它无法读取系统代理时的
-`HTTPLIB failed: Could not establish connection`。模型缓存位于项目根目录的
-`models/`；打包运行时则位于可执行文件旁的 `models/`。从旧版本升级时，应用
-会在新目录不存在的情况下复制原有 `userData/models/` 缓存，避免重复下载。
-
-语音模型也使用同一个根目录，分别保存在 `models/speech/streaming-paraformer-bilingual-zh-en/`
-和 `models/speech/sense-voice-zh-en-ja-ko-yue-int8/`。首次使用会先征求确认，再通过
-内置 PowerShell 脚本从 Sherpa-ONNX 官方发布地址下载并调用系统 `tar` 解压。下载、解压、
-录音和识别均不使用 `userData` 或云端服务。开发者也可以提前运行：
-
-流式 Paraformer 明确加载并只保留 `encoder.int8.onnx` 与 `decoder.int8.onnx`；官方归档中
-附带但未使用的 FP32 副本会在安装或下次启动时自动清理。
-
-设置页也支持“使用本地模型”。选择一个包含语音模型的任意目录后，应用会递归搜索同目录的
-Paraformer encoder/decoder/tokens，以及 SenseVoice ONNX/tokens。源目录和上级文件夹无需
-固定命名；候选文件会优先选择带 `int8` 或 `sensevoice` 特征的 ONNX。验证通过后直接读取所选
-目录中的文件并保存该位置，重启后继续复用，不会复制到 `models/speech/`。只有选择自动下载时，
-模型才会写入统一模型目录。
-
-```powershell
-npm run models:speech
-```
-
-这套脚本流程参考了
-[opencode-stt/download-models.ps1](https://github.com/JorgeZY/opencode-stt/blob/main/scripts/download-models.ps1)
-与
-[download-streaming-model.ps1](https://github.com/JorgeZY/opencode-stt/blob/main/scripts/download-streaming-model.ps1)，
-但最终模型改为 Sherpa Node 可直接读取的 SenseVoice INT8 版本，因此不需要 Python 或
-`funasr-onnx`。
-
-## 🧑‍💻 铲屎官开发区
-
-提交修改前建议让这几只命令依次巡逻：
+## Development
 
 ```powershell
 npm run typecheck
 npm test
 npm run build
+npm run dist:win
 ```
 
-公开 Release 只包含 GitHub 根据版本标签自动生成的源码 ZIP / TAR.GZ，不上传预编译
-安装包。需要本地验证 Electron 打包流程时，开发者仍可运行 `npm run pack`。
+Inference and conversation data stay local. Network access is used only for
+explicit model downloads and user-configured remote MCP servers.
 
-## 🏠 猫窝结构
-
-```text
-React renderer
-  │ 受限 IPC（preload + contextBridge）
-  ▼
-Electron main
-  ├─ 配置、托盘、窗口与全局快捷键
-  ├─ llama.cpp 子进程生命周期 + SSE 翻译
-  └─ F8 / 麦克风 + Sherpa-ONNX 双模型语音识别
-          │ 127.0.0.1:18766
-          ▼
-      llama / llama-server
-          │
-          ▼
-      任意 llama.cpp GGUF
-```
-
-想看看猫窝墙体里埋了哪些管线，可以继续阅读
-[docs/architecture.md](docs/architecture.md)。
-
-## 🔐 偷算力，不偷数据
-
-- 聊天请求只发往 `http://127.0.0.1:<port>`。
-- 对话历史保存在 Electron `userData/chat-history.sqlite`，支持最多 30 个本地会话。
-- 配置和聊天首页的快捷模板保存在 Electron `userData/config.json`。
-- GGUF 自动下载只访问 ModelScope / Hugging Face，语音模型只访问 sherpa-onnx 的 GitHub
-  Releases；推理、录音和聊天仍在本机进行。
-- 语音 PCM 只在录音会话期间保存在内存，不会写入文件或发送到云端。全局 `F8` 完成识别后会短暂使用系统剪贴板模拟粘贴，并在粘贴后恢复原剪贴板内容；应用内麦克风按钮不使用系统剪贴板。
-- 项目不需要 OpenAI 或其他云 API Key。
-- Electron renderer 启用了 `contextIsolation` 与 sandbox，不开放 Node 权限。
-
-一句话总结：团子可能吃掉一点内存和显存，但不会叼走你的聊天记录。🐾
-
-## 🙇 向隔壁猫猫致谢
+## Acknowledgements
 
 [OpenBMB/MiniCPM-Desk-Pet](https://github.com/OpenBMB/MiniCPM-Desk-Pet)
-提供了产品与 sidecar 架构参考。本项目不是它的 fork，也没有复制其代码或美术资源。
-参考项目采用 AGPL-3.0-only，相关说明见 [NOTICE.md](NOTICE.md)。
+inspired the product and sidecar architecture. This repository is not a fork;
+see [NOTICE.md](NOTICE.md) for details.
 
 ---
 
-<p align="center">
-  如果团子让你的桌面多了一点快乐，欢迎点个 ⭐。<br>
-  模型可以切换，橘猫必须留下。
-</p>
+## 中文
+
+desk-pet 是一款由 `llama.cpp` 驱动的本地优先 Windows AI 桌宠。它直接运行 GGUF
+模型，提供快捷聊天和完整会话，无需云端 API。
+
+### 功能
+
+- 管理本地 `llama-server` 生命周期，并以流式方式输出结果
+- 快捷聊天、完整聊天及 SQLite 会话历史，支持批量删除
+- 为兼容模型提供图片和文档输入
+- 本地语音识别、全局听写与语音合成
+- 支持本地 stdio 进程和远程服务器两种 MCP 工具
+- 可配置模型参数、系统提示词、快捷键及运行路径
+- Electron 渲染进程启用沙箱，仅通过受限 IPC 访问系统能力
+
+### 运行要求
+
+- Windows 10/11 x64
+- 开发环境需要 Node.js 20 或更高版本
+- 较新版本的 `llama-server.exe`
+- 兼容的 GGUF 模型，以及足够的磁盘、内存或显存
+
+可从 [Releases](https://github.com/JorgeZY/desk-pet/releases/latest)
+下载安装包，或从源码运行：
+
+```powershell
+git clone https://github.com/JorgeZY/desk-pet.git
+cd desk-pet
+npm ci
+npm run dev
+```
+
+首次启动时选择 `llama-server.exe`，再选择本地 GGUF 或受支持的可下载模型。
+开发环境使用项目内的 `models/`；打包环境使用可执行文件同级的 `models/`。
+
+### 架构
+
+```text
+React renderer
+  -> contextBridge / 类型化 IPC
+  -> Electron main
+       |- llama.cpp 运行时与 OpenAI 兼容流式接口
+       |- SQLite 历史和本地配置
+       |- 语音、TTS、下载及 MCP 生命周期
+  -> 127.0.0.1 上的 llama-server
+```
+
+组件边界详见 [docs/architecture.md](docs/architecture.md)。
+
+### 开发
+
+```powershell
+npm run typecheck
+npm test
+npm run build
+npm run dist:win
+```
+
+推理和会话数据保留在本机。只有用户主动下载模型或配置远程 MCP 服务时才会访问网络。
+
+### 致谢
+
+[OpenBMB/MiniCPM-Desk-Pet](https://github.com/OpenBMB/MiniCPM-Desk-Pet)
+为产品和 sidecar 架构提供了参考。本项目不是其 fork，详情见 [NOTICE.md](NOTICE.md)。

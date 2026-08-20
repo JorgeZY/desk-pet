@@ -99,6 +99,7 @@
       "package.json"
     ],
     "win": {
+      "forceCodeSigning": true,
       "target": [
         {
           "target": "nsis",

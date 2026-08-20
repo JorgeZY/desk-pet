@@ -286,6 +286,7 @@ export interface DesktopPetApi {
   loadChatConversation(conversationId: string): Promise<ChatMessage[]>;
   saveChatMessages(conversationId: string, messages: ChatMessage[]): Promise<ChatConversation>;
   deleteChatConversation(conversationId: string): Promise<void>;
+  deleteChatConversations(conversationIds: string[]): Promise<void>;
   setWindowMode(mode: WindowMode): Promise<void>;
   hideWindow(): Promise<void>;
   openExternal(url: string): Promise<void>;

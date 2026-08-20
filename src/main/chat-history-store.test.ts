@@ -96,6 +96,17 @@ describe("ChatHistoryStore", () => {
     expect(() => store.loadMessages(conversation.id)).toThrow("找不到指定的聊天会话");
   });
 
+  it("deletes multiple conversations in one operation", () => {
+    const store = createStore();
+    const first = store.createConversation();
+    const second = store.createConversation();
+    const keep = store.createConversation();
+
+    store.deleteConversations([first.id, second.id, first.id]);
+
+    expect(store.listConversations().map((conversation) => conversation.id)).toEqual([keep.id]);
+  });
+
   it("rolls back the whole message replacement when one row is invalid", () => {
     const store = createStore();
     const conversation = store.createConversation();

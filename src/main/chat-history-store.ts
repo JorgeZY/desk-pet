@@ -228,6 +228,20 @@ export class ChatHistoryStore {
     this.database.prepare("DELETE FROM conversations WHERE id = ?").run(conversationId);
   }
 
+  deleteConversations(conversationIds: string[]): void {
+    const ids = [...new Set(conversationIds.filter((id) => typeof id === "string" && id.trim()))];
+    if (!ids.length) return;
+    const remove = this.database.prepare("DELETE FROM conversations WHERE id = ?");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const id of ids) remove.run(id);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   private requireConversation(conversationId: string): ConversationRow {
     const row = this.database.prepare(`
       SELECT c.id, c.title, c.created_at, c.updated_at,
