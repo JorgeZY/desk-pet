@@ -43,6 +43,7 @@ function renderSettings(): string {
       onImportTts={async () => undefined}
       onSpeakText={async () => undefined}
       onStopSpeaking={async () => undefined}
+      onOpenCaption={async () => undefined}
     />,
   );
 }
@@ -80,6 +81,8 @@ describe("Settings", () => {
     expect(markup.match(/maxLength="80"/g)).toHaveLength(3);
     expect(markup.match(/全局 F8/g)).toHaveLength(1);
     expect(markup).toContain("同时启用聊天框麦克风与全局 F8 按住说话");
+    expect(markup).toContain("打开实时字幕");
+    expect(markup).not.toContain("Ctrl+Alt+C");
     expect(markup.match(/type="checkbox"/g)).toHaveLength(3);
   });
 
@@ -101,5 +104,6 @@ describe("Settings", () => {
     expect(markup).toContain("正在读取当前工具");
     expect(markup).toContain("MCP Servers 配置");
     expect(markup).toContain("选择 JSON");
+    expect(markup).toContain("runtime-tool-viewport");
   });
 });

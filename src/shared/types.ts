@@ -2,6 +2,20 @@ export type ModelMode = "huggingface" | "local";
 
 export type WindowMode = "pet" | "chat" | "settings" | "onboarding";
 
+export interface CaptionWindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CaptionConfig {
+  layoutVersion: 3;
+  fontSize: number;
+  opacity: number;
+  bounds?: CaptionWindowBounds;
+}
+
 export interface SpeechConfig {
   enabled: boolean;
   shortcut: "F8";
@@ -42,6 +56,7 @@ export interface RuntimeConfig {
   systemPrompt: string;
   speech: SpeechConfig;
   tts: TtsConfig;
+  caption: CaptionConfig;
 }
 
 export type RuntimePhase =
@@ -146,11 +161,55 @@ export interface SpeechStartResult {
   sessionId: string;
 }
 
+export type CaptionPhase =
+  | "not-installed"
+  | "downloading"
+  | "loading"
+  | "ready"
+  | "capturing"
+  | "error";
+
+export interface CaptionSegment {
+  id: string;
+  text: string;
+  startMs: number;
+  endMs: number;
+}
+
+export interface CaptionDownloadProgress {
+  receivedBytes: number;
+  totalBytes?: number;
+  percent?: number;
+}
+
+export interface CaptionState {
+  phase: CaptionPhase;
+  message: string;
+  modelDirectory: string;
+  sessionId?: string;
+  partial: string;
+  segments: CaptionSegment[];
+  inputAudioMs?: number;
+  inputLevel?: number;
+  progress?: CaptionDownloadProgress;
+  error?: string;
+  updatedAt: number;
+}
+
+export type CaptionEvent =
+  | { type: "setup-required" }
+  | { type: "started"; sessionId: string }
+  | { type: "partial"; sessionId: string; text: string }
+  | { type: "segment"; sessionId: string; segment: CaptionSegment }
+  | { type: "stopped"; sessionId?: string; message: string }
+  | { type: "error"; sessionId?: string; message: string };
+
 export interface BootstrapData {
   config: RuntimeConfig;
   runtime: RuntimeState;
   speech: SpeechState;
   tts: TtsState;
+  caption: CaptionState;
   platform: string;
   appVersion: string;
 }
@@ -274,6 +333,14 @@ export interface DesktopPetApi {
   importTtsModels(): Promise<TtsState | null>;
   speakText(text: string): Promise<TtsState>;
   stopSpeaking(): Promise<TtsState>;
+  openCaptionWindow(): Promise<CaptionState>;
+  closeCaptionWindow(): Promise<void>;
+  prepareCaption(force?: boolean): Promise<CaptionState>;
+  startLiveCaption(): Promise<CaptionState>;
+  stopLiveCaption(): Promise<CaptionState>;
+  clearCaptionHistory(): Promise<CaptionState>;
+  updateCaptionConfig(config: CaptionConfig): Promise<CaptionConfig>;
+  notifyCaptionCaptureEnded(message: string): void;
   pickExecutable(): Promise<FilePickResult | null>;
   pickModel(): Promise<FilePickResult | null>;
   pickMmproj(): Promise<FilePickResult | null>;
@@ -298,5 +365,8 @@ export interface DesktopPetApi {
   onSpeechState(listener: (state: SpeechState) => void): () => void;
   onSpeechEvent(listener: (event: SpeechEvent) => void): () => void;
   onTtsState(listener: (state: TtsState) => void): () => void;
+  onCaptionState(listener: (state: CaptionState) => void): () => void;
+  onCaptionEvent(listener: (event: CaptionEvent) => void): () => void;
+  onCaptionConfig(listener: (config: CaptionConfig) => void): () => void;
   onOpenView(listener: (mode: WindowMode) => void): () => void;
 }

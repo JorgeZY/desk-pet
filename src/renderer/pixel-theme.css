@@ -589,13 +589,14 @@ select:focus {
 
 .switch-row input::before {
   position: absolute;
-  top: 2px;
+  top: 50%;
   left: 2px;
   width: 14px;
   height: 14px;
   background: #fff7da;
   border: 1px solid var(--pixel-outline);
   content: "";
+  transform: translateY(-50%);
   transition: transform var(--motion-fast) steps(2, end);
 }
 
@@ -605,7 +606,7 @@ select:focus {
 }
 
 .switch-row input:checked::before {
-  transform: translateX(16px);
+  transform: translate(16px, -50%);
 }
 
 .switch-row input:active:not(:disabled) {

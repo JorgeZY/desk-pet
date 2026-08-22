@@ -17,6 +17,7 @@ interface SettingsProps {
   onImportTts: () => Promise<void>;
   onSpeakText: (text: string) => Promise<void>;
   onStopSpeaking: () => Promise<void>;
+  onOpenCaption: () => Promise<void>;
 }
 
 interface ParameterLabelProps {
@@ -96,7 +97,7 @@ function ParameterLabel({ label, tooltip }: ParameterLabelProps) {
   );
 }
 
-export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave, onPrepareSpeech, onImportSpeech, onPrepareTts, onImportTts, onSpeakText, onStopSpeaking }: SettingsProps) {
+export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave, onPrepareSpeech, onImportSpeech, onPrepareTts, onImportTts, onSpeakText, onStopSpeaking, onOpenCaption }: SettingsProps) {
   const [config, setConfig] = useState(initialConfig);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -259,19 +260,21 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
             </div>
           </div>
           <p className="hint">使用 Cursor 兼容的 MCP 配置，支持本地 command 及 remote http/https url（可附带 headers）。保存并重启模型后，自定义 MCP tools 会与 builtin tools 一起显示并参与调用。</p>
-          {tools.length ? (
-            <ul className="runtime-tool-list" aria-label="当前工具列表">
-              {tools.map((tool) => (
-                <li key={tool.id}>
-                  <div><b>{tool.displayName}</b><code>{tool.id}</code></div>
-                  <span className={`runtime-tool-source runtime-tool-source--${tool.source}`}>{tool.source === "mcp" ? "MCP" : "BUILTIN"}</span>
-                  <span>{tool.requiresApproval ? "写入需确认" : "自动执行"}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="compact-result">{toolsStatus}</p>
-          )}
+          <div className="runtime-tool-viewport">
+            {tools.length ? (
+              <ul className="runtime-tool-list" aria-label="当前工具列表">
+                {tools.map((tool) => (
+                  <li key={tool.id}>
+                    <div><b>{tool.displayName}</b><code>{tool.id}</code></div>
+                    <span className={`runtime-tool-source runtime-tool-source--${tool.source}`}>{tool.source === "mcp" ? "MCP" : "BUILTIN"}</span>
+                    <span>{tool.requiresApproval ? "写入需确认" : "自动执行"}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="compact-result">{toolsStatus}</p>
+            )}
+          </div>
         </section>
 
         <section className="settings-section">
@@ -330,6 +333,9 @@ export function Settings({ initialConfig, runtime, speech, tts, onClose, onSave,
             </div>
           )}
           <div className="button-row">
+            <button className="button button--primary" type="button" onClick={() => void onOpenCaption()}>
+              打开实时字幕
+            </button>
             <button
               className="button button--secondary"
               type="button"

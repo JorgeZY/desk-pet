@@ -1489,6 +1489,15 @@ select {
   list-style: none;
 }
 
+.runtime-tool-viewport {
+  box-sizing: border-box;
+  height: 172px;
+  min-height: 172px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
 .runtime-tool-list li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;

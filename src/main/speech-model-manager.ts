@@ -1,13 +1,25 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { SpeechDownloadProgress, SpeechModelId } from "../shared/types";
+import type {
+  CaptionDownloadProgress,
+  SpeechDownloadProgress,
+  SpeechModelId,
+} from "../shared/types";
 
 interface SpeechModelSpec {
   id: SpeechModelId;
   directory: string;
   script: string;
   requiredFiles: readonly string[];
+}
+
+interface CaptionModelSpec {
+  id: "streaming-nemotron-en";
+  directory: string;
+  script: string;
+  requiredFiles: readonly string[];
+  featureDim: number;
 }
 
 const SPEECH_MODELS: readonly SpeechModelSpec[] = [
@@ -25,6 +37,14 @@ const SPEECH_MODELS: readonly SpeechModelSpec[] = [
   },
 ] as const;
 
+const CAPTION_MODEL: CaptionModelSpec = {
+  id: "streaming-nemotron-en",
+  directory: "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
+  script: "download-caption-model.ps1",
+  requiredFiles: ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
+  featureDim: 128,
+};
+
 const UNUSED_STREAMING_FP32_FILES = ["encoder.onnx", "decoder.onnx"] as const;
 
 export interface SpeechModelPaths {
@@ -40,6 +60,15 @@ export interface SpeechModelPaths {
     model: string;
     tokens: string;
   };
+}
+
+export interface CaptionModelPaths {
+  directory: string;
+  encoder: string;
+  decoder: string;
+  joiner: string;
+  tokens: string;
+  featureDim: number;
 }
 
 export interface SpeechScriptInvocation {
@@ -80,7 +109,11 @@ function bestFile(files: string[], role: "encoder" | "decoder" | "final"): strin
   const candidates = files.filter((path) => {
     const name = basename(path).toLowerCase();
     if (!name.endsWith(".onnx")) return false;
-    if (role === "final") return !name.includes("encoder") && !name.includes("decoder");
+    if (role === "final") {
+      return !name.includes("encoder") &&
+        !name.includes("decoder") &&
+        !name.includes("joiner");
+    }
     return name.includes(role);
   });
   return candidates.sort((left, right) =>
@@ -133,8 +166,12 @@ export async function discoverSpeechModels(root: string): Promise<DiscoveredSpee
       encoder: bestFile(files, "encoder"),
       decoder: bestFile(files, "decoder"),
       tokens: tokenFile(files),
+      hasJoiner: files.some((path) => {
+        const name = basename(path).toLowerCase();
+        return name.endsWith(".onnx") && name.includes("joiner");
+      }),
     }))
-    .filter((value) => value.encoder && value.decoder && value.tokens)
+    .filter((value) => value.encoder && value.decoder && value.tokens && !value.hasJoiner)
     .sort((left, right) => {
       const leftScore = modelScore(left.encoder!, "encoder") + modelScore(left.decoder!, "decoder");
       const rightScore = modelScore(right.encoder!, "encoder") + modelScore(right.decoder!, "decoder");
@@ -185,6 +222,18 @@ export function resolveSpeechModelPaths(modelDirectory: string): SpeechModelPath
       model: join(finalDirectory, "model.int8.onnx"),
       tokens: join(finalDirectory, "tokens.txt"),
     },
+  };
+}
+
+export function resolveCaptionModelPaths(modelDirectory: string): CaptionModelPaths {
+  const directory = join(modelDirectory, "speech", CAPTION_MODEL.directory);
+  return {
+    directory,
+    encoder: join(directory, "encoder.int8.onnx"),
+    decoder: join(directory, "decoder.int8.onnx"),
+    joiner: join(directory, "joiner.int8.onnx"),
+    tokens: join(directory, "tokens.txt"),
+    featureDim: CAPTION_MODEL.featureDim,
   };
 }
 
@@ -274,6 +323,7 @@ export const runSpeechDownloadScript: SpeechScriptRunner = async ({
 
 export class SpeechModelManager {
   private readonly managedPaths: SpeechModelPaths;
+  private readonly managedCaptionPaths: CaptionModelPaths;
   private activePaths: SpeechModelPaths;
   private ready = false;
 
@@ -284,11 +334,16 @@ export class SpeechModelManager {
     private importedDirectory = "",
   ) {
     this.managedPaths = resolveSpeechModelPaths(modelDirectory);
+    this.managedCaptionPaths = resolveCaptionModelPaths(modelDirectory);
     this.activePaths = this.managedPaths;
   }
 
   get paths(): SpeechModelPaths {
     return this.activePaths;
+  }
+
+  get captionPaths(): CaptionModelPaths {
+    return this.managedCaptionPaths;
   }
 
   get displayedDirectory(): string {
@@ -339,6 +394,13 @@ export class SpeechModelManager {
     return this.ready;
   }
 
+  async isCaptionReady(): Promise<boolean> {
+    return hasRequiredFiles(
+      this.managedCaptionPaths.directory,
+      CAPTION_MODEL.requiredFiles,
+    );
+  }
+
   async importFromDirectory(sourceDirectory: string): Promise<SpeechModelPaths> {
     const discovered = await discoverSpeechModels(sourceDirectory);
     this.importedDirectory = sourceDirectory;
@@ -371,5 +433,35 @@ export class SpeechModelManager {
     }
     if (!(await this.isReady())) throw new Error("语音模型没有完整安装。请重新运行下载脚本。");
     return this.managedPaths;
+  }
+
+  async prepareCaption(
+    signal: AbortSignal,
+    onProgress: (progress: CaptionDownloadProgress) => void,
+    force = false,
+  ): Promise<CaptionModelPaths> {
+    await writableDirectory(this.modelDirectory);
+    const target = this.managedCaptionPaths.directory;
+    if (force || !(await hasRequiredFiles(target, CAPTION_MODEL.requiredFiles))) {
+      onProgress({ receivedBytes: 0 });
+      await this.runScript({
+        scriptPath: join(this.scriptDirectory, CAPTION_MODEL.script),
+        modelRoot: this.modelDirectory,
+        force,
+        signal,
+      });
+      if (!(await hasRequiredFiles(target, CAPTION_MODEL.requiredFiles))) {
+        throw new Error(`${CAPTION_MODEL.id} 下载脚本完成，但模型文件不完整。`);
+      }
+      onProgress({
+        receivedBytes: 1,
+        totalBytes: 1,
+        percent: 100,
+      });
+    }
+    if (!(await this.isCaptionReady())) {
+      throw new Error("英文实时字幕模型没有完整安装。请重新运行下载脚本。");
+    }
+    return this.managedCaptionPaths;
   }
 }
