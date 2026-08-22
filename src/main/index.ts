@@ -668,6 +668,7 @@ function registerIpc(): void {
       ...nextConfig,
       speech: { ...nextConfig.speech, modelDirectory: current.speech.modelDirectory },
       tts: { ...nextConfig.tts, modelDirectory: current.tts.modelDirectory },
+      caption: current.caption,
     }));
     runtime.updateConfig(config);
     speech.updateConfig(config.speech);
