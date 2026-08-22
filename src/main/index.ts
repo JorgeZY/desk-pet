@@ -2,13 +2,16 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  desktopCapturer,
   dialog,
   globalShortcut,
   ipcMain,
+  MessageChannelMain,
   Menu,
   nativeImage,
   net,
   screen,
+  session,
   shell,
   Tray,
 } from "electron";
@@ -18,6 +21,9 @@ import { promisify } from "node:util";
 import { basename, extname, join } from "node:path";
 import type {
   BootstrapData,
+  CaptionConfig,
+  CaptionEvent,
+  CaptionState,
   ChatDocument,
   ChatMessage,
   ChatImage,
@@ -31,6 +37,12 @@ import type {
   TtsState,
   WindowMode,
 } from "../shared/types";
+import {
+  CAPTION_WINDOW_DEFAULTS,
+  clampCaptionBounds,
+  defaultCaptionBounds,
+  normalizeCaptionConfig,
+} from "../shared/caption-window";
 import {
   clampWindowPosition,
   PET_WINDOW_BASE_HEIGHT,
@@ -46,7 +58,9 @@ import {
   readChatDocument,
 } from "./chat-documents";
 import { pasteDictationText, resolveShortcutSpeechSource } from "./global-dictation";
+import { AudioModeCoordinator } from "./audio-mode-coordinator";
 import { LlamaRuntime } from "./llama-runtime";
+import { LiveCaptionRuntime } from "./live-caption-runtime";
 import { migrateModelDirectory, resolveModelDirectory } from "./model-directory";
 import { validateMcpServersConfigContents } from "./mcp-servers-config";
 import { ManagedModelDownloader } from "./model-downloader";
@@ -65,6 +79,7 @@ const WINDOW_SIZES: Record<WindowMode, { width: number; height: number }> = {
   onboarding: { width: 560, height: 740 },
 };
 let mainWindow: BrowserWindow | null = null;
+let captionWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let configStore: ConfigStore;
@@ -73,6 +88,8 @@ let config: RuntimeConfig;
 let runtime: LlamaRuntime;
 let speech: SpeechRuntime;
 let tts: TtsRuntime;
+let caption: LiveCaptionRuntime;
+let audioModes: AudioModeCoordinator;
 let currentWindowMode: WindowMode = "pet";
 let shortcutHook: typeof import("uiohook-napi").uIOhook | undefined;
 let shortcutHookStarted = false;
@@ -83,15 +100,29 @@ let shortcutSessionId: string | undefined;
 let speechComposerFocused = false;
 let petWindowPosition: { x: number; y: number } | null = null;
 const globalDictationSessions = new Set<string>();
+let captionAudioPort: Electron.MessagePortMain | null = null;
+let captionBoundsSaveTimer: NodeJS.Timeout | undefined;
+let configWriteQueue: Promise<void> = Promise.resolve();
+
+function updateStoredConfig(
+  mutate: (current: RuntimeConfig) => RuntimeConfig,
+): Promise<RuntimeConfig> {
+  const task = configWriteQueue.then(async () => {
+    config = await configStore.write(mutate(config));
+    return config;
+  });
+  configWriteQueue = task.then(() => undefined, () => undefined);
+  return task;
+}
 
 function assetPath(fileName: string): string {
   return join(__dirname, "../../assets", fileName);
 }
 
-function rendererUrl(): string {
+function rendererUrl(view?: string): string {
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   const url = new URL(devUrl ?? `file://${join(__dirname, "../../dist-renderer/index.html")}`);
-  const requestedView = process.env.DESK_PET_CAPTURE_VIEW;
+  const requestedView = view ?? process.env.DESK_PET_CAPTURE_VIEW;
   if (requestedView) url.searchParams.set("view", requestedView);
   return url.toString();
 }
@@ -163,9 +194,12 @@ function openWindowMode(mode: WindowMode): void {
 }
 
 function createMainWindow(): BrowserWindow {
+  const captureCaption = process.env.DESK_PET_CAPTURE_VIEW === "caption";
   const mode: WindowMode = requestedWindowMode() ?? (config.setupComplete ? "pet" : "onboarding");
   currentWindowMode = mode;
-  const size = WINDOW_SIZES[mode];
+  const size = captureCaption
+    ? { width: CAPTION_WINDOW_DEFAULTS.width, height: CAPTION_WINDOW_DEFAULTS.height }
+    : WINDOW_SIZES[mode];
   const { workArea } = screen.getPrimaryDisplay();
   const window = new BrowserWindow({
     width: size.width,
@@ -229,6 +263,186 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
+function sendCaptionState(state: CaptionState): void {
+  if (captionWindow && !captionWindow.isDestroyed()) {
+    captionWindow.webContents.send("caption:state", state);
+  }
+}
+
+function sendCaptionEvent(event: CaptionEvent): void {
+  if (captionWindow && !captionWindow.isDestroyed()) {
+    captionWindow.webContents.send("caption:event", event);
+  }
+}
+
+function closeCaptionAudioPort(): void {
+  captionAudioPort?.close();
+  captionAudioPort = null;
+}
+
+function captionSamples(value: unknown): Float32Array | undefined {
+  if (value instanceof Float32Array) return value;
+  if (value instanceof ArrayBuffer && value.byteLength % Float32Array.BYTES_PER_ELEMENT === 0) {
+    return new Float32Array(value);
+  }
+  if (ArrayBuffer.isView(value) && value.byteLength % Float32Array.BYTES_PER_ELEMENT === 0) {
+    return new Float32Array(value.buffer, value.byteOffset, value.byteLength / Float32Array.BYTES_PER_ELEMENT);
+  }
+  return undefined;
+}
+
+function connectCaptionAudioPort(): void {
+  if (!captionWindow || captionWindow.isDestroyed()) return;
+  closeCaptionAudioPort();
+  const { port1, port2 } = new MessageChannelMain();
+  captionAudioPort = port1;
+  port1.on("message", ({ data }) => {
+    if (!data || typeof data !== "object") return;
+    if ((data as { type?: unknown }).type === "caption-audio-handshake") {
+      port1.postMessage({ type: "caption-audio-ready" });
+      return;
+    }
+    const payload = data as { sessionId?: unknown; sampleRate?: unknown; samples?: unknown };
+    const samples = captionSamples(payload.samples);
+    if (
+      typeof payload.sessionId !== "string" ||
+      typeof payload.sampleRate !== "number" ||
+      !samples
+    ) {
+      caption.captureEnded("收到的系统音频数据格式无效，请关闭字幕窗口后重新打开。");
+      return;
+    }
+    const accepted = caption.acceptAudio(payload.sessionId, payload.sampleRate, samples);
+    if (!accepted && caption.snapshot.phase === "capturing") {
+      caption.captureEnded("系统音频数据未被识别器接受，请停止后重新开始。");
+    }
+  });
+  port1.start();
+  captionWindow.webContents.postMessage("caption:audio-port", null, [port2]);
+}
+
+async function persistCaptionBounds(): Promise<void> {
+  if (!captionWindow || captionWindow.isDestroyed()) return;
+  const bounds = captionWindow.getBounds();
+  await updateStoredConfig((current) => ({
+    ...current,
+    caption: normalizeCaptionConfig({ ...current.caption, bounds }),
+  }));
+  if (!captionWindow.isDestroyed()) {
+    captionWindow.webContents.send("caption:config", config.caption);
+  }
+}
+
+function scheduleCaptionBoundsSave(): void {
+  if (captionBoundsSaveTimer) clearTimeout(captionBoundsSaveTimer);
+  captionBoundsSaveTimer = setTimeout(() => {
+    captionBoundsSaveTimer = undefined;
+    void persistCaptionBounds().catch((error) => {
+      console.error("Failed to save caption window bounds:", error);
+    });
+  }, 250);
+}
+
+function captionWindowBounds(): Electron.Rectangle {
+  const stored = config.caption.bounds;
+  if (!stored) return defaultCaptionBounds(screen.getPrimaryDisplay().workArea);
+  const display = screen.getDisplayMatching(stored);
+  return clampCaptionBounds(stored, display.workArea);
+}
+
+function createCaptionWindow(): BrowserWindow {
+  const bounds = captionWindowBounds();
+  const window = new BrowserWindow({
+    ...bounds,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    show: false,
+    icon: assetPath("app-icon.png"),
+    webPreferences: {
+      preload: join(__dirname, "../preload/index.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  window.setAlwaysOnTop(true, "floating");
+  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  window.once("ready-to-show", () => window.showInactive());
+  window.webContents.on("did-finish-load", connectCaptionAudioPort);
+  window.on("moved", scheduleCaptionBoundsSave);
+  window.on("closed", () => {
+    closeCaptionAudioPort();
+    captionWindow = null;
+    if (caption.snapshot.phase === "capturing") {
+      void caption.stop("实时字幕窗口已关闭。");
+    }
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  void window.loadURL(rendererUrl("caption"));
+  return window;
+}
+
+function openCaptionWindow(): CaptionState {
+  if (!captionWindow || captionWindow.isDestroyed()) captionWindow = createCaptionWindow();
+  else {
+    captionWindow.showInactive();
+    captionWindow.moveTop();
+  }
+  return caption.snapshot;
+}
+
+async function closeCaptionWindow(): Promise<void> {
+  if (caption.snapshot.phase !== "downloading") {
+    await caption.stop("实时字幕已关闭。");
+  }
+  if (captionWindow && !captionWindow.isDestroyed()) captionWindow.destroy();
+  captionWindow = null;
+  closeCaptionAudioPort();
+}
+
+function toggleCaptionWindow(): void {
+  if (captionWindow && !captionWindow.isDestroyed()) void closeCaptionWindow();
+  else openCaptionWindow();
+}
+
+function configureDisplayMediaCapture(): void {
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    const allowedFrame = captionWindow?.webContents.mainFrame;
+    if (
+      process.platform !== "win32" ||
+      !captionWindow ||
+      captionWindow.isDestroyed() ||
+      !request.frame ||
+      !allowedFrame ||
+      request.frame.processId !== allowedFrame.processId ||
+      request.frame.routingId !== allowedFrame.routingId
+    ) {
+      callback({});
+      return;
+    }
+    void desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width: 0, height: 0 },
+    }).then((sources) => {
+      const primaryDisplayId = String(screen.getPrimaryDisplay().id);
+      const source = sources.find((candidate) => candidate.display_id === primaryDisplayId) ?? sources[0];
+      if (!source || !captionWindow || captionWindow.isDestroyed()) callback({});
+      else callback({ video: source, audio: "loopback" });
+    }).catch((error) => {
+      console.error("Failed to authorize system audio capture:", error);
+      callback({});
+    });
+  });
+}
+
 function createTray(): Tray {
   const icon = nativeImage.createFromPath(assetPath("tray-icon.png"));
   const nextTray = new Tray(icon.resize({ width: 20, height: 20 }));
@@ -249,6 +463,10 @@ function createTray(): Tray {
       {
         label: "设置",
         click: () => openWindowMode("settings"),
+      },
+      {
+        label: "实时字幕",
+        click: toggleCaptionWindow,
       },
       { type: "separator" },
       {
@@ -396,9 +614,22 @@ function bootstrap(): BootstrapData {
     runtime: runtime.snapshot,
     speech: speech.snapshot,
     tts: tts.snapshot,
+    caption: caption.snapshot,
     platform: process.platform,
     appVersion: app.getVersion(),
   };
+}
+
+async function startSpeechSession(source: "button" | "shortcut") {
+  return audioModes.startSpeech(source);
+}
+
+async function startCaptionSession(): Promise<CaptionState> {
+  return audioModes.startCaption(() => {
+    shortcutSessionId = undefined;
+    shortcutReleasedBeforeStart = false;
+    globalDictationSessions.clear();
+  });
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -433,14 +664,16 @@ async function migrateLegacyUserData(): Promise<void> {
 function registerIpc(): void {
   ipcMain.handle("desktop-pet:get-bootstrap", () => bootstrap());
   ipcMain.handle("desktop-pet:save-config", async (_event, nextConfig: RuntimeConfig) => {
-    config = await configStore.write({
+    await updateStoredConfig((current) => ({
       ...nextConfig,
-      speech: { ...nextConfig.speech, modelDirectory: config.speech.modelDirectory },
-      tts: { ...nextConfig.tts, modelDirectory: config.tts.modelDirectory },
-    });
+      speech: { ...nextConfig.speech, modelDirectory: current.speech.modelDirectory },
+      tts: { ...nextConfig.tts, modelDirectory: current.tts.modelDirectory },
+      caption: current.caption,
+    }));
     runtime.updateConfig(config);
     speech.updateConfig(config.speech);
     tts.updateConfig(config.tts);
+    caption.updateThreads(config.speech.threads);
     configureSpeechShortcut();
     return bootstrap();
   });
@@ -450,10 +683,10 @@ function registerIpc(): void {
   ipcMain.handle("runtime:restart", () => runtime.restart());
   ipcMain.handle("runtime:list-tools", () => runtime.listTools());
   ipcMain.handle("speech:prepare", async (_event, force?: boolean) => {
-    config = await configStore.write({
-      ...config,
-      speech: { ...config.speech, modelDirectory: "" },
-    });
+    await updateStoredConfig((current) => ({
+      ...current,
+      speech: { ...current.speech, modelDirectory: "" },
+    }));
     speech.updateConfig(config.speech);
     return speech.prepare(force === true);
   });
@@ -468,14 +701,14 @@ function registerIpc(): void {
     const directory = result.filePaths[0];
     if (result.canceled || !directory) return null;
     const state = await speech.importFromDirectory(directory);
-    config = await configStore.write({
-      ...config,
-      speech: { ...config.speech, modelDirectory: directory },
-    });
+    await updateStoredConfig((current) => ({
+      ...current,
+      speech: { ...current.speech, modelDirectory: directory },
+    }));
     speech.updateConfig(config.speech);
     return state;
   });
-  ipcMain.handle("speech:start", () => speech.start("button"));
+  ipcMain.handle("speech:start", () => startSpeechSession("button"));
   ipcMain.handle("speech:stop", (_event, sessionId: string) => speech.stop(sessionId));
   ipcMain.handle("speech:cancel", (_event, sessionId: string) => speech.cancel(sessionId));
   ipcMain.on("speech:composer-focus", (event, focused: boolean) => {
@@ -484,10 +717,10 @@ function registerIpc(): void {
     }
   });
   ipcMain.handle("tts:prepare", async (_event, force?: boolean) => {
-    config = await configStore.write({
-      ...config,
-      tts: { ...config.tts, modelDirectory: "" },
-    });
+    await updateStoredConfig((current) => ({
+      ...current,
+      tts: { ...current.tts, modelDirectory: "" },
+    }));
     tts.updateConfig(config.tts);
     return tts.prepare(force === true);
   });
@@ -502,15 +735,39 @@ function registerIpc(): void {
     const directory = result.filePaths[0];
     if (result.canceled || !directory) return null;
     const state = await tts.importFromDirectory(directory);
-    config = await configStore.write({
-      ...config,
-      tts: { ...config.tts, modelDirectory: directory },
-    });
+    await updateStoredConfig((current) => ({
+      ...current,
+      tts: { ...current.tts, modelDirectory: directory },
+    }));
     tts.updateConfig(config.tts);
     return state;
   });
   ipcMain.handle("tts:speak", (_event, text: string) => tts.speakText(String(text)));
   ipcMain.handle("tts:stop", () => tts.stopAll());
+  ipcMain.handle("caption:open", () => openCaptionWindow());
+  ipcMain.handle("caption:close", () => closeCaptionWindow());
+  ipcMain.handle("caption:prepare", (_event, force?: boolean) =>
+    caption.prepare(force === true));
+  ipcMain.handle("caption:start", () => startCaptionSession());
+  ipcMain.handle("caption:stop", () => caption.stop());
+  ipcMain.handle("caption:clear", () => caption.clear());
+  ipcMain.handle("caption:update-config", async (_event, nextConfig: CaptionConfig) => {
+    await updateStoredConfig((current) => ({
+      ...current,
+      caption: normalizeCaptionConfig({
+        ...nextConfig,
+        bounds: current.caption.bounds,
+      }),
+    }));
+    if (captionWindow && !captionWindow.isDestroyed()) {
+      captionWindow.webContents.send("caption:config", config.caption);
+    }
+    return config.caption;
+  });
+  ipcMain.on("caption:capture-ended", (event, message: string) => {
+    if (!captionWindow || event.sender !== captionWindow.webContents) return;
+    caption.captureEnded(String(message || "系统输出音频已停止，请重新启动实时字幕。"));
+  });
   ipcMain.handle("dialog:pick-executable", () =>
     pickFile("选择 llama.cpp 可执行文件", [
       { name: "llama.cpp", extensions: process.platform === "win32" ? ["exe"] : ["*"] },
@@ -651,8 +908,7 @@ function registerShortcutListeners(): void {
       mainWindow?.isFocused() === true,
     );
     if (source === "shortcut") revealGlobalDictation();
-    void speech
-      .start(source)
+    void startSpeechSession(source)
       .then((result) => {
         shortcutSessionId = result?.sessionId;
         if (shortcutSessionId && source === "shortcut") {
@@ -735,17 +991,19 @@ async function initialize(): Promise<void> {
   runtime = new LlamaRuntime(config, (modelId, options) =>
     modelDownloader.resolve(modelId, options),
   );
-  speech = new SpeechRuntime(
-    config.speech,
-    new SpeechModelManager(
-      modelDirectory,
-      app.isPackaged ? join(process.resourcesPath, "scripts") : join(app.getAppPath(), "scripts"),
-      undefined,
-      config.speech.modelDirectory,
-    ),
+  const speechModels = new SpeechModelManager(
+    modelDirectory,
+    app.isPackaged ? join(process.resourcesPath, "scripts") : join(app.getAppPath(), "scripts"),
+    undefined,
+    config.speech.modelDirectory,
   );
+  speech = new SpeechRuntime(config.speech, speechModels);
+  caption = new LiveCaptionRuntime(config.speech.threads, speechModels);
+  audioModes = new AudioModeCoordinator(speech, caption);
   speech.on("state", sendSpeechState);
   speech.on("event", handleSpeechEvent);
+  caption.on("state", sendCaptionState);
+  caption.on("event", sendCaptionEvent);
   tts = new TtsRuntime(
     config.tts,
     new TtsModelManager(
@@ -767,6 +1025,7 @@ async function initialize(): Promise<void> {
   });
 
   registerIpc();
+  configureDisplayMediaCapture();
   mainWindow = createMainWindow();
   mainWindow.on("blur", () => {
     speechComposerFocused = false;
@@ -774,13 +1033,13 @@ async function initialize(): Promise<void> {
   tray = createTray();
   configureSpeechShortcut();
   void speech.initializeAvailability();
+  void caption.initializeAvailability();
   void tts.initializeAvailability();
 
   globalShortcut.register("CommandOrControl+Shift+M", () => {
     if (mainWindow?.isVisible()) mainWindow.hide();
     else showWindow(config.setupComplete ? "pet" : "onboarding");
   });
-
   if (config.setupComplete && config.autoStart) {
     setTimeout(() => void runtime.start(false), 700);
   }
@@ -808,7 +1067,11 @@ app.on("before-quit", () => {
   tray?.destroy();
   void runtime?.stop();
   void speech?.dispose();
+  void caption?.dispose();
   void tts?.dispose();
+  closeCaptionAudioPort();
+  captionWindow?.destroy();
+  captionWindow = null;
   chatHistoryStore?.close();
   chatHistoryStore = null;
 });

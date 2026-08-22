@@ -371,6 +371,9 @@ export function App() {
           onImportTts={importTtsModels}
           onSpeakText={speakText}
           onStopSpeaking={stopSpeaking}
+          onOpenCaption={async () => {
+            await window.desktopPet.openCaptionWindow();
+          }}
           onClose={() => void transitionToView("chat")}
           onSave={saveSettings}
         />

@@ -132,6 +132,26 @@ describe("runtime config", () => {
     expect(imported.tts.modelDirectory).toBe("D:\\tts-models");
   });
 
+  it("migrates and clamps live caption preferences", () => {
+    expect(normalizeConfig({ ...DEFAULT_CONFIG, caption: undefined }).caption)
+      .toEqual(DEFAULT_CONFIG.caption);
+
+    const configured = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      caption: {
+        fontSize: 100,
+        opacity: 0.1,
+        bounds: { x: 20.3, y: 40.8, width: 200, height: 900 },
+      },
+    });
+    expect(configured.caption).toEqual({
+        layoutVersion: 3,
+        fontSize: 22,
+        opacity: 0.96,
+        bounds: { x: -240, y: 833, width: 720, height: 108 },
+    });
+  });
+
   it("requires a GGUF file in local mode", () => {
     const missing = normalizeConfig({ ...DEFAULT_CONFIG, modelMode: "local", modelPath: "" });
     expect(validateConfig(missing)).toContain("请选择 llama.cpp 支持的 GGUF 模型。");

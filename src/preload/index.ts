@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   ChatEvent,
   ChatRequest,
+  CaptionConfig,
+  CaptionEvent,
+  CaptionState,
   DesktopPetApi,
   RuntimeConfig,
   RuntimeState,
@@ -10,6 +13,11 @@ import type {
   TtsState,
   WindowMode,
 } from "../shared/types";
+
+ipcRenderer.on("caption:audio-port", (event) => {
+  const port = event.ports[0];
+  if (port) window.postMessage({ type: "desktop-pet:caption-audio-port" }, "*", [port]);
+});
 
 const api: DesktopPetApi = {
   getBootstrap: () => ipcRenderer.invoke("desktop-pet:get-bootstrap"),
@@ -28,6 +36,14 @@ const api: DesktopPetApi = {
   importTtsModels: () => ipcRenderer.invoke("tts:import"),
   speakText: (text: string) => ipcRenderer.invoke("tts:speak", text),
   stopSpeaking: () => ipcRenderer.invoke("tts:stop"),
+  openCaptionWindow: () => ipcRenderer.invoke("caption:open"),
+  closeCaptionWindow: () => ipcRenderer.invoke("caption:close"),
+  prepareCaption: (force?: boolean) => ipcRenderer.invoke("caption:prepare", force),
+  startLiveCaption: () => ipcRenderer.invoke("caption:start"),
+  stopLiveCaption: () => ipcRenderer.invoke("caption:stop"),
+  clearCaptionHistory: () => ipcRenderer.invoke("caption:clear"),
+  updateCaptionConfig: (config: CaptionConfig) => ipcRenderer.invoke("caption:update-config", config),
+  notifyCaptionCaptureEnded: (message: string) => ipcRenderer.send("caption:capture-ended", message),
   pickExecutable: () => ipcRenderer.invoke("dialog:pick-executable"),
   pickModel: () => ipcRenderer.invoke("dialog:pick-model"),
   pickMmproj: () => ipcRenderer.invoke("dialog:pick-mmproj"),
@@ -80,6 +96,24 @@ const api: DesktopPetApi = {
       listener(payload);
     ipcRenderer.on("tts:state", wrapped);
     return () => ipcRenderer.removeListener("tts:state", wrapped);
+  },
+  onCaptionState: (listener: (state: CaptionState) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: CaptionState): void =>
+      listener(payload);
+    ipcRenderer.on("caption:state", wrapped);
+    return () => ipcRenderer.removeListener("caption:state", wrapped);
+  },
+  onCaptionEvent: (listener: (event: CaptionEvent) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: CaptionEvent): void =>
+      listener(payload);
+    ipcRenderer.on("caption:event", wrapped);
+    return () => ipcRenderer.removeListener("caption:event", wrapped);
+  },
+  onCaptionConfig: (listener: (config: CaptionConfig) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: CaptionConfig): void =>
+      listener(payload);
+    ipcRenderer.on("caption:config", wrapped);
+    return () => ipcRenderer.removeListener("caption:config", wrapped);
   },
   onOpenView: (listener: (mode: WindowMode) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, mode: WindowMode): void => listener(mode);
