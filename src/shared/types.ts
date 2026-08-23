@@ -222,7 +222,14 @@ export interface ChatMessage {
   documents?: ChatDocument[];
   reasoning?: string;
   toolCalls?: ChatToolCall[];
+  contextUsage?: ChatContextUsage;
   createdAt: number;
+}
+
+export interface ChatContextUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
 }
 
 export interface ChatConversation {
@@ -301,7 +308,12 @@ export type ChatEvent =
       result?: string;
       error?: string;
     }
-  | { requestId: string; type: "done"; timings?: Record<string, unknown> }
+  | {
+      requestId: string;
+      type: "done";
+      timings?: Record<string, unknown>;
+      contextUsage?: ChatContextUsage;
+    }
   | { requestId: string; type: "error"; message: string };
 
 export interface ProbeResult {
@@ -357,6 +369,7 @@ export interface DesktopPetApi {
   setWindowMode(mode: WindowMode): Promise<void>;
   hideWindow(): Promise<void>;
   openExternal(url: string): Promise<void>;
+  copyText(text: string): Promise<void>;
   startChat(request: ChatRequest): void;
   abortChat(requestId: string): void;
   resolveToolApproval(requestId: string, toolCallId: string, approved: boolean): void;
@@ -369,4 +382,5 @@ export interface DesktopPetApi {
   onCaptionEvent(listener: (event: CaptionEvent) => void): () => void;
   onCaptionConfig(listener: (config: CaptionConfig) => void): () => void;
   onOpenView(listener: (mode: WindowMode) => void): () => void;
+  notifyViewReady(mode: WindowMode): void;
 }

@@ -1,7 +1,7 @@
 {
   "name": "desk-pet",
   "productName": "desk-pet",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "A model-agnostic local desktop pet powered by llama.cpp.",
   "author": "desk-pet contributors",
@@ -35,6 +35,7 @@
   "license": "MIT",
   "dependencies": {
     "decibri": "^5.5.0",
+    "lucide-react": "^1.33.0",
     "node-cpal": "^0.1.1",
     "pdf-parse": "^2.4.5",
     "react": "^19.1.1",

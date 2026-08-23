@@ -64,6 +64,7 @@ const api: DesktopPetApi = {
   setWindowMode: (mode: WindowMode) => ipcRenderer.invoke("window:set-mode", mode),
   hideWindow: () => ipcRenderer.invoke("window:hide"),
   openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url),
+  copyText: (text: string) => ipcRenderer.invoke("app:copy-text", text),
   startChat: (request: ChatRequest) => ipcRenderer.send("chat:start", request),
   abortChat: (requestId: string) => ipcRenderer.send("chat:abort", requestId),
   resolveToolApproval: (requestId: string, toolCallId: string, approved: boolean) =>
@@ -120,6 +121,7 @@ const api: DesktopPetApi = {
     ipcRenderer.on("app:open-view", wrapped);
     return () => ipcRenderer.removeListener("app:open-view", wrapped);
   },
+  notifyViewReady: (mode: WindowMode) => ipcRenderer.send("window:view-ready", mode),
 };
 
 contextBridge.exposeInMainWorld("desktopPet", api);

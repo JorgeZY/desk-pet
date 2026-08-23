@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
+  ChatContextUsage,
   ChatConversation,
   ChatDocument,
   ChatEvent,
@@ -11,6 +12,7 @@ import type {
   ThinkingEffort,
 } from "../../shared/types";
 import { clearLegacyChatHistory, readChatHistory, writeChatHistory } from "../chat-history";
+import { copyTextViaDocument, copyTextWithFallback } from "../clipboard";
 import { thinkingBudgetLimitForDisplay } from "../../shared/thinking-effort";
 import { Pet, type PetMood } from "./Pet";
 import { resolveSpeechPetClipMood } from "./pet-clips";
@@ -24,6 +26,7 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { ToolCallCard } from "./ToolCallCard";
 import {
   conversationOperationUiPolicy,
+  continuationRequestMessages,
   isNearChatBottom,
   regenerationBaseMessages,
   type ConversationOperationKind,
@@ -38,6 +41,7 @@ interface ChatPanelProps {
   tts: TtsState;
   chatTemplates: string[];
   maxTokens: number;
+  contextSize: number;
   draft: string;
   images: ChatImage[];
   documents: ChatDocument[];
@@ -60,6 +64,11 @@ interface ThinkingToggleProps {
   maxTokens: number;
 }
 
+interface ContextUsageIndicatorProps {
+  usage?: ChatContextUsage;
+  contextSize: number;
+}
+
 type PersistenceMode = "loading" | "database" | "legacy";
 
 interface ChatInitialization {
@@ -74,6 +83,11 @@ interface ConversationOperation {
   composerRevision: number;
 }
 
+interface GenerationOptions {
+  targetAssistantId?: string;
+  requestMessages?: ChatMessage[];
+}
+
 function formatConversationTime(timestamp: number): string {
   return new Intl.DateTimeFormat("zh-CN", {
     month: "numeric",
@@ -81,6 +95,13 @@ function formatConversationTime(timestamp: number): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(timestamp);
+}
+
+function latestContextUsage(messages: ChatMessage[]): ChatContextUsage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].contextUsage) return messages[index].contextUsage;
+  }
+  return undefined;
 }
 
 const THINKING_EFFORTS: Array<{ value: ThinkingEffort; label: string }> = [
@@ -143,10 +164,7 @@ const ThinkingToggle = memo(function ThinkingToggle({ onChange, maxTokens }: Thi
             if (!thinking) event.preventDefault();
           }}
         >
-          <span className="thinking-effort__value">
-            <PixelIcon name="sparkle" className="thinking-effort__icon" />
-            <span>{selectedLabel}</span>
-          </span>
+          <span className="thinking-effort__value">{selectedLabel}</span>
           <PixelIcon name="chevron-down" className="thinking-effort__chevron" />
         </summary>
         <div className="thinking-effort__menu" role="listbox" aria-label="推理强度选项">
@@ -176,12 +194,65 @@ const ThinkingToggle = memo(function ThinkingToggle({ onChange, maxTokens }: Thi
   );
 });
 
+const ContextUsageIndicator = memo(function ContextUsageIndicator({
+  usage,
+  contextSize,
+}: ContextUsageIndicatorProps) {
+  const usedTokens = usage?.totalTokens ?? 0;
+  const usedPercentage = contextSize > 0 ? Math.min(100, usedTokens / contextSize * 100) : 0;
+  const remainingTokens = Math.max(0, contextSize - usedTokens);
+  const remainingPercentage = contextSize > 0 ? remainingTokens / contextSize * 100 : 0;
+  const level = usedPercentage >= 90 ? "critical" : usedPercentage >= 70 ? "high" : "normal";
+  const label = usage
+    ? `剩余上下文 ${remainingTokens.toLocaleString("en-US")} / ${contextSize.toLocaleString("en-US")} token，${Math.round(remainingPercentage)}% 可用`
+    : `上下文上限 ${contextSize.toLocaleString("en-US")} token，完成一次回答后显示用量`;
+
+  return (
+    <div className={`context-usage context-usage--${level}`} tabIndex={0} aria-label={label}>
+      <svg className="context-usage__circle" viewBox="0 0 24 24" aria-hidden="true">
+        <circle className="context-usage__track" cx="12" cy="12" r="8.5" />
+        <circle
+          className="context-usage__value"
+          cx="12"
+          cy="12"
+          r="8.5"
+          pathLength="100"
+          strokeDasharray={`${usedPercentage} 100`}
+        />
+        <circle className="context-usage__center" cx="12" cy="12" r="2" />
+      </svg>
+      <div className="context-usage__tooltip" role="tooltip">
+        <div className="context-usage__heading">
+          <b>剩余上下文</b>
+          <span>{usage ? `${Math.round(remainingPercentage)}% 可用` : "待统计"}</span>
+        </div>
+        {usage ? (
+          <>
+            <div className="context-usage__meter" aria-hidden="true">
+              <i style={{ width: `${remainingPercentage}%` }} />
+            </div>
+            <strong>
+              {remainingTokens.toLocaleString("en-US")} token 可用
+            </strong>
+            <small>
+              已使用 {usedTokens.toLocaleString("en-US")} / {contextSize.toLocaleString("en-US")} · 当前输入 {usage.promptTokens.toLocaleString("en-US")} · 输出 {usage.completionTokens.toLocaleString("en-US")}
+            </small>
+          </>
+        ) : (
+          <small>完成一次回答后显示真实 token 用量</small>
+        )}
+      </div>
+    </div>
+  );
+});
+
 export function ChatPanel({
   runtime,
   speech,
   tts,
   chatTemplates,
   maxTokens,
+  contextSize,
   draft,
   images,
   documents,
@@ -213,6 +284,7 @@ export function ChatPanel({
     () => new Set(),
   );
   const [activeRequest, setActiveRequest] = useState<string | null>(null);
+  const [copyPopupVisible, setCopyPopupVisible] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const assistantByRequest = useRef(new Map<string, string>());
@@ -226,6 +298,7 @@ export function ChatPanel({
   const persistenceModeRef = useRef<PersistenceMode>("loading");
   const dirtyRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyPopupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const initializationRef = useRef<Promise<ChatInitialization> | null>(null);
   const conversationOperationTokenRef = useRef(0);
@@ -507,6 +580,8 @@ export function ChatPanel({
         }
         if (event.type === "done" || event.type === "error") {
           if (event.type === "error") {
+            const existingMessage = messagesRef.current.find((message) => message.id === assistantId);
+            if (existingMessage?.content) setAttachmentError(event.message);
             updateMessages(
               (current) =>
                 current.map((message) =>
@@ -525,7 +600,17 @@ export function ChatPanel({
               true,
             );
           } else {
-            scheduleSave(true, true);
+            if (event.contextUsage) {
+              updateMessages(
+                (current) => current.map((message) => message.id === assistantId
+                  ? { ...message, contextUsage: event.contextUsage }
+                  : message),
+                true,
+                true,
+              );
+            } else {
+              scheduleSave(true, true);
+            }
           }
           assistantByRequest.current.delete(event.requestId);
           setActiveRequest((current) => current === event.requestId ? null : current);
@@ -540,6 +625,7 @@ export function ChatPanel({
       mountedRef.current = false;
       conversationOperationTokenRef.current += 1;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (copyPopupTimerRef.current) clearTimeout(copyPopupTimerRef.current);
       void persistMessages();
     };
   }, [persistMessages]);
@@ -770,24 +856,76 @@ export function ChatPanel({
     }
   };
 
-  const startGeneration = (nextMessages: ChatMessage[]) => {
+  const startGeneration = (nextMessages: ChatMessage[], options: GenerationOptions = {}) => {
     const requestId = crypto.randomUUID();
-    const assistant: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: "",
-      createdAt: Date.now(),
-    };
-    assistantByRequest.current.set(requestId, assistant.id);
+    const assistantId = options.targetAssistantId ?? crypto.randomUUID();
+    assistantByRequest.current.set(requestId, assistantId);
     autoScrollRef.current = true;
     setShowScrollToLatest(false);
-    updateMessages([...nextMessages, assistant], true, true);
+    if (!options.targetAssistantId) {
+      const assistant: ChatMessage = {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        createdAt: Date.now(),
+      };
+      updateMessages([...nextMessages, assistant], true, true);
+    }
     setActiveRequest(requestId);
     window.desktopPet.startChat({
       requestId,
-      messages: nextMessages,
+      messages: options.requestMessages ?? nextMessages,
       thinking: thinkingRef.current,
       thinkingEffort: thinkingEffortRef.current,
+    });
+  };
+
+  const copyMessage = async (message: ChatMessage): Promise<void> => {
+    try {
+      const desktopCopyText = typeof window.desktopPet.copyText === "function"
+        ? window.desktopPet.copyText.bind(window.desktopPet)
+        : undefined;
+      const browserCopyText = typeof navigator.clipboard?.writeText === "function"
+        ? navigator.clipboard.writeText.bind(navigator.clipboard)
+        : undefined;
+      await copyTextWithFallback(message.content, {
+        desktopCopyText,
+        browserCopyText,
+        legacyCopyText: (text) => copyTextViaDocument(text, document),
+      });
+      setAttachmentError("");
+      setCopyPopupVisible(true);
+      if (copyPopupTimerRef.current) clearTimeout(copyPopupTimerRef.current);
+      copyPopupTimerRef.current = setTimeout(() => {
+        copyPopupTimerRef.current = null;
+        setCopyPopupVisible(false);
+      }, 1_600);
+    } catch (error) {
+      setAttachmentError(`复制失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const continueGeneration = (message: ChatMessage): void => {
+    if (
+      message.id !== messagesRef.current.at(-1)?.id ||
+      message.role !== "assistant" ||
+      !message.content.trim() ||
+      activeRequest ||
+      conversationOperationPendingRef.current ||
+      runtime.phase !== "ready" ||
+      persistenceMode === "loading"
+    ) return;
+    if (tts.phase === "speaking") void onStopSpeaking();
+    setAttachmentError("");
+    const requestMessages = continuationRequestMessages(
+      messagesRef.current,
+      crypto.randomUUID(),
+      Date.now(),
+    );
+    if (!requestMessages) return;
+    startGeneration(messagesRef.current, {
+      targetAssistantId: message.id,
+      requestMessages,
     });
   };
 
@@ -849,6 +987,10 @@ export function ChatPanel({
   const visibleChatTemplates = useMemo(
     () => chatTemplates.map((template) => template.trim()).filter(Boolean),
     [chatTemplates],
+  );
+  const contextUsage = useMemo(
+    () => latestContextUsage(messages),
+    [messages],
   );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1117,6 +1259,17 @@ export function ChatPanel({
                   <div className="message-actions">
                     {message.content.trim() && (
                       <button
+                        className="message-action message-action--copy"
+                        type="button"
+                        aria-label="复制这段回答"
+                        title="复制"
+                        onClick={() => void copyMessage(message)}
+                      >
+                        <PixelIcon name="copy" />
+                      </button>
+                    )}
+                    {message.content.trim() && (
+                      <button
                         className={`message-action${tts.phase === "speaking" ? " message-action--active" : ""}`}
                         type="button"
                         disabled={!tts.enabled}
@@ -1134,16 +1287,30 @@ export function ChatPanel({
                       </button>
                     )}
                     {messageIndex === messages.length - 1 && !activeRequest && (
-                      <button
-                        className="message-action message-action--regenerate"
-                        type="button"
-                        disabled={runtime.phase !== "ready" || conversationOperationPending}
-                        aria-label="重新生成回答"
-                        title="重新生成回答"
-                        onClick={regenerate}
-                      >
-                        <PixelIcon name="refresh" />
-                      </button>
+                      <>
+                        {message.content.trim() && (
+                          <button
+                            className="message-action message-action--continue"
+                            type="button"
+                            disabled={runtime.phase !== "ready" || conversationOperationPending}
+                            aria-label="继续生成这段回答"
+                            title="继续生成"
+                            onClick={() => continueGeneration(message)}
+                          >
+                            <PixelIcon name="continue" />
+                          </button>
+                        )}
+                        <button
+                          className="message-action message-action--regenerate"
+                          type="button"
+                          disabled={runtime.phase !== "ready" || conversationOperationPending}
+                          aria-label="重新生成回答"
+                          title="重新生成回答"
+                          onClick={regenerate}
+                        >
+                          <PixelIcon name="refresh" />
+                        </button>
+                      </>
                     )}
                   </div>
                 )}
@@ -1207,6 +1374,12 @@ export function ChatPanel({
         </section>
       )}
 
+      {copyPopupVisible && (
+        <div className="copy-popup" role="status" aria-live="polite">
+          <PixelIcon name="copy" />
+          <span>已复制到剪贴板</span>
+        </div>
+      )}
       <footer className="composer">
         <div className="composer__toolbar">
           <div className="composer__tools">
@@ -1235,22 +1408,25 @@ export function ChatPanel({
               onError={setAttachmentError}
             />
           </div>
-          {persistenceMode !== "loading" && !activeRequest && (
-            <button
-              className="text-button"
-              type="button"
-              disabled={conversationOperationPending}
-              onClick={() => {
-                if (persistenceMode === "database") {
-                  void createConversation("composer");
-                } else {
-                  updateMessages([], true);
-                }
-              }}
-            >
-              新建对话
-            </button>
-          )}
+          <div className="composer__status">
+            <ContextUsageIndicator usage={contextUsage} contextSize={contextSize} />
+            {persistenceMode !== "loading" && !activeRequest && (
+              <button
+                className="text-button"
+                type="button"
+                disabled={conversationOperationPending}
+                onClick={() => {
+                  if (persistenceMode === "database") {
+                    void createConversation("composer");
+                  } else {
+                    updateMessages([], true);
+                  }
+                }}
+              >
+                新建对话
+              </button>
+            )}
+          </div>
         </div>
         <ImageAttachmentTray images={images} onRemove={removeImage} />
         <DocumentAttachmentTray documents={documents} onRemove={removeDocument} />

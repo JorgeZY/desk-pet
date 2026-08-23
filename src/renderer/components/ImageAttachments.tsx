@@ -33,7 +33,7 @@ export function ImageAttachButton({
       aria-label={images.length ? `重新上传图片，当前 ${images.length} 张` : "上传图片"}
       title={disabled ? "请先在设置中选择视觉投影模型" : "上传图片（最多 4 张，合计不超过 10 MB）"}
     >
-      <PixelIcon name="upload" className="image-attach-button__icon" />
+      <PixelIcon name="image" className="image-attach-button__icon" />
       {images.length > 0 && <b>{images.length}</b>}
     </button>
   );

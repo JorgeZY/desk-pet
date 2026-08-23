@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { CaptionConfig, CaptionState } from "../shared/types";
 import { sendCaptionAudio } from "./caption-audio-channel";
 import { StableCaptionPresenter, type CaptionPresentation } from "./caption-display";
+import { PixelIcon } from "./components/PixelIcon";
 
 interface CaptureResources {
   stream: MediaStream;
@@ -48,25 +49,6 @@ function phaseLabel(state: CaptionState | null, feedback: CaptureFeedback): stri
   if (state.phase === "not-installed") return "需要字幕模型";
   if (state.phase === "error") return "字幕已暂停";
   return "实时字幕";
-}
-
-type CaptionIconName = "minus" | "plus" | "clear" | "play" | "stop" | "download" | "close";
-
-function CaptionIcon({ name }: { name: CaptionIconName }) {
-  const paths: Record<CaptionIconName, ReactNode> = {
-    minus: <path d="M6 12h12" />,
-    plus: <path d="M12 6v12M6 12h12" />,
-    clear: <path d="M8 8h8m-7 0 .6 10h4.8L15 8m-5-3h4l1 3H9l1-3Z" />,
-    play: <path d="m9 7 8 5-8 5V7Z" fill="currentColor" stroke="none" />,
-    stop: <rect x="8" y="8" width="8" height="8" rx="1.5" fill="currentColor" stroke="none" />,
-    download: <path d="M12 4v10m-4-4 4 4 4-4M6 19h12" />,
-    close: <path d="m7 7 10 10M17 7 7 17" />,
-  };
-  return (
-    <svg className="caption-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      {paths[name]}
-    </svg>
-  );
 }
 
 export function CaptionApp() {
@@ -266,13 +248,13 @@ export function CaptionApp() {
           <span>{phaseLabel(state, feedback)}</span>
         </div>
         <div className="caption-controls caption-no-drag" role="toolbar" aria-label="实时字幕控制">
-          <button type="button" title="缩小字幕" onClick={() => void updateConfig({ ...config, fontSize: config.fontSize - 2 })} disabled={config.fontSize <= 16} aria-label="缩小字幕"><CaptionIcon name="minus" /></button>
-          <button type="button" title="放大字幕" onClick={() => void updateConfig({ ...config, fontSize: config.fontSize + 2 })} disabled={config.fontSize >= 36} aria-label="放大字幕"><CaptionIcon name="plus" /></button>
-          <button type="button" title="清空字幕" onClick={() => void window.desktopPet.clearCaptionHistory().then(setState)} disabled={!state?.segments.length} aria-label="清空字幕"><CaptionIcon name="clear" /></button>
+          <button type="button" title="缩小字幕" onClick={() => void updateConfig({ ...config, fontSize: config.fontSize - 2 })} disabled={config.fontSize <= 16} aria-label="缩小字幕"><PixelIcon name="minus" className="caption-icon" /></button>
+          <button type="button" title="放大字幕" onClick={() => void updateConfig({ ...config, fontSize: config.fontSize + 2 })} disabled={config.fontSize >= 36} aria-label="放大字幕"><PixelIcon name="plus" className="caption-icon" /></button>
+          <button type="button" title="清空字幕" onClick={() => void window.desktopPet.clearCaptionHistory().then(setState)} disabled={!state?.segments.length} aria-label="清空字幕"><PixelIcon name="clear" className="caption-icon" /></button>
           {capturing
-            ? <button className="caption-primary is-stop" type="button" title="停止字幕" onClick={() => void stop()} aria-label="停止字幕"><CaptionIcon name="stop" /></button>
-            : <button className="caption-primary" type="button" title={state?.phase === "not-installed" ? "下载字幕模型" : "开始字幕"} onClick={() => void start()} disabled={busy} aria-label={state?.phase === "not-installed" ? "下载字幕模型" : "开始字幕"}><CaptionIcon name={state?.phase === "not-installed" ? "download" : "play"} /></button>}
-          <button className="caption-close" type="button" title="关闭字幕" onClick={() => void close()} aria-label="关闭字幕"><CaptionIcon name="close" /></button>
+            ? <button className="caption-primary is-stop" type="button" title="停止字幕" onClick={() => void stop()} aria-label="停止字幕"><PixelIcon name="stop" className="caption-icon" /></button>
+            : <button className="caption-primary" type="button" title={state?.phase === "not-installed" ? "下载字幕模型" : "开始字幕"} onClick={() => void start()} disabled={busy} aria-label={state?.phase === "not-installed" ? "下载字幕模型" : "开始字幕"}><PixelIcon name={state?.phase === "not-installed" ? "download" : "play"} className="caption-icon" /></button>}
+          <button className="caption-close" type="button" title="关闭字幕" onClick={() => void close()} aria-label="关闭字幕"><PixelIcon name="close" className="caption-icon" /></button>
         </div>
       </header>
 
