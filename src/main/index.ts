@@ -93,6 +93,7 @@ let caption: LiveCaptionRuntime;
 let audioModes: AudioModeCoordinator;
 let currentWindowMode: WindowMode = "pet";
 let pendingWindowReveal: WindowMode | null = null;
+let pendingWindowRevealTimer: ReturnType<typeof setTimeout> | null = null;
 let shortcutHook: typeof import("uiohook-napi").uIOhook | undefined;
 let shortcutHookStarted = false;
 let shortcutListenersRegistered = false;
@@ -202,6 +203,18 @@ function openWindowMode(mode: WindowMode): void {
     mainWindow.moveTop();
   } else {
     pendingWindowReveal = nextMode;
+    if (pendingWindowRevealTimer) clearTimeout(pendingWindowRevealTimer);
+    pendingWindowRevealTimer = setTimeout(() => {
+      pendingWindowRevealTimer = null;
+      if (
+        !mainWindow ||
+        mainWindow.isDestroyed() ||
+        pendingWindowReveal !== nextMode
+      ) return;
+      pendingWindowReveal = null;
+      mainWindow.setOpacity(1);
+      if (mainWindow.isVisible()) mainWindow.moveTop();
+    }, 500);
     mainWindow.show();
     mainWindow.moveTop();
   }
@@ -842,6 +855,10 @@ function registerIpc(): void {
       pendingWindowReveal !== mode
     ) return;
     pendingWindowReveal = null;
+    if (pendingWindowRevealTimer) {
+      clearTimeout(pendingWindowRevealTimer);
+      pendingWindowRevealTimer = null;
+    }
     mainWindow.setOpacity(1);
     mainWindow.moveTop();
   });
