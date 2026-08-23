@@ -217,7 +217,12 @@ export function App() {
     };
   }, []);
 
-  useEffect(() => window.desktopPet.onOpenView(setView), []);
+  useEffect(() => window.desktopPet.onOpenView((mode) => {
+    setView(mode);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => window.desktopPet.notifyViewReady(mode));
+    });
+  }), []);
 
   const mood: PetMood = !runtime
     ? "sleeping"
@@ -336,6 +341,7 @@ export function App() {
           tts={tts}
           chatTemplates={bootstrap.config.chatTemplates}
           maxTokens={bootstrap.config.maxTokens}
+          contextSize={bootstrap.config.contextSize}
           draft={draft}
           images={draftImages}
           documents={draftDocuments}

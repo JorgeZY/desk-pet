@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  ChatContextUsage,
   ChatConversation,
   ChatDocument,
   ChatImage,
@@ -26,6 +27,7 @@ interface MessageRow {
   images_json: string | null;
   documents_json: string | null;
   tool_calls_json: string | null;
+  context_usage_json: string | null;
   created_at: number;
 }
 
@@ -65,6 +67,25 @@ function serializeDocuments(documents?: ChatDocument[]): string | null {
 
 function serializeToolCalls(toolCalls?: ChatToolCall[]): string | null {
   return toolCalls?.length ? JSON.stringify(toolCalls) : null;
+}
+
+function parseContextUsage(value: string | null): ChatContextUsage | undefined {
+  if (!value) return undefined;
+  try {
+    const usage = JSON.parse(value) as Partial<ChatContextUsage>;
+    if (
+      typeof usage.promptTokens !== "number" ||
+      typeof usage.completionTokens !== "number" ||
+      typeof usage.totalTokens !== "number"
+    ) return undefined;
+    return {
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function conversationFromRow(row: ConversationRow): ChatConversation {
@@ -118,6 +139,7 @@ export class ChatHistoryStore {
         images_json TEXT,
         documents_json TEXT,
         tool_calls_json TEXT,
+        context_usage_json TEXT,
         created_at INTEGER NOT NULL,
         UNIQUE(conversation_id, position)
       );
@@ -126,6 +148,7 @@ export class ChatHistoryStore {
     `);
     this.ensureMessageColumn("documents_json", "TEXT");
     this.ensureMessageColumn("tool_calls_json", "TEXT");
+    this.ensureMessageColumn("context_usage_json", "TEXT");
   }
 
   close(): void {
@@ -157,7 +180,8 @@ export class ChatHistoryStore {
   loadMessages(conversationId: string): ChatMessage[] {
     this.requireConversation(conversationId);
     const rows = this.database.prepare(`
-      SELECT id, role, content, reasoning, images_json, documents_json, tool_calls_json, created_at
+      SELECT id, role, content, reasoning, images_json, documents_json, tool_calls_json,
+        context_usage_json, created_at
       FROM messages
       WHERE conversation_id = ?
       ORDER BY position ASC
@@ -166,6 +190,7 @@ export class ChatHistoryStore {
       const images = parseImages(row.images_json);
       const documents = parseJsonArray<ChatDocument>(row.documents_json);
       const toolCalls = parseJsonArray<ChatToolCall>(row.tool_calls_json);
+      const contextUsage = parseContextUsage(row.context_usage_json);
       return {
         id: row.id,
         role: row.role,
@@ -174,6 +199,7 @@ export class ChatHistoryStore {
         ...(images ? { images } : {}),
         ...(documents ? { documents } : {}),
         ...(toolCalls ? { toolCalls } : {}),
+        ...(contextUsage ? { contextUsage } : {}),
         createdAt: row.created_at,
       };
     });
@@ -185,8 +211,8 @@ export class ChatHistoryStore {
     const insert = this.database.prepare(`
       INSERT INTO messages (
         id, conversation_id, position, role, content, reasoning, images_json,
-        documents_json, tool_calls_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        documents_json, tool_calls_json, context_usage_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.database.exec("BEGIN IMMEDIATE");
@@ -203,6 +229,7 @@ export class ChatHistoryStore {
           serializeImages(message.images),
           serializeDocuments(message.documents),
           serializeToolCalls(message.toolCalls),
+          message.contextUsage ? JSON.stringify(message.contextUsage) : null,
           message.createdAt,
         );
       });
@@ -252,7 +279,10 @@ export class ChatHistoryStore {
     return row;
   }
 
-  private ensureMessageColumn(name: "documents_json" | "tool_calls_json", type: "TEXT"): void {
+  private ensureMessageColumn(
+    name: "documents_json" | "tool_calls_json" | "context_usage_json",
+    type: "TEXT",
+  ): void {
     const columns = this.database.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === name)) {
       this.database.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);

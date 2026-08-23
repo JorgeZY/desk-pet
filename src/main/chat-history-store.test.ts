@@ -59,6 +59,7 @@ describe("ChatHistoryStore", () => {
           requiresApproval: false,
           result: "文件内容",
         }],
+        contextUsage: { promptTokens: 640, completionTokens: 128, totalTokens: 768 },
       }),
     ]);
 
@@ -88,6 +89,7 @@ describe("ChatHistoryStore", () => {
           requiresApproval: false,
           result: "文件内容",
         }],
+        contextUsage: { promptTokens: 640, completionTokens: 128, totalTokens: 768 },
       }),
     ]);
 

@@ -68,6 +68,7 @@ import { SpeechModelManager } from "./speech-model-manager";
 import { SpeechRuntime } from "./speech-runtime";
 import { TtsModelManager } from "./tts-model-manager";
 import { TtsRuntime } from "./tts-runtime";
+import { positionToPreserveForModeChange, toggleShortcutWindow } from "./window-shortcut";
 
 const execFileAsync = promisify(execFile);
 app.setName("desk-pet");
@@ -91,6 +92,8 @@ let tts: TtsRuntime;
 let caption: LiveCaptionRuntime;
 let audioModes: AudioModeCoordinator;
 let currentWindowMode: WindowMode = "pet";
+let pendingWindowReveal: WindowMode | null = null;
+let pendingWindowRevealTimer: ReturnType<typeof setTimeout> | null = null;
 let shortcutHook: typeof import("uiohook-napi").uIOhook | undefined;
 let shortcutHookStarted = false;
 let shortcutListenersRegistered = false;
@@ -166,10 +169,12 @@ function restorePetWindow(window: BrowserWindow, width: number, height: number):
 function setWindowMode(mode: WindowMode): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const previousMode = currentWindowMode;
-  if (previousMode === "pet" && mode !== "pet") {
-    const bounds = mainWindow.getBounds();
-    petWindowPosition = { x: bounds.x, y: bounds.y };
-  }
+  const positionToPreserve = positionToPreserveForModeChange(
+    previousMode,
+    mode,
+    mainWindow.getBounds(),
+  );
+  if (positionToPreserve) petWindowPosition = positionToPreserve;
 
   currentWindowMode = mode;
   const size = WINDOW_SIZES[mode];
@@ -189,8 +194,30 @@ function showWindow(mode?: WindowMode): void {
 
 function openWindowMode(mode: WindowMode): void {
   const nextMode = config.setupComplete ? mode : "onboarding";
-  showWindow(nextMode);
-  mainWindow?.webContents.send("app:open-view", nextMode);
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wasVisible = mainWindow.isVisible();
+  if (!wasVisible) mainWindow.setOpacity(0);
+  setWindowMode(nextMode);
+  mainWindow.webContents.send("app:open-view", nextMode);
+  if (wasVisible) {
+    mainWindow.moveTop();
+  } else {
+    pendingWindowReveal = nextMode;
+    if (pendingWindowRevealTimer) clearTimeout(pendingWindowRevealTimer);
+    pendingWindowRevealTimer = setTimeout(() => {
+      pendingWindowRevealTimer = null;
+      if (
+        !mainWindow ||
+        mainWindow.isDestroyed() ||
+        pendingWindowReveal !== nextMode
+      ) return;
+      pendingWindowReveal = null;
+      mainWindow.setOpacity(1);
+      if (mainWindow.isVisible()) mainWindow.moveTop();
+    }, 500);
+    mainWindow.show();
+    mainWindow.moveTop();
+  }
 }
 
 function createMainWindow(): BrowserWindow {
@@ -820,6 +847,24 @@ function registerIpc(): void {
   });
   ipcMain.handle("window:set-mode", (_event, mode: WindowMode) => setWindowMode(mode));
   ipcMain.handle("window:hide", () => mainWindow?.hide());
+  ipcMain.on("window:view-ready", (event, mode: WindowMode) => {
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      event.sender !== mainWindow.webContents ||
+      pendingWindowReveal !== mode
+    ) return;
+    pendingWindowReveal = null;
+    if (pendingWindowRevealTimer) {
+      clearTimeout(pendingWindowRevealTimer);
+      pendingWindowRevealTimer = null;
+    }
+    mainWindow.setOpacity(1);
+    mainWindow.moveTop();
+  });
+  ipcMain.handle("app:copy-text", (_event, text: string) => {
+    clipboard.writeText(String(text));
+  });
   ipcMain.handle("app:open-external", async (_event, url: string) => {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:") throw new Error("只允许打开 HTTPS 链接。");
@@ -1037,8 +1082,7 @@ async function initialize(): Promise<void> {
   void tts.initializeAvailability();
 
   globalShortcut.register("CommandOrControl+Shift+M", () => {
-    if (mainWindow?.isVisible()) mainWindow.hide();
-    else showWindow(config.setupComplete ? "pet" : "onboarding");
+    toggleShortcutWindow(mainWindow, () => openWindowMode("pet"));
   });
   if (config.setupComplete && config.autoStart) {
     setTimeout(() => void runtime.start(false), 700);

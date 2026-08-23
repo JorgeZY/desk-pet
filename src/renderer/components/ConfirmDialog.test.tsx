@@ -25,7 +25,7 @@ describe("ConfirmDialog", () => {
     expect(markup).toContain("测试对话及其中 3 条消息将被永久删除。");
     expect(markup).toContain("取消");
     expect(markup).toContain("删除对话");
-    expect(markup).toContain('data-pixel-icon="trash"');
+    expect(markup).toContain('data-lucide-icon="trash"');
   });
 
   it("keeps the dialog mounted and exposes pending state during deletion", () => {

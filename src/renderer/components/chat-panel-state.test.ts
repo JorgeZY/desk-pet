@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   conversationOperationUiPolicy,
+  continuationRequestMessages,
   isNearChatBottom,
   isCurrentConversationOperation,
   regenerationBaseMessages,
@@ -25,6 +26,28 @@ describe("chat regeneration", () => {
 
   it("does not regenerate an unfinished user-only history", () => {
     expect(regenerationBaseMessages([user])).toBeNull();
+  });
+});
+
+describe("chat continuation", () => {
+  const user = { id: "u", role: "user", content: "解释一下", createdAt: 1 } as const;
+  const assistant = { id: "a", role: "assistant", content: "第一部分", createdAt: 2 } as const;
+
+  it("adds a request-only continuation instruction after the current answer", () => {
+    expect(continuationRequestMessages([user, assistant], "continue", 3)).toEqual([
+      user,
+      assistant,
+      {
+        id: "continue",
+        role: "user",
+        content: "请直接从上一条回答结束的位置继续，不要重复已有内容。",
+        createdAt: 3,
+      },
+    ]);
+  });
+
+  it("does not continue an empty or user-only history", () => {
+    expect(continuationRequestMessages([user], "continue", 3)).toBeNull();
   });
 });
 

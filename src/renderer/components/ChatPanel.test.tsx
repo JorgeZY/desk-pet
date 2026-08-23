@@ -37,6 +37,7 @@ describe("ChatPanel empty state", () => {
         tts={tts}
         chatTemplates={["模板甲", "  ", "模板丙"]}
         maxTokens={2048}
+        contextSize={8192}
         draft=""
         images={[]}
         documents={[]}
@@ -68,9 +69,14 @@ describe("ChatPanel empty state", () => {
     expect(markup).not.toContain("voice-pet-indicator");
     expect(markup).toContain('rows="3"');
     expect(markup).toContain('aria-label="推理强度：中，思考预算最多 1024 token"');
+    expect(markup).toContain('class="thinking-toggle"');
+    expect(markup).toContain('class="thinking-effort"');
+    expect(markup).toContain('class="thinking-effort__value">中</span>');
+    expect(markup).not.toContain('class="thinking-effort__icon"');
     expect(markup).toContain("预算 ≤ 1,024");
     expect(markup).toContain("总输出 ≤ 2,048");
     expect(markup).toContain('class="thinking-effort__menu"');
+    expect(markup).toContain('aria-label="上下文上限 8,192 token，完成一次回答后显示用量"');
     expect(markup).not.toContain("<select");
     expect(markup.indexOf("chat-template-grid")).toBeLessThan(
       markup.indexOf('class="composer"'),

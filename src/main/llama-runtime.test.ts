@@ -3,11 +3,29 @@ import { DEFAULT_CONFIG } from "./config-store";
 import {
   buildChatCompletionMessages,
   buildLlamaCommand,
+  contextUsageFromCompletion,
   LlamaRuntime,
   reasoningBudgetFor,
 } from "./llama-runtime";
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("contextUsageFromCompletion", () => {
+  it("includes cached and newly processed llama.cpp prompt tokens", () => {
+    expect(contextUsageFromCompletion({ cache_n: 1000, prompt_n: 234, predicted_n: 234 })).toEqual({
+      promptTokens: 1234,
+      completionTokens: 234,
+      totalTokens: 1468,
+    });
+  });
+
+  it("prefers OpenAI-compatible usage fields when present", () => {
+    expect(contextUsageFromCompletion(
+      { prompt_n: 1, predicted_n: 2 },
+      { prompt_tokens: 800, completion_tokens: 120, total_tokens: 920 },
+    )).toEqual({ promptTokens: 800, completionTokens: 120, totalTokens: 920 });
+  });
+});
 
 describe("buildLlamaCommand", () => {
   it("uses the unified llama serve command and a replaceable HF model", () => {

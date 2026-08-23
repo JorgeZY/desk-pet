@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, win32 } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
+  ChatContextUsage,
   ChatEvent,
   ChatImageMimeType,
   ChatMessage,
@@ -64,6 +65,39 @@ interface ServerTool {
 interface StreamCompletionResult {
   toolCalls: ApiToolCall[];
   timings?: Record<string, unknown>;
+  contextUsage?: ChatContextUsage;
+}
+
+function nonNegativeTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : undefined;
+}
+
+export function contextUsageFromCompletion(
+  timings?: Record<string, unknown>,
+  usage?: Record<string, unknown>,
+): ChatContextUsage | undefined {
+  const cachedPromptTokens = nonNegativeTokenCount(timings?.cache_n)
+    ?? nonNegativeTokenCount(timings?.tokens_cached)
+    ?? 0;
+  const promptTokens = nonNegativeTokenCount(usage?.prompt_tokens)
+    ?? (() => {
+      const processedPromptTokens = nonNegativeTokenCount(timings?.prompt_n);
+      return processedPromptTokens === undefined
+        ? undefined
+        : cachedPromptTokens + processedPromptTokens;
+    })();
+  const completionTokens = nonNegativeTokenCount(usage?.completion_tokens)
+    ?? nonNegativeTokenCount(timings?.predicted_n);
+  if (promptTokens === undefined && completionTokens === undefined) return undefined;
+  const prompt = promptTokens ?? 0;
+  const completion = completionTokens ?? 0;
+  return {
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: nonNegativeTokenCount(usage?.total_tokens) ?? prompt + completion,
+  };
 }
 
 type ImageReader = (path: string) => Promise<Uint8Array>;
@@ -587,6 +621,7 @@ export class LlamaRuntime extends EventEmitter {
       }
 
       let timings: Record<string, unknown> | undefined;
+      let contextUsage: ChatContextUsage | undefined;
       for (let turn = 0; turn < 8; turn += 1) {
         const completion = await this.streamCompletion(
           request,
@@ -596,8 +631,9 @@ export class LlamaRuntime extends EventEmitter {
           emit,
         );
         timings = completion.timings ?? timings;
+        contextUsage = completion.contextUsage ?? contextUsage;
         if (!completion.toolCalls.length) {
-          emit({ requestId: request.requestId, type: "done", timings });
+          emit({ requestId: request.requestId, type: "done", timings, contextUsage });
           return;
         }
 
@@ -712,6 +748,7 @@ export class LlamaRuntime extends EventEmitter {
         model: MODEL_ALIAS,
         messages,
         stream: true,
+        stream_options: { include_usage: true },
         max_tokens: this.config.maxTokens,
         temperature: this.config.temperature,
         top_k: this.config.topK,
@@ -748,6 +785,7 @@ export class LlamaRuntime extends EventEmitter {
     const sse = new SseDecoder();
     const streamedCalls = new Map<number, ApiToolCall>();
     let timings: Record<string, unknown> | undefined;
+    let contextUsage: ChatContextUsage | undefined;
 
     const consume = (data: string): boolean => {
       if (data === "[DONE]") return true;
@@ -764,8 +802,10 @@ export class LlamaRuntime extends EventEmitter {
           };
         }>;
         timings?: Record<string, unknown>;
+        usage?: Record<string, unknown>;
       };
       timings = payload.timings ?? timings;
+      contextUsage = contextUsageFromCompletion(payload.timings, payload.usage) ?? contextUsage;
       const delta = payload.choices?.[0]?.delta;
       if (delta?.reasoning_content) {
         emit({ requestId: request.requestId, type: "reasoning", text: delta.reasoning_content });
@@ -800,7 +840,7 @@ export class LlamaRuntime extends EventEmitter {
     for (const event of sse.finish()) {
       if (!done) done = consume(event.data);
     }
-    return { toolCalls: [...streamedCalls.values()], timings };
+    return { toolCalls: [...streamedCalls.values()], timings, contextUsage };
   }
 
   private async getServerTools(signal: AbortSignal): Promise<ServerTool[]> {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Desktop Pet"
+  short_description: "Build, review, verify, and publish a desk-pet release"
+  default_prompt: "Use $release-desktop-pet to prepare and publish the requested desk-pet version."

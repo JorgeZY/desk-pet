@@ -1368,8 +1368,8 @@ select {
 }
 
 .message-action svg {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
 }
 
 .message-action:hover:not(:disabled),
@@ -1383,6 +1383,8 @@ select {
   cursor: default;
 }
 
+.message-action--copy,
+.message-action--continue,
 .message-action--regenerate {
   width: 22px;
   color: #946557;
@@ -1390,9 +1392,43 @@ select {
   border-color: rgba(183, 105, 76, 0.28);
 }
 
+.message-action--copy svg,
+.message-action--continue svg {
+  width: 16px;
+  height: 16px;
+}
+
 .message-action--regenerate svg {
-  width: 13px;
-  height: 13px;
+  width: 16px;
+  height: 16px;
+}
+
+.copy-popup {
+  position: absolute;
+  top: 82px;
+  bottom: auto;
+  left: 50%;
+  z-index: 20;
+  display: inline-flex;
+  min-height: 30px;
+  padding: 6px 10px;
+  align-items: center;
+  gap: 7px;
+  color: #684438;
+  background: #fff8e8;
+  border: 1px solid rgba(113, 72, 58, 0.38);
+  border-radius: 7px;
+  box-shadow: 0 5px 14px rgba(74, 46, 39, 0.16);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.copy-popup svg {
+  width: 15px;
+  height: 15px;
 }
 
 .image-attachment-tray {
@@ -1610,8 +1646,8 @@ select {
 }
 
 .document-attachment > button svg {
-  width: 11px;
-  height: 11px;
+  width: 13px;
+  height: 13px;
 }
 
 .message--user .document-attachment {
@@ -1895,6 +1931,147 @@ select {
   gap: 6px;
 }
 
+.composer__status {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.context-usage {
+  position: relative;
+  display: grid;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #d77c5c;
+  border-radius: 7px;
+  cursor: default;
+  outline: none;
+  transition: background 150ms ease, color 150ms ease, transform var(--motion-normal) var(--ease-soft-spring);
+}
+
+.context-usage:hover,
+.context-usage:focus-visible {
+  color: #bd5f43;
+  background: rgba(239, 153, 111, 0.13);
+  transform: translateY(-1px);
+}
+
+.context-usage--high {
+  color: #d58b35;
+}
+
+.context-usage--critical {
+  color: #c95543;
+}
+
+.context-usage__circle {
+  width: 23px;
+  height: 23px;
+  overflow: visible;
+  transform: rotate(-90deg);
+}
+
+.context-usage__track,
+.context-usage__value {
+  fill: none;
+  stroke-width: 2.4;
+}
+
+.context-usage__track {
+  stroke: rgba(114, 85, 75, 0.15);
+}
+
+.context-usage__value {
+  stroke: currentColor;
+  stroke-linecap: round;
+  transition: stroke-dasharray 240ms ease;
+}
+
+.context-usage__center {
+  fill: currentColor;
+}
+
+.context-usage__tooltip {
+  position: absolute;
+  right: -7px;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  display: flex;
+  width: 205px;
+  padding: 10px 11px;
+  flex-direction: column;
+  gap: 6px;
+  color: #62483f;
+  background: rgba(255, 252, 247, 0.98);
+  border: 1px solid rgba(130, 91, 76, 0.14);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(91, 57, 45, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px) scale(0.98);
+  transform-origin: right bottom;
+  transition: opacity 130ms ease, transform 150ms ease;
+}
+
+.context-usage__tooltip::after {
+  position: absolute;
+  right: 14px;
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  content: "";
+  background: #fffdf9;
+  border-right: 1px solid rgba(130, 91, 76, 0.14);
+  border-bottom: 1px solid rgba(130, 91, 76, 0.14);
+  transform: rotate(45deg);
+}
+
+.context-usage:hover .context-usage__tooltip,
+.context-usage:focus-visible .context-usage__tooltip {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.context-usage__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.context-usage__heading b,
+.context-usage__tooltip strong {
+  font-size: 10px;
+}
+
+.context-usage__heading span {
+  color: currentColor;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.context-usage__tooltip small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.context-usage__meter {
+  height: 4px;
+  overflow: hidden;
+  background: rgba(114, 85, 75, 0.12);
+  border-radius: 4px;
+}
+
+.context-usage__meter i {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  border-radius: inherit;
+}
+
 .thinking-controls {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1996,13 +2173,13 @@ select {
 }
 
 .image-attach-button__icon {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.8;
+  stroke-width: 2.2;
 }
 
 .composer > .image-attachment-tray {
@@ -2060,7 +2237,7 @@ select {
 .thinking-effort {
   position: relative;
   display: block;
-  width: 68px;
+  width: 48px;
   height: 27px;
   color: #9b8880;
   background: rgba(116, 88, 78, 0.06);
@@ -2081,7 +2258,7 @@ select {
   display: flex;
   width: 100%;
   height: 100%;
-  padding: 0 5px 0 7px;
+  padding: 0 4px 0 7px;
   align-items: center;
   justify-content: space-between;
   gap: 2px;
@@ -2102,13 +2279,6 @@ select {
   min-width: 0;
   align-items: center;
   gap: 4px;
-}
-
-.thinking-effort__icon {
-  width: 11px;
-  height: 11px;
-  flex: 0 0 auto;
-  opacity: 0.68;
 }
 
 .thinking-effort__chevron {
@@ -2213,11 +2383,11 @@ select {
 }
 
 .thinking-toggle__option svg {
-  width: 10px;
-  height: 10px;
-  fill: currentColor;
+  width: 13px;
+  height: 13px;
+  fill: none;
   opacity: 0.62;
-  transform: scale(0.9);
+  transform: none;
   transition: opacity 160ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -2231,7 +2401,7 @@ select {
 
 .thinking-toggle__option.active svg {
   opacity: 1;
-  transform: scale(1.08);
+  transform: none;
 }
 
 .thinking-toggle__option.active {
