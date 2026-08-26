@@ -1,9 +1,12 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useChat } from "@ai-sdk/react";
+import type { DynamicToolUIPart } from "ai";
+import { Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import type {
   ChatContextUsage,
   ChatConversation,
   ChatDocument,
-  ChatEvent,
   ChatImage,
   ChatMessage,
   RuntimeState,
@@ -12,23 +15,70 @@ import type {
   ThinkingEffort,
 } from "../../shared/types";
 import { clearLegacyChatHistory, readChatHistory, writeChatHistory } from "../chat-history";
+import {
+  chatMessageToDesktopUIMessage,
+  chatMessagesToDesktopUIMessages,
+  desktopUIMessagesToChatMessages,
+  readDesktopToolMetadata,
+  type DesktopUIMessage,
+} from "../chat/desktop-ui-message";
+import { ElectronChatTransport } from "../chat/electron-chat-transport";
+import {
+  registerChatPersistenceFlush,
+  trackChatPersistence,
+} from "../chat-persistence-coordinator";
 import { copyTextViaDocument, copyTextWithFallback } from "../clipboard";
-import { thinkingBudgetLimitForDisplay } from "../../shared/thinking-effort";
-import { Pet, type PetMood } from "./Pet";
-import { resolveSpeechPetClipMood } from "./pet-clips";
-import { RuntimeBadge } from "./RuntimeBadge";
+import { cn } from "@/lib/utils";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
 import { VoiceButton } from "./VoiceButton";
 import { ImageAttachButton, ImageAttachmentTray } from "./ImageAttachments";
 import { DocumentAttachButton, DocumentAttachmentTray } from "./DocumentAttachments";
 import { PixelIcon } from "./PixelIcon";
-import { ConfirmDialog } from "./ConfirmDialog";
-import { MarkdownMessage } from "./MarkdownMessage";
-import { ToolCallCard } from "./ToolCallCard";
+import { ContextUsageIndicator, ModelReasoningControl } from "./ChatComposerControls";
+import { ChatHistoryList } from "./ChatHistoryList";
+import { ChatMessageView } from "./ChatMessageView";
+import { RuntimeLoadingDock } from "./RuntimeLoadingDock";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationEmptyState,
+  ConversationScrollButton,
+} from "./ai-elements/conversation";
+import {
+  PromptInput,
+  PromptInputActionMenu,
+  PromptInputActionMenuContent,
+  PromptInputActionMenuTrigger,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputHeader,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+} from "./ai-elements/prompt-input";
+import { Suggestion, Suggestions } from "./ai-elements/suggestion";
 import {
   conversationOperationUiPolicy,
-  continuationRequestMessages,
-  isNearChatBottom,
   regenerationBaseMessages,
+  terminalizeAssistantGeneration,
   type ConversationOperationKind,
   isCurrentConversationOperation,
   shouldResetComposer,
@@ -42,6 +92,7 @@ interface ChatPanelProps {
   chatTemplates: string[];
   maxTokens: number;
   contextSize: number;
+  modelLabel: string;
   draft: string;
   images: ChatImage[];
   documents: ChatDocument[];
@@ -55,18 +106,11 @@ interface ChatPanelProps {
   onSpeakText: (text: string) => Promise<void>;
   onStopSpeaking: () => Promise<void>;
   onClose: () => void;
-  onSettings: () => void;
   onStartRuntime: () => Promise<void>;
-}
-
-interface ThinkingToggleProps {
-  onChange: (thinking: boolean, effort: ThinkingEffort) => void;
-  maxTokens: number;
-}
-
-interface ContextUsageIndicatorProps {
-  usage?: ChatContextUsage;
-  contextSize: number;
+  activePage?: "chat" | "settings";
+  settingsContent?: ReactNode;
+  onNavigate?: (page: "chat" | "settings") => boolean;
+  onOpenCaption?: () => void;
 }
 
 type PersistenceMode = "loading" | "database" | "legacy";
@@ -83,18 +127,28 @@ interface ConversationOperation {
   composerRevision: number;
 }
 
-interface GenerationOptions {
-  targetAssistantId?: string;
-  requestMessages?: ChatMessage[];
+interface ChatSession {
+  id: string;
+  initialMessages: DesktopUIMessage[];
 }
 
-function formatConversationTime(timestamp: number): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(timestamp);
+const sidebarActionClassName = [
+  "text-sidebar-foreground/70",
+  "data-[active=true]:text-primary",
+].join(" ");
+
+function showChatError(message: string): void {
+  toast.error("对话出错", {
+    description: message,
+    id: `chat-error:${message}`,
+  });
+}
+
+function showChatWarning(message: string): void {
+  toast.warning("对话提示", {
+    description: message,
+    id: `chat-warning:${message}`,
+  });
 }
 
 function latestContextUsage(messages: ChatMessage[]): ChatContextUsage | undefined {
@@ -104,147 +158,21 @@ function latestContextUsage(messages: ChatMessage[]): ChatContextUsage | undefin
   return undefined;
 }
 
-const THINKING_EFFORTS: Array<{ value: ThinkingEffort; label: string }> = [
-  { value: "minimal", label: "极简" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-  { value: "xhigh", label: "极高" },
-  { value: "max", label: "最大" },
-];
-
-const ThinkingToggle = memo(function ThinkingToggle({ onChange, maxTokens }: ThinkingToggleProps) {
-  const [thinking, setThinking] = useState(false);
-  const [effort, setEffort] = useState<ThinkingEffort>("medium");
-  const effortMenuRef = useRef<HTMLDetailsElement>(null);
-
-  const toggle = () => {
-    const nextThinking = !thinking;
-    setThinking(nextThinking);
-    if (!nextThinking && effortMenuRef.current) effortMenuRef.current.open = false;
-    onChange(nextThinking, effort);
-  };
-
-  const selectedLabel = THINKING_EFFORTS.find((option) => option.value === effort)?.label;
-  const selectedBudget = thinkingBudgetLimitForDisplay(effort, maxTokens);
-  const selectedBudgetDescription = effort === "max"
-    ? `不单独限制思考预算，总输出最多 ${selectedBudget} token`
-    : `思考预算最多 ${selectedBudget} token`;
-
-  return (
-    <div className="thinking-controls">
-      <button
-        type="button"
-        className="thinking-toggle"
-        onClick={toggle}
-        aria-pressed={thinking}
-        aria-label={thinking ? "当前为深度思考，点击切换到快速回答" : "当前为快速回答，点击切换到深度思考"}
-      >
-        <span className={`thinking-toggle__option thinking-toggle__option--quick ${!thinking ? "active" : ""}`}>
-          <PixelIcon name="bolt" />
-          快速回答
-        </span>
-        <span className={`thinking-toggle__option thinking-toggle__option--deep ${thinking ? "active" : ""}`}>
-          <PixelIcon name="sparkle" />
-          深度思考
-        </span>
-      </button>
-      <details
-        ref={effortMenuRef}
-        className={`thinking-effort${thinking ? " thinking-effort--active" : ""}`}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
-        }}
-      >
-        <summary
-          aria-label={`推理强度：${selectedLabel}，${selectedBudgetDescription}`}
-          aria-disabled={!thinking}
-          title={thinking ? "选择推理强度" : "切换到深度思考后可调整"}
-          onClick={(event) => {
-            if (!thinking) event.preventDefault();
-          }}
-        >
-          <span className="thinking-effort__value">{selectedLabel}</span>
-          <PixelIcon name="chevron-down" className="thinking-effort__chevron" />
-        </summary>
-        <div className="thinking-effort__menu" role="listbox" aria-label="推理强度选项">
-          {THINKING_EFFORTS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="option"
-              aria-selected={option.value === effort}
-              onClick={() => {
-                setEffort(option.value);
-                onChange(thinking, option.value);
-                if (effortMenuRef.current) effortMenuRef.current.open = false;
-              }}
-            >
-              <span>{option.label}</span>
-              <small>
-                {option.value === "max" ? "总输出" : "预算"} ≤{
-                  ` ${thinkingBudgetLimitForDisplay(option.value, maxTokens).toLocaleString("en-US")}`
-                }
-              </small>
-            </button>
-          ))}
-        </div>
-      </details>
-    </div>
-  );
-});
-
-const ContextUsageIndicator = memo(function ContextUsageIndicator({
-  usage,
-  contextSize,
-}: ContextUsageIndicatorProps) {
-  const usedTokens = usage?.totalTokens ?? 0;
-  const usedPercentage = contextSize > 0 ? Math.min(100, usedTokens / contextSize * 100) : 0;
-  const remainingTokens = Math.max(0, contextSize - usedTokens);
-  const remainingPercentage = contextSize > 0 ? remainingTokens / contextSize * 100 : 0;
-  const level = usedPercentage >= 90 ? "critical" : usedPercentage >= 70 ? "high" : "normal";
-  const label = usage
-    ? `剩余上下文 ${remainingTokens.toLocaleString("en-US")} / ${contextSize.toLocaleString("en-US")} token，${Math.round(remainingPercentage)}% 可用`
-    : `上下文上限 ${contextSize.toLocaleString("en-US")} token，完成一次回答后显示用量`;
-
-  return (
-    <div className={`context-usage context-usage--${level}`} tabIndex={0} aria-label={label}>
-      <svg className="context-usage__circle" viewBox="0 0 24 24" aria-hidden="true">
-        <circle className="context-usage__track" cx="12" cy="12" r="8.5" />
-        <circle
-          className="context-usage__value"
-          cx="12"
-          cy="12"
-          r="8.5"
-          pathLength="100"
-          strokeDasharray={`${usedPercentage} 100`}
-        />
-        <circle className="context-usage__center" cx="12" cy="12" r="2" />
-      </svg>
-      <div className="context-usage__tooltip" role="tooltip">
-        <div className="context-usage__heading">
-          <b>剩余上下文</b>
-          <span>{usage ? `${Math.round(remainingPercentage)}% 可用` : "待统计"}</span>
-        </div>
-        {usage ? (
-          <>
-            <div className="context-usage__meter" aria-hidden="true">
-              <i style={{ width: `${remainingPercentage}%` }} />
-            </div>
-            <strong>
-              {remainingTokens.toLocaleString("en-US")} token 可用
-            </strong>
-            <small>
-              已使用 {usedTokens.toLocaleString("en-US")} / {contextSize.toLocaleString("en-US")} · 当前输入 {usage.promptTokens.toLocaleString("en-US")} · 输出 {usage.completionTokens.toLocaleString("en-US")}
-            </small>
-          </>
-        ) : (
-          <small>完成一次回答后显示真实 token 用量</small>
-        )}
-      </div>
-    </div>
-  );
-});
+function terminalizeLatestAssistant(
+  messages: ChatMessage[],
+  fallbackContent: string,
+  activeToolError: string,
+): ChatMessage[] {
+  const assistant = [...messages].reverse().find((message) => message.role === "assistant");
+  return assistant
+    ? terminalizeAssistantGeneration(
+        assistant.id,
+        messages,
+        fallbackContent,
+        activeToolError,
+      )
+    : messages;
+}
 
 export function ChatPanel({
   runtime,
@@ -253,6 +181,7 @@ export function ChatPanel({
   chatTemplates,
   maxTokens,
   contextSize,
+  modelLabel,
   draft,
   images,
   documents,
@@ -266,34 +195,85 @@ export function ChatPanel({
   onSpeakText,
   onStopSpeaking,
   onClose,
-  onSettings,
   onStartRuntime,
+  activePage = "chat",
+  settingsContent,
+  onNavigate,
+  onOpenCaption,
 }: ChatPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatSession, setChatSession] = useState<ChatSession>({
+    id: "desktop-chat:loading",
+    initialMessages: [],
+  });
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [persistenceMode, setPersistenceMode] = useState<PersistenceMode>("loading");
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [conversationOperationPending, setConversationOperationPending] = useState(false);
-  const [historyOperationError, setHistoryOperationError] = useState("");
   const [deleteTargets, setDeleteTargets] = useState<ChatConversation[]>([]);
   const [deletePending, setDeletePending] = useState(false);
-  const [deleteDialogError, setDeleteDialogError] = useState("");
   const [historyBatchMode, setHistoryBatchMode] = useState(false);
   const [selectedConversationIds, setSelectedConversationIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [activeRequest, setActiveRequest] = useState<string | null>(null);
   const [copyPopupVisible, setCopyPopupVisible] = useState(false);
-  const [attachmentError, setAttachmentError] = useState("");
-  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
-  const assistantByRequest = useRef(new Map<string, string>());
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [workbenchState, setWorkbenchState] = useState({
+    maximized: false,
+    sidebarCollapsed: false,
+  });
+  const [sidebarTogglePending, setSidebarTogglePending] = useState(false);
+  const mountedRef = useRef(true);
+  const finishChatRef = useRef<((
+    messages: DesktopUIMessage[],
+    isAbort: boolean,
+    isError: boolean,
+  ) => void) | null>(null);
+  const lastChatErrorRef = useRef("");
+  const transport = useMemo(() => new ElectronChatTransport({
+    startChat: (request) => window.desktopPet.startChat(request),
+    abortChat: (requestId) => window.desktopPet.abortChat(requestId),
+    onChatEvent: (listener) => window.desktopPet.onChatEvent(listener),
+  }), []);
+  const chat = useChat<DesktopUIMessage>({
+    id: chatSession.id,
+    messages: chatSession.initialMessages,
+    transport,
+    onData: (part) => {
+      if (part.type === "data-warning" && mountedRef.current) {
+        showChatWarning(part.data.message);
+      }
+    },
+    onError: (error) => {
+      lastChatErrorRef.current = error.message;
+      if (mountedRef.current) showChatError(error.message);
+    },
+    onFinish: ({ messages: finishedMessages, isAbort, isError }) => {
+      finishChatRef.current?.(finishedMessages, isAbort, isError);
+    },
+  });
+  const uiMessages = chat.messages;
+  const messages = useMemo(
+    () => desktopUIMessagesToChatMessages(uiMessages),
+    [uiMessages],
+  );
+  const generationActive = chat.status === "submitted" || chat.status === "streaming";
+  const activeRequest = generationActive
+    ? [...uiMessages].reverse().find((message) => message.role === "assistant")
+      ?.metadata?.requestId ?? "desktop-chat:active"
+    : null;
   const thinkingRef = useRef(false);
   const thinkingEffortRef = useRef<ThinkingEffort>("medium");
-  const autoScrollRef = useRef(true);
-  const mountedRef = useRef(true);
   const messagesRef = useRef<ChatMessage[]>([]);
+  const uiMessagesRef = useRef<DesktopUIMessage[]>(uiMessages);
+  const generationActiveRef = useRef(generationActive);
+  const activeGenerationPromiseRef = useRef<Promise<void> | null>(null);
+  const stopChatRef = useRef(chat.stop);
+  const setUiMessagesRef = useRef(chat.setMessages);
+  const lastSyncedChatIdRef = useRef(chatSession.id);
+  const lastSyncedUIMessagesRef = useRef(uiMessages);
+  uiMessagesRef.current = uiMessages;
+  generationActiveRef.current = generationActive;
+  stopChatRef.current = chat.stop;
+  setUiMessagesRef.current = chat.setMessages;
   const conversationIdRef = useRef<string | null>(null);
   const persistenceModeRef = useRef<PersistenceMode>("loading");
   const dirtyRef = useRef(false);
@@ -303,6 +283,7 @@ export function ChatPanel({
   const initializationRef = useRef<Promise<ChatInitialization> | null>(null);
   const conversationOperationTokenRef = useRef(0);
   const conversationOperationPendingRef = useRef(false);
+  const approvalResponsesRef = useRef(new Set<string>());
   const composerRevisionRef = useRef(0);
   const observedDraftRef = useRef(draft);
   const observedImagesRef = useRef(images);
@@ -310,7 +291,8 @@ export function ChatPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const historyNewButtonRef = useRef<HTMLButtonElement>(null);
   const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const focusAfterHistoryCloseRef = useRef(false);
+  const deleteTargetsSnapshotRef = useRef<ChatConversation[]>([]);
+  const sidebarTogglePendingRef = useRef(false);
   const onDraftChangeRef = useRef(onDraftChange);
   const onImagesChangeRef = useRef(onImagesChange);
   const onDocumentsChangeRef = useRef(onDocumentsChange);
@@ -342,6 +324,13 @@ export function ChatPanel({
     }
     onDraftChangeRef.current(value);
   }, []);
+
+  const applyChatTemplate = useCallback((value: string) => {
+    changeDraft(value);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus({ preventScroll: true });
+    });
+  }, [changeDraft]);
 
   const changeImages = useCallback((nextImages: ChatImage[]) => {
     if (observedImagesRef.current !== nextImages) {
@@ -388,13 +377,59 @@ export function ChatPanel({
     saveChainRef.current = saveOperation.catch((error) => {
         dirtyRef.current = true;
         if (mountedRef.current) {
-          setAttachmentError(
+          showChatError(
             `聊天记录保存失败：${error instanceof Error ? error.message : String(error)}`,
           );
         }
       });
+    trackChatPersistence(saveOperation, currentConversationId);
     return requireSuccess ? saveOperation : saveChainRef.current;
   }, []);
+
+  useEffect(() => registerChatPersistenceFlush(async () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    if (generationActiveRef.current) {
+      await stopChatRef.current();
+      await activeGenerationPromiseRef.current?.catch(() => undefined);
+    }
+    await persistMessages(false, true);
+  }), [persistMessages]);
+
+  useEffect(() => {
+    void window.desktopPet.getWorkbenchWindowState().then(setWorkbenchState);
+    return window.desktopPet.onWorkbenchWindowState(setWorkbenchState);
+  }, []);
+
+  const toggleSidebar = (): void => {
+    if (sidebarTogglePendingRef.current) return;
+    const previousCollapsed = workbenchState.sidebarCollapsed;
+    sidebarTogglePendingRef.current = true;
+    setSidebarTogglePending(true);
+    setWorkbenchState((current) => ({
+      ...current,
+      sidebarCollapsed: !previousCollapsed,
+    }));
+    void window.desktopPet
+      .setSidebarCollapsed(!previousCollapsed)
+      .then((state) => {
+        if (mountedRef.current) setWorkbenchState(state);
+      })
+      .catch((error) => {
+        if (!mountedRef.current) return;
+        setWorkbenchState((current) => ({
+          ...current,
+          sidebarCollapsed: previousCollapsed,
+        }));
+        showChatError(
+          `侧栏状态保存失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .finally(() => {
+        sidebarTogglePendingRef.current = false;
+        if (mountedRef.current) setSidebarTogglePending(false);
+      });
+  };
 
   const scheduleSave = useCallback((immediate = false, refreshConversations = false) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -417,7 +452,7 @@ export function ChatPanel({
     const next = typeof update === "function" ? update(messagesRef.current) : update;
     messagesRef.current = next;
     dirtyRef.current = true;
-    setMessages(next);
+    setUiMessagesRef.current(chatMessagesToDesktopUIMessages(next));
     scheduleSave(immediate, refreshConversations);
     return next;
   }, [scheduleSave]);
@@ -431,16 +466,51 @@ export function ChatPanel({
     messagesRef.current = nextMessages;
     dirtyRef.current = false;
     setConversationId(id);
-    setMessages(nextMessages);
-    autoScrollRef.current = true;
-    setShowScrollToLatest(false);
-    setAttachmentError("");
+    setChatSession({
+      id: id ?? "desktop-chat:legacy",
+      initialMessages: chatMessagesToDesktopUIMessages(nextMessages),
+    });
     if (resetComposer) {
       changeDraft("");
       changeImages([]);
       changeDocuments([]);
     }
   }, [changeDocuments, changeDraft, changeImages]);
+
+  useEffect(() => {
+    if (
+      lastSyncedChatIdRef.current === chatSession.id
+      && lastSyncedUIMessagesRef.current === uiMessages
+    ) return;
+    messagesRef.current = messages;
+    if (lastSyncedChatIdRef.current === chatSession.id) {
+      dirtyRef.current = true;
+      scheduleSave();
+    }
+    lastSyncedChatIdRef.current = chatSession.id;
+    lastSyncedUIMessagesRef.current = uiMessages;
+  }, [chatSession.id, messages, scheduleSave, uiMessages]);
+
+  finishChatRef.current = (finishedMessages, isAbort, isError) => {
+    let next = desktopUIMessagesToChatMessages(finishedMessages);
+    if (isAbort || isError) {
+      const errorMessage = isAbort
+        ? "任务已由用户停止。"
+        : `任务因生成错误而终止：${lastChatErrorRef.current || "未知错误"}`;
+      next = terminalizeLatestAssistant(
+        next,
+        isAbort ? "（团子停下了）" : `⚠ ${lastChatErrorRef.current || "生成失败"}`,
+        errorMessage,
+      );
+      if (mountedRef.current) {
+        setUiMessagesRef.current(chatMessagesToDesktopUIMessages(next));
+      }
+    }
+    messagesRef.current = next;
+    dirtyRef.current = true;
+    scheduleSave(true, true);
+    lastChatErrorRef.current = "";
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -489,135 +559,13 @@ export function ChatPanel({
       if (result.mode === "database") {
         clearLegacyChatHistory();
       } else {
-        setAttachmentError("本地聊天数据库暂不可用，当前使用浏览器存储兜底。");
+        showChatWarning("本地聊天数据库暂不可用，当前使用浏览器存储兜底。");
       }
     });
     return () => {
       cancelled = true;
     };
   }, [loadIntoState]);
-
-  useLayoutEffect(() => {
-    if (scrollRef.current && autoScrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
-
-  const handleChatScroll = useCallback(() => {
-    const element = scrollRef.current;
-    if (!element) return;
-    const nearBottom = isNearChatBottom(
-      element.scrollHeight,
-      element.scrollTop,
-      element.clientHeight,
-    );
-    autoScrollRef.current = nearBottom;
-    setShowScrollToLatest(!nearBottom);
-  }, []);
-
-  const scrollToLatest = useCallback(() => {
-    const element = scrollRef.current;
-    if (!element) return;
-    autoScrollRef.current = true;
-    setShowScrollToLatest(false);
-    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-  }, []);
-
-  useLayoutEffect(() => {
-    if (historyOpen || !focusAfterHistoryCloseRef.current) return;
-    focusAfterHistoryCloseRef.current = false;
-    textareaRef.current?.focus({ preventScroll: true });
-  }, [conversationId, historyOpen]);
-
-  useEffect(
-    () =>
-      window.desktopPet.onChatEvent((event: ChatEvent) => {
-        const assistantId = assistantByRequest.current.get(event.requestId);
-        if (!assistantId) return;
-        if (event.type === "warning") setAttachmentError(event.message);
-        if (event.type === "delta" || event.type === "reasoning") {
-          updateMessages((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? {
-                    ...message,
-                    ...(event.type === "delta"
-                      ? { content: message.content + event.text }
-                      : { reasoning: (message.reasoning ?? "") + event.text }),
-                  }
-                : message,
-            ),
-          );
-        }
-        if (event.type === "tool-call") {
-          updateMessages((current) =>
-            current.map((message) => {
-              if (message.id !== assistantId) return message;
-              const calls = [...(message.toolCalls ?? [])];
-              const index = calls.findIndex((call) => call.id === event.call.id);
-              if (index >= 0) calls[index] = event.call;
-              else calls.push(event.call);
-              return { ...message, toolCalls: calls };
-            }),
-          );
-        }
-        if (event.type === "tool-result") {
-          updateMessages((current) =>
-            current.map((message) => message.id === assistantId
-              ? {
-                  ...message,
-                  toolCalls: (message.toolCalls ?? []).map((call) => call.id === event.toolCallId
-                    ? {
-                        ...call,
-                        status: event.status,
-                        ...(event.result ? { result: event.result } : {}),
-                        ...(event.error ? { error: event.error } : {}),
-                      }
-                    : call),
-                }
-              : message),
-          );
-        }
-        if (event.type === "done" || event.type === "error") {
-          if (event.type === "error") {
-            const existingMessage = messagesRef.current.find((message) => message.id === assistantId);
-            if (existingMessage?.content) setAttachmentError(event.message);
-            updateMessages(
-              (current) =>
-                current.map((message) =>
-                  message.id === assistantId
-                    ? {
-                        ...message,
-                        content:
-                          message.content ||
-                          (event.message === "已停止生成"
-                            ? "（团子停下了）"
-                            : `⚠ ${event.message}`),
-                      }
-                    : message,
-                ),
-              true,
-              true,
-            );
-          } else {
-            if (event.contextUsage) {
-              updateMessages(
-                (current) => current.map((message) => message.id === assistantId
-                  ? { ...message, contextUsage: event.contextUsage }
-                  : message),
-                true,
-                true,
-              );
-            } else {
-              scheduleSave(true, true);
-            }
-          }
-          assistantByRequest.current.delete(event.requestId);
-          setActiveRequest((current) => current === event.requestId ? null : current);
-        }
-      }),
-    [scheduleSave, updateMessages],
-  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -626,25 +574,19 @@ export function ChatPanel({
       conversationOperationTokenRef.current += 1;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       if (copyPopupTimerRef.current) clearTimeout(copyPopupTimerRef.current);
+      if (generationActiveRef.current) {
+        void stopChatRef.current();
+        const generation = activeGenerationPromiseRef.current;
+        if (generation) {
+          void generation
+            .catch(() => undefined)
+            .finally(() => persistMessages());
+          return;
+        }
+      }
       void persistMessages();
     };
   }, [persistMessages]);
-
-  const mood: PetMood = useMemo(() => {
-    if (speech.phase === "recording") return "listening";
-    if (speech.phase === "transcribing") return "transcribing";
-    if (runtime.phase === "error") return "sad";
-    if (
-      runtime.phase === "starting" ||
-      runtime.phase === "downloading"
-    )
-      return "thinking";
-    if (activeRequest) {
-      return messages.at(-1)?.content.trim() ? "talking" : "thinking";
-    }
-    if (tts.phase === "speaking") return "talking";
-    return "idle";
-  }, [activeRequest, messages, runtime.phase, speech.phase, tts.phase]);
 
   const operationIsCurrent = (operation: ConversationOperation): boolean =>
     mountedRef.current && isCurrentConversationOperation(
@@ -653,10 +595,11 @@ export function ChatPanel({
     );
 
   const closeHistoryAndFocusComposer = (): void => {
-    focusAfterHistoryCloseRef.current = true;
     setHistoryBatchMode(false);
     setSelectedConversationIds(new Set());
-    setHistoryOpen(false);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus({ preventScroll: true });
+    });
   };
 
   const commitConversationOperationUi = (kind: ConversationOperationKind): void => {
@@ -676,7 +619,6 @@ export function ChatPanel({
       composerRevision: composerRevisionRef.current,
     };
     setConversationOperationPending(true);
-    if (kind !== "delete") setHistoryOperationError("");
     const uiPolicy = conversationOperationUiPolicy(kind, "start");
     if (uiPolicy.closeHistory && uiPolicy.focusComposer) {
       closeHistoryAndFocusComposer();
@@ -690,7 +632,7 @@ export function ChatPanel({
     setConversationOperationPending(false);
   };
 
-  const createConversation = async (source: "history" | "composer") => {
+  const createConversation = async () => {
     if (activeRequest || persistenceMode !== "database") return;
     const operation = beginConversationOperation("create");
     if (!operation) return;
@@ -711,8 +653,7 @@ export function ChatPanel({
     } catch (error) {
       if (operationIsCurrent(operation)) {
         const message = `新建对话失败：${error instanceof Error ? error.message : String(error)}`;
-        if (source === "history") setHistoryOperationError(message);
-        else setAttachmentError(message);
+        showChatError(message);
       }
     } finally {
       finishConversationOperation(operation);
@@ -744,7 +685,7 @@ export function ChatPanel({
       commitConversationOperationUi("switch");
     } catch (error) {
       if (operationIsCurrent(operation)) {
-        setHistoryOperationError(
+        showChatError(
           `切换对话失败：${error instanceof Error ? error.message : String(error)}`,
         );
       }
@@ -755,16 +696,15 @@ export function ChatPanel({
 
   const requestDeleteConversation = (
     target: ChatConversation,
-    trigger: HTMLButtonElement,
+    trigger?: HTMLButtonElement,
   ): void => {
     if (
       activeRequest ||
       persistenceMode !== "database" ||
       conversationOperationPendingRef.current
     ) return;
-    deleteTriggerRef.current = trigger;
-    setHistoryOperationError("");
-    setDeleteDialogError("");
+    deleteTriggerRef.current = trigger ?? null;
+    deleteTargetsSnapshotRef.current = [target];
     setDeleteTargets([target]);
   };
 
@@ -780,15 +720,14 @@ export function ChatPanel({
   const requestDeleteSelectedConversations = (): void => {
     const targets = conversations.filter((conversation) => selectedConversationIds.has(conversation.id));
     if (!targets.length || activeRequest || conversationOperationPendingRef.current) return;
-    setHistoryOperationError("");
-    setDeleteDialogError("");
+    deleteTargetsSnapshotRef.current = targets;
     setDeleteTargets(targets);
   };
 
   const closeDeleteDialog = (): void => {
     if (deletePending) return;
     const trigger = deleteTriggerRef.current;
-    setDeleteDialogError("");
+    deleteTriggerRef.current = null;
     setDeleteTargets([]);
     requestAnimationFrame(() => {
       if (trigger?.isConnected) trigger.focus({ preventScroll: true });
@@ -803,7 +742,6 @@ export function ChatPanel({
     const operation = beginConversationOperation("delete");
     if (!operation) return;
     setDeletePending(true);
-    setDeleteDialogError("");
     let succeeded = false;
     try {
       await persistMessages(false, true);
@@ -836,7 +774,9 @@ export function ChatPanel({
       succeeded = true;
     } catch (error) {
       if (operationIsCurrent(operation)) {
-        setDeleteDialogError(error instanceof Error ? error.message : String(error));
+        showChatError(
+          `删除对话失败：${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     } finally {
       finishConversationOperation(operation);
@@ -844,7 +784,6 @@ export function ChatPanel({
         setDeletePending(false);
         if (succeeded) {
           setDeleteTargets([]);
-          setDeleteDialogError("");
           setSelectedConversationIds(new Set());
           setHistoryBatchMode(false);
           deleteTriggerRef.current = null;
@@ -854,30 +793,6 @@ export function ChatPanel({
         }
       }
     }
-  };
-
-  const startGeneration = (nextMessages: ChatMessage[], options: GenerationOptions = {}) => {
-    const requestId = crypto.randomUUID();
-    const assistantId = options.targetAssistantId ?? crypto.randomUUID();
-    assistantByRequest.current.set(requestId, assistantId);
-    autoScrollRef.current = true;
-    setShowScrollToLatest(false);
-    if (!options.targetAssistantId) {
-      const assistant: ChatMessage = {
-        id: assistantId,
-        role: "assistant",
-        content: "",
-        createdAt: Date.now(),
-      };
-      updateMessages([...nextMessages, assistant], true, true);
-    }
-    setActiveRequest(requestId);
-    window.desktopPet.startChat({
-      requestId,
-      messages: options.requestMessages ?? nextMessages,
-      thinking: thinkingRef.current,
-      thinkingEffort: thinkingEffortRef.current,
-    });
   };
 
   const copyMessage = async (message: ChatMessage): Promise<void> => {
@@ -893,7 +808,6 @@ export function ChatPanel({
         browserCopyText,
         legacyCopyText: (text) => copyTextViaDocument(text, document),
       });
-      setAttachmentError("");
       setCopyPopupVisible(true);
       if (copyPopupTimerRef.current) clearTimeout(copyPopupTimerRef.current);
       copyPopupTimerRef.current = setTimeout(() => {
@@ -901,7 +815,7 @@ export function ChatPanel({
         setCopyPopupVisible(false);
       }, 1_600);
     } catch (error) {
-      setAttachmentError(`复制失败：${error instanceof Error ? error.message : String(error)}`);
+      showChatError(`复制失败：${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -916,16 +830,23 @@ export function ChatPanel({
       persistenceMode === "loading"
     ) return;
     if (tts.phase === "speaking") void onStopSpeaking();
-    setAttachmentError("");
-    const requestMessages = continuationRequestMessages(
-      messagesRef.current,
-      crypto.randomUUID(),
-      Date.now(),
-    );
-    if (!requestMessages) return;
-    startGeneration(messagesRef.current, {
-      targetAssistantId: message.id,
-      requestMessages,
+    lastChatErrorRef.current = "";
+    const generation = chat.sendMessage(undefined, {
+      body: {
+        mode: "continue",
+        thinking: thinkingRef.current,
+        thinkingEffort: thinkingEffortRef.current,
+      },
+    });
+    activeGenerationPromiseRef.current = generation;
+    void generation.catch((error) => {
+      if (mountedRef.current) {
+        showChatError(error instanceof Error ? error.message : String(error));
+      }
+    }).finally(() => {
+      if (activeGenerationPromiseRef.current === generation) {
+        activeGenerationPromiseRef.current = null;
+      }
     });
   };
 
@@ -946,11 +867,30 @@ export function ChatPanel({
       documents: documents.length ? documents : undefined,
       createdAt: Date.now(),
     };
-    startGeneration([...messagesRef.current, user]);
+    const nextMessages = [...messagesRef.current, user];
+    messagesRef.current = nextMessages;
+    dirtyRef.current = true;
+    scheduleSave(true, true);
+    lastChatErrorRef.current = "";
+    const generation = chat.sendMessage(chatMessageToDesktopUIMessage(user), {
+      body: {
+        thinking: thinkingRef.current,
+        thinkingEffort: thinkingEffortRef.current,
+      },
+    });
+    activeGenerationPromiseRef.current = generation;
+    void generation.catch((error) => {
+      if (mountedRef.current) {
+        showChatError(error instanceof Error ? error.message : String(error));
+      }
+    }).finally(() => {
+      if (activeGenerationPromiseRef.current === generation) {
+        activeGenerationPromiseRef.current = null;
+      }
+    });
     changeDraft("");
     changeImages([]);
     changeDocuments([]);
-    setAttachmentError("");
   };
 
   const regenerate = () => {
@@ -962,9 +902,30 @@ export function ChatPanel({
     ) return;
     const baseMessages = regenerationBaseMessages(messagesRef.current);
     if (!baseMessages) return;
+    const targetAssistantId = messagesRef.current.at(-1)?.id;
+    if (!targetAssistantId) return;
     if (tts.phase === "speaking") void onStopSpeaking();
-    setAttachmentError("");
-    startGeneration(baseMessages);
+    messagesRef.current = baseMessages;
+    dirtyRef.current = true;
+    scheduleSave(true, true);
+    lastChatErrorRef.current = "";
+    const generation = chat.regenerate({
+      messageId: targetAssistantId,
+      body: {
+        thinking: thinkingRef.current,
+        thinkingEffort: thinkingEffortRef.current,
+      },
+    });
+    activeGenerationPromiseRef.current = generation;
+    void generation.catch((error) => {
+      if (mountedRef.current) {
+        showChatError(error instanceof Error ? error.message : String(error));
+      }
+    }).finally(() => {
+      if (activeGenerationPromiseRef.current === generation) {
+        activeGenerationPromiseRef.current = null;
+      }
+    });
   };
 
   const removeImage = (index: number) => {
@@ -976,14 +937,70 @@ export function ChatPanel({
   };
 
   const resolveToolApproval = useCallback((
-    requestId: string,
+    _requestId: string,
     toolCallId: string,
     approved: boolean,
   ) => {
-    window.desktopPet.resolveToolApproval(requestId, toolCallId, approved);
-  }, []);
+    let target: DynamicToolUIPart | undefined;
+    for (let messageIndex = uiMessagesRef.current.length - 1; messageIndex >= 0; messageIndex -= 1) {
+      target = uiMessagesRef.current[messageIndex].parts.find((part) => (
+        part.type === "dynamic-tool"
+        && part.toolCallId === toolCallId
+        && part.state === "approval-requested"
+      )) as DynamicToolUIPart | undefined;
+      if (target) break;
+    }
+    if (!target || target.state !== "approval-requested") return;
+    const routing = readDesktopToolMetadata(target);
+    if (!routing.requestId) {
+      showChatError("无法确认工具调用所属的生成请求，请停止后重试。");
+      return;
+    }
+    const approvalId = target.approval.id;
+    const requestId = routing.requestId;
+    if (approvalResponsesRef.current.has(approvalId)) return;
+    approvalResponsesRef.current.add(approvalId);
+    void Promise.resolve(chat.addToolApprovalResponse({
+      id: approvalId,
+      approved,
+    })).then(() => {
+      window.desktopPet.resolveToolApproval(requestId, toolCallId, approved);
+    }).catch((error) => {
+      approvalResponsesRef.current.delete(approvalId);
+      if (mountedRef.current) {
+        showChatError(error instanceof Error ? error.message : String(error));
+      }
+    });
+  }, [chat.addToolApprovalResponse]);
+
+  const stopGeneration = (): void => {
+    if (!generationActiveRef.current) return;
+    void chat.stop();
+  };
 
   const speechBusy = speech.phase === "recording" || speech.phase === "transcribing";
+  const composerBusy = runtime.phase !== "ready"
+    || Boolean(activeRequest)
+    || conversationOperationPending
+    || speechBusy;
+  const imageAttachDisabled = !visionEnabled || composerBusy;
+  const documentAttachDisabled = composerBusy;
+  const imageAttachDisabledReason = !visionEnabled
+    ? "请先在设置中选择视觉投影模型"
+    : runtime.phase !== "ready"
+      ? "等待本地模型就绪后再上传图片"
+      : activeRequest
+        ? "回答生成期间不能更改附件"
+        : speechBusy
+          ? "语音输入期间不能更改附件"
+          : "正在切换对话，请稍候";
+  const documentAttachDisabledReason = runtime.phase !== "ready"
+    ? "等待本地模型就绪后再上传文档"
+    : activeRequest
+      ? "回答生成期间不能更改附件"
+      : speechBusy
+        ? "语音输入期间不能更改附件"
+        : "正在切换对话，请稍候";
   const visibleChatTemplates = useMemo(
     () => chatTemplates.map((template) => template.trim()).filter(Boolean),
     [chatTemplates],
@@ -992,504 +1009,394 @@ export function ChatPanel({
     () => latestContextUsage(messages),
     [messages],
   );
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      send();
-    }
-  };
+  const visibleDeleteTargets = deleteTargets.length > 0
+    ? deleteTargets
+    : deleteTargetsSnapshotRef.current;
+  const latestMessage = messages.at(-1);
+  const streamingAssistantId = generationActive && latestMessage?.role === "assistant"
+    ? latestMessage.id
+    : undefined;
 
   return (
-    <main className="surface chat-panel">
-      <div className="window-drag-strip" />
-      <header className="panel-header">
-        <div className="brand-lockup">
-          <span className="brand-mark">
-            <img src="./app-icon.png" alt="" />
-          </span>
-          <div>
-            <b>团子</b>
-            <small>一只不偷数据，只偷算力的橘猫</small>
-          </div>
-        </div>
-        <div className="header-actions">
-          <RuntimeBadge runtime={runtime} />
-          <button
-            className={`icon-button history-toggle${conversationOperationPending ? " history-toggle--busy" : ""}`}
-            type="button"
-            onClick={() => {
-              if (historyOpen) {
-                closeHistoryAndFocusComposer();
-              } else {
-                setHistoryOperationError("");
-                setHistoryOpen(true);
-              }
-            }}
-            aria-label="聊天历史"
-            aria-expanded={historyOpen}
-            disabled={
-              persistenceMode !== "database" ||
-              Boolean(activeRequest) ||
-              conversationOperationPending
-            }
-          >
-            <PixelIcon name="history" />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={onSettings}
-            aria-label="设置"
-          >
-            <PixelIcon name="settings" />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-            aria-label="收起"
-          >
-            <PixelIcon name="close" />
-          </button>
-        </div>
-      </header>
-
-      {historyOpen && (
-        <section
-          className={`history-drawer${conversationOperationPending ? " history-drawer--busy" : ""}${deleteTargets.length ? " history-drawer--dialog-open" : ""}`}
-          aria-label="聊天历史"
-          aria-busy={conversationOperationPending}
-          inert={deleteTargets.length ? true : undefined}
+    <main className="workbench-shell h-screen w-screen overflow-hidden bg-background text-foreground">
+      <div className="flex h-full min-h-0">
+        <aside
+          aria-label="工作台侧栏"
+          className={cn(
+            "workbench-sidebar flex h-full min-w-0 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar p-3 text-sidebar-foreground transition-[width] duration-200",
+            workbenchState.sidebarCollapsed ? "w-[72px]" : "w-[264px]",
+          )}
         >
-          <div className="history-drawer__header">
-            <div className="history-drawer__title">
-              <b>聊天历史</b>
-              <small>本地保存最近 30 个会话</small>
-            </div>
-            <div className="history-drawer__actions">
-              <button
-                className="text-button"
-                type="button"
-                disabled={Boolean(activeRequest) || conversationOperationPending || conversations.length === 0}
-                onClick={() => {
-                  setHistoryBatchMode((current) => !current);
-                  setSelectedConversationIds(new Set());
-                }}
-              >
-                {historyBatchMode ? "完成" : "管理"}
-              </button>
-              <button
-                ref={historyNewButtonRef}
-                className="text-button text-button--with-icon"
-                type="button"
-                disabled={Boolean(activeRequest) || conversationOperationPending}
-                onClick={() => void createConversation("history")}
-              >
-                <PixelIcon name="plus" />
-                新建
-              </button>
-            </div>
+          <div className={cn(
+            "mb-3 flex h-9 items-center gap-2",
+            workbenchState.sidebarCollapsed && "justify-center",
+          )}>
+            {!workbenchState.sidebarCollapsed ? (
+              <>
+                <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg border bg-card">
+                  <img className="size-7 object-contain" src="./app-icon.png" alt="" />
+                </span>
+                <b className="min-w-0 flex-1 truncate text-sm">团子</b>
+              </>
+            ) : null}
+            <Button
+              aria-label={workbenchState.sidebarCollapsed ? "展开侧栏" : "折叠侧栏"}
+              disabled={sidebarTogglePending}
+              onClick={toggleSidebar}
+              size="icon-sm"
+              title={workbenchState.sidebarCollapsed ? "展开侧栏" : "折叠侧栏"}
+              type="button"
+              variant="soft"
+            >
+              <PixelIcon name={workbenchState.sidebarCollapsed ? "sidebar-open" : "sidebar-close"} />
+            </Button>
           </div>
-          {historyOperationError && (
-            <p className="history-drawer__error" role="alert">
-              {historyOperationError}
-            </p>
-          )}
-          {historyBatchMode && (
-            <div className="history-batch-toolbar">
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => setSelectedConversationIds(
-                  selectedConversationIds.size === conversations.length
-                    ? new Set()
-                    : new Set(conversations.map((conversation) => conversation.id)),
-                )}
-              >
-                {selectedConversationIds.size === conversations.length ? "取消全选" : "全选"}
-              </button>
-              <span>已选择 {selectedConversationIds.size} 个</span>
-              <button
-                className="button button--danger history-batch-toolbar__delete"
-                type="button"
-                disabled={selectedConversationIds.size === 0 || conversationOperationPending}
-                onClick={requestDeleteSelectedConversations}
-              >
-                <PixelIcon name="trash" />
-                删除
-              </button>
-            </div>
-          )}
-          <div className="history-drawer__list">
-            {conversations.map((conversation) => (
-              <div
-                className={`history-item ${conversation.id === conversationId ? "history-item--active" : ""}${selectedConversationIds.has(conversation.id) ? " history-item--selected" : ""}`}
-                key={conversation.id}
-              >
-                {historyBatchMode && (
-                  <label className="history-item__checkbox" aria-label={`选择 ${conversation.title}`}>
-                    <input
-                      type="checkbox"
-                      checked={selectedConversationIds.has(conversation.id)}
-                      disabled={Boolean(activeRequest) || conversationOperationPending}
-                      onChange={() => toggleConversationSelection(conversation.id)}
-                    />
-                  </label>
-                )}
-                <button
-                  className="history-item__select"
-                  type="button"
-                  disabled={Boolean(activeRequest) || conversationOperationPending}
-                  onClick={() => historyBatchMode
-                    ? toggleConversationSelection(conversation.id)
-                    : void switchConversation(conversation.id)}
-                >
-                  <b>{conversation.title}</b>
-                  <small>
-                    {formatConversationTime(conversation.updatedAt)} · {conversation.messageCount} 条消息
-                  </small>
-                </button>
-                {!historyBatchMode && <button
-                  className="history-item__delete"
-                  type="button"
-                  disabled={Boolean(activeRequest) || conversationOperationPending}
-                  aria-label={`删除 ${conversation.title}`}
-                  onClick={(event) => requestDeleteConversation(conversation, event.currentTarget)}
-                >
-                  <PixelIcon name="trash" />
-                </button>}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
 
-      {deleteTargets.length > 0 && (
-        <ConfirmDialog
-          title={deleteTargets.length === 1 ? "删除这个对话？" : `删除 ${deleteTargets.length} 个对话？`}
-          description={deleteTargets.length === 1
-            ? `“${deleteTargets[0].title}”及其中 ${deleteTargets[0].messageCount} 条消息将被永久删除，无法恢复。`
-            : `所选对话及其中 ${deleteTargets.reduce((total, target) => total + target.messageCount, 0)} 条消息将被永久删除，无法恢复。`}
-          confirmLabel={deleteTargets.length === 1 ? "删除对话" : "批量删除"}
-          pendingLabel="删除中…"
-          pending={deletePending}
-          error={deleteDialogError}
-          onCancel={closeDeleteDialog}
-          onConfirm={() => void confirmDeleteConversation()}
-        />
-      )}
+          <Button
+            ref={historyNewButtonRef}
+            className={cn(
+              "mb-3 w-full",
+              workbenchState.sidebarCollapsed ? "px-0" : "justify-start",
+            )}
+            disabled={Boolean(activeRequest) || conversationOperationPending}
+            onClick={() => {
+              if (onNavigate?.("chat") !== false) void createConversation();
+            }}
+            title="新建对话"
+            type="button"
+          >
+            <PixelIcon name="plus" />
+            {!workbenchState.sidebarCollapsed ? <span>新建对话</span> : null}
+          </Button>
 
-      <section className="chat-log" ref={scrollRef} onScroll={handleChatScroll}>
-        {messages.length === 0 ? (
-          <div className="empty-chat">
-            <Pet
-              mood={mood}
-              clipMood={resolveSpeechPetClipMood(speech.phase)}
-              compact
+          <section
+            aria-busy={conversationOperationPending}
+            aria-label="聊天历史"
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 overflow-hidden",
+              workbenchState.sidebarCollapsed && "invisible pointer-events-none",
+            )}
+            inert={deleteTargets.length ? true : undefined}
+          >
+            <ChatHistoryList
+              batchMode={historyBatchMode}
+              busy={conversationOperationPending}
+              conversationId={conversationId}
+              conversations={conversations}
+              generationActive={Boolean(activeRequest)}
+              pendingDeleteId={deleteTargets.length === 1
+                ? deleteTargets[0]?.id
+                : undefined}
+              onDeleteSelected={requestDeleteSelectedConversations}
+              onRequestDelete={requestDeleteConversation}
+              onSwitch={(id) => {
+                if (onNavigate?.("chat") !== false) void switchConversation(id);
+              }}
+              onToggleBatch={() => {
+                setHistoryBatchMode((current) => !current);
+                setSelectedConversationIds(new Set());
+              }}
+              onToggleSelectAll={() => setSelectedConversationIds(
+                selectedConversationIds.size === conversations.length
+                  ? new Set()
+                  : new Set(conversations.map((conversation) => conversation.id)),
+              )}
+              onToggleSelection={toggleConversationSelection}
+              selectedIds={selectedConversationIds}
             />
-            <h2>今天想聊点什么？</h2>
-            <p className="empty-chat__voice-status" aria-live="polite">
-              {speech.phase === "recording"
-                ? "团子在认真听…"
-                : speech.phase === "transcribing"
-                  ? "团子正在转成文字…"
-                  : "\u00a0"}
-            </p>
-            <div className="chat-template-grid" aria-label="快捷模板">
-              {visibleChatTemplates.map((template, index) => (
-                <button
-                  key={`${index}-${template}`}
-                  type="button"
-                  onClick={() => {
-                    changeDraft(template);
+          </section>
+
+          <Separator className="my-2 bg-sidebar-border" />
+          <div className={cn(
+            "flex items-center gap-1",
+            workbenchState.sidebarCollapsed ? "flex-col" : "justify-between px-1",
+          )}>
+            <Button
+              aria-label="打开实时字幕"
+              className={sidebarActionClassName}
+              onClick={onOpenCaption}
+              size="icon-sm"
+              title="打开实时字幕"
+              type="button"
+              variant="soft"
+            >
+              <PixelIcon name="captions" />
+            </Button>
+            <Button
+              aria-label="设置"
+              aria-current={activePage === "settings" ? "page" : undefined}
+              className={sidebarActionClassName}
+              data-active={activePage === "settings"}
+              onClick={() => onNavigate?.("settings")}
+              size="icon-sm"
+              title="打开设置"
+              type="button"
+              variant="soft"
+            >
+              <PixelIcon name="settings" />
+            </Button>
+            <Button
+              aria-label="返回桌面宠物"
+              className={sidebarActionClassName}
+              onClick={onClose}
+              size="icon-sm"
+              title="返回桌面宠物"
+              type="button"
+              variant="soft"
+            >
+              <PixelIcon name="cat" />
+            </Button>
+          </div>
+        </aside>
+
+        <section className="workbench-content min-w-0 flex-1 bg-background">
+          <div className="chat-panel relative flex h-full min-h-0 flex-col">
+            <header className="flex h-12 shrink-0 items-center border-b px-5">
+              <b className="truncate text-sm font-medium">
+                {conversations.find((item) => item.id === conversationId)?.title ?? "新对话"}
+              </b>
+            </header>
+
+            <AlertDialog
+              open={deleteTargets.length > 0}
+              onOpenChange={(open) => {
+                if (!open) closeDeleteDialog();
+              }}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    {visibleDeleteTargets.length === 1
+                      ? "删除这个对话？"
+                      : `删除 ${visibleDeleteTargets.length} 个对话？`}
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {visibleDeleteTargets.length === 1
+                      ? `“${visibleDeleteTargets[0]?.title ?? ""}”及其中 ${visibleDeleteTargets[0]?.messageCount ?? 0} 条消息将被永久删除，无法恢复。`
+                      : `所选对话及其中 ${visibleDeleteTargets.reduce((total, target) => total + target.messageCount, 0)} 条消息将被永久删除，无法恢复。`}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deletePending} onClick={closeDeleteDialog}>
+                    取消
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={deletePending}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void confirmDeleteConversation();
+                    }}
+                    variant="destructive"
+                  >
+                    {deletePending
+                      ? "删除中…"
+                      : visibleDeleteTargets.length === 1
+                        ? "删除对话"
+                        : "批量删除"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            <Conversation className="min-h-0">
+              <ConversationContent className="mx-auto w-full max-w-4xl gap-6 px-6 py-8">
+                {messages.length === 0 ? (
+                  <ConversationEmptyState
+                    className="min-h-[clamp(180px,32vh,420px)]"
+                  >
+                    <div className="w-full max-w-2xl space-y-5">
+                      <div className="space-y-2 text-center">
+                        <h2 className="workbench-empty-title">今天想完成什么？</h2>
+                        <p className="text-sm text-muted-foreground">
+                          让本地模型调用工具、分析文件或继续完善你的想法。
+                        </p>
+                      </div>
+                      {visibleChatTemplates.length ? (
+                        <Suggestions
+                          aria-label="快捷模板"
+                          className="w-full flex-wrap justify-center"
+                        >
+                          {visibleChatTemplates.map((template, index) => (
+                            <Suggestion
+                              className="h-auto min-h-11 max-w-72 gap-2.5 whitespace-normal px-3.5 py-2.5 text-left leading-snug"
+                              key={`${index}-${template}`}
+                              onClick={applyChatTemplate}
+                              suggestion={template}
+                            >
+                              <span className="grid size-6 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                                <Sparkles className="size-3.5" />
+                              </span>
+                              <span className="line-clamp-2">{template}</span>
+                            </Suggestion>
+                          ))}
+                        </Suggestions>
+                      ) : null}
+                    </div>
+                  </ConversationEmptyState>
+                ) : (
+                  uiMessages.map((message, messageIndex) => (
+                    <ChatMessageView
+                      activeRequestId={
+                        activeRequest && streamingAssistantId === message.id
+                          ? activeRequest
+                          : undefined
+                      }
+                      conversationOperationPending={conversationOperationPending}
+                      isLast={messageIndex === uiMessages.length - 1}
+                      key={message.id}
+                      message={message}
+                      onApproval={resolveToolApproval}
+                      onContinue={continueGeneration}
+                      onCopy={copyMessage}
+                      onRegenerate={regenerate}
+                      onSpeakText={onSpeakText}
+                      onStopSpeaking={onStopSpeaking}
+                      runtime={runtime}
+                      tts={tts}
+                    />
+                  ))
+                )}
+              </ConversationContent>
+              <ConversationScrollButton aria-label="回到最新消息" />
+            </Conversation>
+
+            {copyPopupVisible ? (
+              <Badge
+                className="pointer-events-none absolute right-6 top-16 z-20 gap-1 shadow-md"
+                role="status"
+                aria-live="polite"
+              >
+                <PixelIcon name="copy" />
+                已复制到剪贴板
+              </Badge>
+            ) : null}
+            <footer className="shrink-0 border-t bg-background/95 px-6 pb-3 pt-3">
+              <div className="mx-auto max-w-4xl">
+                <PromptInput
+                  attachmentsEnabled={false}
+                  className="w-full rounded-2xl"
+                  onSubmit={({ files }) => {
+                    if (files.length) {
+                      showChatWarning("请使用输入框下方的图片或文档按钮选择附件。");
+                      return;
+                    }
+                    send();
                   }}
                 >
-                  {template}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          messages.map((message, messageIndex) => (
-            <article
-              key={message.id}
-              className={`message message--${message.role}`}
-            >
-              {message.role === "assistant" && (
-                <span className="message-avatar">团</span>
-              )}
-              <div className="message-content">
-                <ImageAttachmentTray images={message.images ?? []} />
-                <DocumentAttachmentTray documents={message.documents ?? []} />
-                {message.reasoning && (
-                  <details className="reasoning">
-                    <summary>团子的思考</summary>
-                    <MarkdownMessage content={message.reasoning} className="reasoning__content" />
-                  </details>
-                )}
-                {message.toolCalls?.map((call) => (
-                  <ToolCallCard
-                    key={call.id}
-                    call={call}
-                    requestId={
-                      activeRequest && assistantByRequest.current.get(activeRequest) === message.id
-                        ? activeRequest
-                        : undefined
-                    }
-                    onApproval={resolveToolApproval}
-                  />
-                ))}
-                {message.role === "assistant" ? (
-                  message.content ? (
-                    <MarkdownMessage content={message.content} />
-                  ) : message.toolCalls?.length ? null : (
-                    <p className="typing-dots">
-                      <i />
-                      <i />
-                      <i />
-                    </p>
-                  )
-                ) : message.content ? (
-                  <p className="message-plain-text">{message.content}</p>
-                ) : null}
-                {message.role === "assistant" && (message.content.trim() || (
-                  messageIndex === messages.length - 1 && !activeRequest
-                )) && (
-                  <div className="message-actions">
-                    {message.content.trim() && (
-                      <button
-                        className="message-action message-action--copy"
-                        type="button"
-                        aria-label="复制这段回答"
-                        title="复制"
-                        onClick={() => void copyMessage(message)}
-                      >
-                        <PixelIcon name="copy" />
-                      </button>
-                    )}
-                    {message.content.trim() && (
-                      <button
-                        className={`message-action${tts.phase === "speaking" ? " message-action--active" : ""}`}
-                        type="button"
-                        disabled={!tts.enabled}
-                        aria-label={tts.phase === "speaking" ? "停止朗读" : "朗读这段回答"}
-                        title={
-                          !tts.enabled
-                            ? "请先在设置中启用语音朗读"
-                            : tts.phase === "speaking"
-                              ? "停止朗读"
-                              : "朗读这段回答"
-                        }
-                        onClick={() => void (tts.phase === "speaking" ? onStopSpeaking() : onSpeakText(message.content))}
-                      >
-                        <PixelIcon name={tts.phase === "speaking" ? "stop" : "volume"} />
-                      </button>
-                    )}
-                    {messageIndex === messages.length - 1 && !activeRequest && (
-                      <>
-                        {message.content.trim() && (
-                          <button
-                            className="message-action message-action--continue"
-                            type="button"
-                            disabled={runtime.phase !== "ready" || conversationOperationPending}
-                            aria-label="继续生成这段回答"
-                            title="继续生成"
-                            onClick={() => continueGeneration(message)}
-                          >
-                            <PixelIcon name="continue" />
-                          </button>
+                  {runtime.phase !== "ready" ? (
+                    <PromptInputHeader className="block p-0">
+                      <RuntimeLoadingDock
+                        modelLabel={modelLabel}
+                        onStart={onStartRuntime}
+                        runtime={runtime}
+                      />
+                    </PromptInputHeader>
+                  ) : null}
+                  {(images.length || documents.length) ? (
+                    <PromptInputHeader className="block space-y-2 px-3 pt-3">
+                      <ImageAttachmentTray images={images} onRemove={removeImage} />
+                      <DocumentAttachmentTray documents={documents} onRemove={removeDocument} />
+                    </PromptInputHeader>
+                  ) : null}
+                  <PromptInputBody>
+                    <PromptInputTextarea
+                      ref={textareaRef}
+                      className="min-h-20 max-h-64 px-4 pt-3 text-[15px] leading-6"
+                      disabled={speechBusy}
+                      onBlur={() => window.desktopPet.setSpeechComposerFocused(false)}
+                      onChange={(event) => changeDraft(event.target.value)}
+                      onFocus={() => {
+                        window.desktopPet.setSpeechComposerFocused(true);
+                      }}
+                      placeholder={runtime.phase === "ready"
+                        ? "描述你想完成的任务…"
+                        : "等待本地模型就绪…"}
+                      rows={3}
+                      value={draft}
+                    />
+                  </PromptInputBody>
+                  <PromptInputFooter>
+                    <PromptInputTools>
+                      <PromptInputActionMenu>
+                        <PromptInputActionMenuTrigger
+                          aria-label="添加附件"
+                          disabled={imageAttachDisabled && documentAttachDisabled}
+                          title="添加附件"
+                        />
+                        <PromptInputActionMenuContent>
+                          <ImageAttachButton
+                            disabled={imageAttachDisabled}
+                            disabledReason={imageAttachDisabledReason}
+                            images={images}
+                            menuItem
+                            onChange={changeImages}
+                            onError={showChatError}
+                          />
+                          <DocumentAttachButton
+                            disabled={documentAttachDisabled}
+                            disabledReason={documentAttachDisabledReason}
+                            documents={documents}
+                            menuItem
+                            onChange={changeDocuments}
+                            onError={showChatError}
+                          />
+                        </PromptInputActionMenuContent>
+                      </PromptInputActionMenu>
+                    </PromptInputTools>
+                    <div className="flex min-w-0 items-center gap-1">
+                      <ModelReasoningControl
+                        maxTokens={maxTokens}
+                        modelLabel={modelLabel}
+                        onChange={handleThinkingChange}
+                        runtime={runtime}
+                      />
+                      <ContextUsageIndicator contextSize={contextSize} usage={contextUsage} />
+                      <VoiceButton
+                        compact
+                        onPrepare={onPrepareSpeech}
+                        onStart={onStartSpeech}
+                        onStop={onStopSpeech}
+                        speech={speech}
+                      />
+                      <PromptInputSubmit
+                        aria-label={activeRequest ? "停止生成" : "发送"}
+                        disabled={!activeRequest && (
+                          (!draft.trim() && !images.length && !documents.length) ||
+                          runtime.phase !== "ready" ||
+                          conversationOperationPending ||
+                          speechBusy
                         )}
-                        <button
-                          className="message-action message-action--regenerate"
-                          type="button"
-                          disabled={runtime.phase !== "ready" || conversationOperationPending}
-                          aria-label="重新生成回答"
-                          title="重新生成回答"
-                          onClick={regenerate}
-                        >
-                          <PixelIcon name="refresh" />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
+                        onStop={stopGeneration}
+                        status={activeRequest ? "streaming" : "ready"}
+                      />
+                    </div>
+                  </PromptInputFooter>
+                </PromptInput>
+                <p className="mt-2 text-center text-[11px] text-muted-foreground">
+                  AI 生成可能不准确，请核实重要信息
+                </p>
               </div>
-            </article>
-          ))
-        )}
-      </section>
-
-      {showScrollToLatest ? (
-        <button className="scroll-to-latest" type="button" onClick={scrollToLatest}>
-          回到最新
-        </button>
-      ) : null}
-
-      {runtime.phase !== "ready" && (
-        <section
-          className={`runtime-notice ${runtime.phase === "error" ? "runtime-notice--error" : ""}`}
-        >
-          <div>
-            <b>{runtime.message}</b>
-            <span>
-              {runtime.error ?? runtime.lastLog ?? "准备完成后就可以开始聊天。"}
-            </span>
-            {runtime.phase === "downloading" && (
-              <div
-                className={`runtime-progress ${runtime.download?.percent === undefined ? "indeterminate" : ""}`}
-                role="progressbar"
-                aria-label="模型下载进度"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={runtime.download?.percent}
-              >
-                <i style={{ width: `${runtime.download?.percent ?? 32}%` }} />
-              </div>
-            )}
+            </footer>
           </div>
-          {(runtime.phase === "stopped" || runtime.phase === "error") && (
-            <button
-              className="button button--secondary"
-              type="button"
-              onClick={onStartRuntime}
-            >
-              启动模型
-            </button>
-          )}
-        </section>
-      )}
-
-      {messages.length > 0 && (speech.phase === "recording" || speech.phase === "transcribing") && (
-        <section className={`voice-pet-indicator phase-${speech.phase}`} aria-live="polite">
-          <Pet
-            mood={speech.phase === "recording" ? "listening" : "transcribing"}
-            clipMood={resolveSpeechPetClipMood(speech.phase)}
-            compact
-          />
-          <div>
-            <b>{speech.phase === "recording" ? "团子在认真听" : "团子正在转成文字"}</b>
-            <span>{speech.message}</span>
-          </div>
-        </section>
-      )}
-
-      {copyPopupVisible && (
-        <div className="copy-popup" role="status" aria-live="polite">
-          <PixelIcon name="copy" />
-          <span>已复制到剪贴板</span>
-        </div>
-      )}
-      <footer className="composer">
-        <div className="composer__toolbar">
-          <div className="composer__tools">
-            <ThinkingToggle onChange={handleThinkingChange} maxTokens={maxTokens} />
-            <ImageAttachButton
-              images={images}
-              disabled={
-                !visionEnabled ||
-                runtime.phase !== "ready" ||
-                Boolean(activeRequest) ||
-                conversationOperationPending ||
-                speechBusy
-              }
-              onChange={changeImages}
-              onError={setAttachmentError}
-            />
-            <DocumentAttachButton
-              documents={documents}
-              disabled={
-                runtime.phase !== "ready" ||
-                Boolean(activeRequest) ||
-                conversationOperationPending ||
-                speechBusy
-              }
-              onChange={changeDocuments}
-              onError={setAttachmentError}
-            />
-          </div>
-          <div className="composer__status">
-            <ContextUsageIndicator usage={contextUsage} contextSize={contextSize} />
-            {persistenceMode !== "loading" && !activeRequest && (
-              <button
-                className="text-button"
-                type="button"
-                disabled={conversationOperationPending}
-                onClick={() => {
-                  if (persistenceMode === "database") {
-                    void createConversation("composer");
-                  } else {
-                    updateMessages([], true);
-                  }
-                }}
-              >
-                新建对话
-              </button>
-            )}
-          </div>
-        </div>
-        <ImageAttachmentTray images={images} onRemove={removeImage} />
-        <DocumentAttachmentTray documents={documents} onRemove={removeDocument} />
-        {attachmentError && <p className="composer__error">{attachmentError}</p>}
-        <div className="composer__input">
-          <textarea
-            ref={textareaRef}
-            rows={3}
-            value={draft}
-            onChange={(event) => changeDraft(event.target.value)}
-            onFocus={() => {
-              window.desktopPet.setSpeechComposerFocused(true);
+          <Dialog
+            open={activePage === "settings"}
+            onOpenChange={(open) => {
+              if (!open) onNavigate?.("chat");
             }}
-            onBlur={() => window.desktopPet.setSpeechComposerFocused(false)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              speech.phase === "recording"
-                ? "正在听你说话…"
-                : speech.phase === "transcribing"
-                  ? "团子正在整理语音…"
-                  : runtime.phase === "ready"
-                ? "和团子说点什么…"
-                : "等待本地模型就绪…"
-            }
-            disabled={speechBusy}
-          />
-          <VoiceButton
-            speech={speech}
-            compact
-            onPrepare={onPrepareSpeech}
-            onStart={onStartSpeech}
-            onStop={onStopSpeech}
-          />
-          {activeRequest ? (
-            <button
-              className="send-button stop-button"
-              type="button"
-              onClick={() => window.desktopPet.abortChat(activeRequest)}
-              aria-label="停止生成"
+          >
+            <DialogContent
+              className="h-[min(760px,calc(100vh-48px))] w-[min(1040px,calc(100vw-48px))] max-w-none overflow-hidden p-0 sm:max-w-none"
+              showCloseButton={false}
             >
-              <PixelIcon name="stop" />
-            </button>
-          ) : (
-            <button
-              className="send-button"
-              type="button"
-              onClick={send}
-              disabled={
-                (!draft.trim() && !images.length && !documents.length) ||
-                runtime.phase !== "ready" ||
-                conversationOperationPending ||
-                speechBusy
-              }
-              aria-label="发送"
-            >
-              <PixelIcon name="arrow-up" />
-            </button>
-          )}
-        </div>
-        <small className="privacy-note">
-          AI生成可能不准确，请核实重要信息
-        </small>
-      </footer>
+              <DialogTitle className="sr-only">设置</DialogTitle>
+              <DialogDescription className="sr-only">
+                配置本地模型、Agent、工具、MCP 与语音功能。
+              </DialogDescription>
+              {settingsContent}
+            </DialogContent>
+          </Dialog>
+        </section>
+      </div>
     </main>
   );
 }

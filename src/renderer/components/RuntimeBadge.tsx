@@ -1,4 +1,6 @@
 import type { RuntimeState } from "../../shared/types";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 const phaseLabel: Record<RuntimeState["phase"], string> = {
   stopped: "未启动",
@@ -15,9 +17,25 @@ export function RuntimeBadge({ runtime }: { runtime: RuntimeState }) {
       ? `下载 ${runtime.download.percent}%`
       : phaseLabel[runtime.phase];
   return (
-    <span className={`runtime-badge phase-${runtime.phase}`} title={runtime.error ?? runtime.lastLog}>
-      <i />
+    <Badge
+      aria-live="polite"
+      className="gap-2 font-normal"
+      role="status"
+      title={runtime.error ?? runtime.lastLog}
+      variant="outline"
+    >
+      <i
+        aria-hidden="true"
+        className={cn(
+          "size-2 shrink-0 rounded-full",
+          runtime.phase === "ready"
+            ? "bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.12)]"
+            : runtime.phase === "error"
+              ? "bg-destructive"
+              : "animate-pulse bg-amber-500",
+        )}
+      />
       {label}
-    </span>
+    </Badge>
   );
 }

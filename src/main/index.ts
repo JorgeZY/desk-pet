@@ -16,26 +16,23 @@ import {
   Tray,
 } from "electron";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { promisify } from "node:util";
-import { basename, extname, join } from "node:path";
+import { join } from "node:path";
 import type {
   BootstrapData,
   CaptionConfig,
   CaptionEvent,
   CaptionState,
-  ChatDocument,
-  ChatMessage,
-  ChatImage,
-  ChatImageMimeType,
-  ChatRequest,
-  FilePickResult,
   ProbeResult,
   RuntimeConfig,
   SpeechEvent,
   SpeechState,
   TtsState,
+  WindowUiState,
   WindowMode,
+  WorkbenchWindowSnapshot,
 } from "../shared/types";
 import {
   CAPTION_WINDOW_DEFAULTS,
@@ -50,15 +47,11 @@ import {
 } from "../shared/pet-window";
 import { ConfigStore } from "./config-store";
 import { ChatHistoryStore } from "./chat-history-store";
-import {
-  CHAT_TEXT_EXTENSIONS,
-  MAX_CHAT_DOCUMENTS,
-  MAX_CHAT_DOCUMENT_TOTAL_BYTES,
-  MAX_CHAT_DOCUMENT_TOTAL_CHARACTERS,
-  readChatDocument,
-} from "./chat-documents";
+import { ChatAttachmentService } from "./chat-attachment-service";
+import { registerChatIpc } from "./chat-ipc";
 import { pasteDictationText, resolveShortcutSpeechSource } from "./global-dictation";
 import { AudioModeCoordinator } from "./audio-mode-coordinator";
+import { createAsyncBeforeQuitHandler } from "./app-shutdown";
 import { LlamaRuntime } from "./llama-runtime";
 import { LiveCaptionRuntime } from "./live-caption-runtime";
 import { migrateModelDirectory, resolveModelDirectory } from "./model-directory";
@@ -68,22 +61,25 @@ import { SpeechModelManager } from "./speech-model-manager";
 import { SpeechRuntime } from "./speech-runtime";
 import { TtsModelManager } from "./tts-model-manager";
 import { TtsRuntime } from "./tts-runtime";
-import { positionToPreserveForModeChange, toggleShortcutWindow } from "./window-shortcut";
+import {
+  clampWorkbenchBounds,
+  WORKBENCH_DEFAULT_SIZE,
+  WORKBENCH_MIN_SIZE,
+} from "../shared/window-state";
+import { WindowStateStore } from "./window-state-store";
 
 const execFileAsync = promisify(execFile);
 app.setName("desk-pet");
 
-const WINDOW_SIZES: Record<WindowMode, { width: number; height: number }> = {
-  pet: { width: PET_WINDOW_WIDTH, height: PET_WINDOW_BASE_HEIGHT },
-  chat: { width: 440, height: 700 },
-  settings: { width: 560, height: 740 },
-  onboarding: { width: 560, height: 740 },
-};
 let mainWindow: BrowserWindow | null = null;
+const chatAttachments = new ChatAttachmentService(() => mainWindow);
+let petWindow: BrowserWindow | null = null;
 let captionWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let configStore: ConfigStore;
+let windowStateStore: WindowStateStore;
+let windowUiState: WindowUiState;
 let chatHistoryStore: ChatHistoryStore | null = null;
 let config: RuntimeConfig;
 let runtime: LlamaRuntime;
@@ -101,11 +97,55 @@ let shortcutPressed = false;
 let shortcutReleasedBeforeStart = false;
 let shortcutSessionId: string | undefined;
 let speechComposerFocused = false;
-let petWindowPosition: { x: number; y: number } | null = null;
+let windowStateSaveTimer: NodeJS.Timeout | undefined;
+let windowStateWriteQueue: Promise<void> = Promise.resolve();
 const globalDictationSessions = new Set<string>();
 let captionAudioPort: Electron.MessagePortMain | null = null;
 let captionBoundsSaveTimer: NodeJS.Timeout | undefined;
 let configWriteQueue: Promise<void> = Promise.resolve();
+
+function prepareRendererChatForQuit(timeoutMs = 5_000): Promise<void> {
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+    return Promise.resolve();
+  }
+  const sender = window.webContents;
+  const token = randomUUID();
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      ipcMain.removeListener("chat:quit-ready", onReady);
+      sender.removeListener("destroyed", onDestroyed);
+    };
+    const finish = (error?: Error): void => {
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    };
+    const onDestroyed = (): void => finish(new Error("聊天窗口在退出保存完成前已销毁。"));
+    const onReady = (
+      event: Electron.IpcMainEvent,
+      payload: { token?: unknown; ok?: unknown; error?: unknown },
+    ): void => {
+      if (event.sender !== sender || payload?.token !== token) return;
+      if (payload.ok === true) finish();
+      else finish(new Error(
+        `退出前保存聊天记录失败：${typeof payload.error === "string" ? payload.error : "未知错误"}`,
+      ));
+    };
+    const timer = setTimeout(
+      () => finish(new Error(`退出前保存聊天记录在 ${timeoutMs} ms 内未完成。`)),
+      timeoutMs,
+    );
+    ipcMain.on("chat:quit-ready", onReady);
+    sender.once("destroyed", onDestroyed);
+    try {
+      sender.send("chat:prepare-quit", token);
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
 
 function updateStoredConfig(
   mutate: (current: RuntimeConfig) => RuntimeConfig,
@@ -122,11 +162,12 @@ function assetPath(fileName: string): string {
   return join(__dirname, "../../assets", fileName);
 }
 
-function rendererUrl(view?: string): string {
+function rendererUrl(view?: string, windowKind?: "pet" | "workbench"): string {
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   const url = new URL(devUrl ?? `file://${join(__dirname, "../../dist-renderer/index.html")}`);
   const requestedView = view ?? process.env.DESK_PET_CAPTURE_VIEW;
   if (requestedView) url.searchParams.set("view", requestedView);
+  if (windowKind) url.searchParams.set("window", windowKind);
   return url.toString();
 }
 
@@ -137,102 +178,114 @@ function requestedWindowMode(): WindowMode | undefined {
     : undefined;
 }
 
-function anchorWindow(window: BrowserWindow, width: number, height: number): void {
-  const previous = window.getBounds();
-  const display = screen.getDisplayMatching(previous);
-  const { workArea } = display;
-  const margin = 18;
-  const wasNearRight = Math.abs(previous.x + previous.width - workArea.x - workArea.width) < 100;
-  const wasNearBottom = Math.abs(previous.y + previous.height - workArea.y - workArea.height) < 100;
-  const x = wasNearRight
-    ? workArea.x + workArea.width - width - margin
-    : Math.min(Math.max(previous.x, workArea.x), workArea.x + workArea.width - width);
-  const y = wasNearBottom
-    ? workArea.y + workArea.height - height - margin
-    : Math.min(Math.max(previous.y, workArea.y), workArea.y + workArea.height - height);
-  // Renderer fades out before changing modes, so resize once instead of exposing
-  // Windows' uneven transparent-window animation between the two layouts.
-  window.setBounds({ x, y, width, height }, false);
+function workbenchSnapshot(): WorkbenchWindowSnapshot {
+  return {
+    maximized: mainWindow?.isMaximized() ?? windowUiState.workbenchMaximized,
+    sidebarCollapsed: windowUiState.sidebarCollapsed,
+  };
 }
 
-function restorePetWindow(window: BrowserWindow, width: number, height: number): void {
-  if (!petWindowPosition) {
-    anchorWindow(window, width, height);
-    return;
-  }
-
-  const display = screen.getDisplayNearestPoint(petWindowPosition);
-  const position = clampWindowPosition(petWindowPosition, { width, height }, display.workArea);
-  window.setBounds({ ...position, width, height }, false);
-}
-
-function setWindowMode(mode: WindowMode): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const previousMode = currentWindowMode;
-  const positionToPreserve = positionToPreserveForModeChange(
-    previousMode,
-    mode,
-    mainWindow.getBounds(),
-  );
-  if (positionToPreserve) petWindowPosition = positionToPreserve;
-
-  currentWindowMode = mode;
-  const size = WINDOW_SIZES[mode];
-  if (mode === "pet" && previousMode !== "pet") {
-    restorePetWindow(mainWindow, size.width, size.height);
-  } else {
-    anchorWindow(mainWindow, size.width, size.height);
+function broadcastWorkbenchState(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("window:state", workbenchSnapshot());
   }
 }
 
-function showWindow(mode?: WindowMode): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mode) setWindowMode(mode);
-  mainWindow.show();
-  mainWindow.moveTop();
+async function persistWindowState(): Promise<void> {
+  const snapshot = windowUiState;
+  const task = windowStateWriteQueue.then(async () => {
+    await windowStateStore.write(snapshot);
+  });
+  windowStateWriteQueue = task.catch(() => undefined);
+  await task;
 }
 
-function openWindowMode(mode: WindowMode): void {
-  const nextMode = config.setupComplete ? mode : "onboarding";
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const wasVisible = mainWindow.isVisible();
-  if (!wasVisible) mainWindow.setOpacity(0);
-  setWindowMode(nextMode);
-  mainWindow.webContents.send("app:open-view", nextMode);
-  if (wasVisible) {
-    mainWindow.moveTop();
-  } else {
-    pendingWindowReveal = nextMode;
-    if (pendingWindowRevealTimer) clearTimeout(pendingWindowRevealTimer);
-    pendingWindowRevealTimer = setTimeout(() => {
-      pendingWindowRevealTimer = null;
-      if (
-        !mainWindow ||
-        mainWindow.isDestroyed() ||
-        pendingWindowReveal !== nextMode
-      ) return;
-      pendingWindowReveal = null;
-      mainWindow.setOpacity(1);
-      if (mainWindow.isVisible()) mainWindow.moveTop();
-    }, 500);
-    mainWindow.show();
-    mainWindow.moveTop();
-  }
+function scheduleWindowStateSave(): void {
+  if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
+  windowStateSaveTimer = setTimeout(() => {
+    windowStateSaveTimer = undefined;
+    void persistWindowState().catch((error) => {
+      console.error("Failed to save window state:", error);
+    });
+  }, 250);
 }
 
-function createMainWindow(): BrowserWindow {
-  const captureCaption = process.env.DESK_PET_CAPTURE_VIEW === "caption";
-  const mode: WindowMode = requestedWindowMode() ?? (config.setupComplete ? "pet" : "onboarding");
-  currentWindowMode = mode;
-  const size = captureCaption
-    ? { width: CAPTION_WINDOW_DEFAULTS.width, height: CAPTION_WINDOW_DEFAULTS.height }
-    : WINDOW_SIZES[mode];
+function defaultWorkbenchBounds(): Electron.Rectangle {
   const { workArea } = screen.getPrimaryDisplay();
+  return {
+    width: Math.min(WORKBENCH_DEFAULT_SIZE.width, workArea.width),
+    height: Math.min(WORKBENCH_DEFAULT_SIZE.height, workArea.height),
+    x: workArea.x + Math.max(0, Math.round((workArea.width - WORKBENCH_DEFAULT_SIZE.width) / 2)),
+    y: workArea.y + Math.max(0, Math.round((workArea.height - WORKBENCH_DEFAULT_SIZE.height) / 2)),
+  };
+}
+
+function restoredWorkbenchBounds(): Electron.Rectangle {
+  const stored = windowUiState.workbenchBounds;
+  if (!stored) return defaultWorkbenchBounds();
+  const display = screen.getDisplayMatching(stored);
+  return clampWorkbenchBounds(stored, display.workArea);
+}
+
+function restoredPetBounds(): Electron.Rectangle {
+  const size = { width: PET_WINDOW_WIDTH, height: PET_WINDOW_BASE_HEIGHT };
+  const stored = windowUiState.petPosition;
+  const display = stored
+    ? screen.getDisplayNearestPoint(stored)
+    : screen.getPrimaryDisplay();
+  const fallback = {
+    x: display.workArea.x + display.workArea.width - size.width - 18,
+    y: display.workArea.y + display.workArea.height - size.height - 18,
+  };
+  return {
+    ...clampWindowPosition(stored ?? fallback, size, display.workArea),
+    ...size,
+  };
+}
+
+function secureWindow(window: BrowserWindow): void {
+  window.on("close", (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    window.hide();
+  });
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("https://")) void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url !== window.webContents.getURL()) {
+      event.preventDefault();
+      if (url.startsWith("https://")) void shell.openExternal(url);
+    }
+  });
+}
+
+function configureCapture(window: BrowserWindow, kind: "pet" | "workbench"): void {
+  window.webContents.once("did-finish-load", () => {
+    const capturePath = process.env.DESK_PET_CAPTURE_PATH;
+    if (!capturePath) return;
+    const captureKind = requestedWindowMode() === "pet" ? "pet" : "workbench";
+    if (captureKind !== kind) return;
+    const configuredDelay = Number(process.env.DESK_PET_CAPTURE_DELAY_MS);
+    const captureDelay = Number.isFinite(configuredDelay)
+      ? Math.min(10_000, Math.max(100, configuredDelay))
+      : 900;
+    setTimeout(() => {
+      void window.capturePage()
+        .then((image) => fs.writeFile(capturePath, image.toPNG()))
+        .catch((error) => console.error("Failed to capture desk-pet view:", error))
+        .finally(() => {
+          isQuitting = true;
+          app.quit();
+        });
+    }, captureDelay);
+  });
+}
+
+function createPetWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: size.width,
-    height: size.height,
-    x: workArea.x + workArea.width - size.width - 18,
-    y: workArea.y + workArea.height - size.height - 18,
+    ...restoredPetBounds(),
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -252,42 +305,111 @@ function createMainWindow(): BrowserWindow {
       sandbox: true,
     },
   });
-
   window.setAlwaysOnTop(true, "floating");
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  window.once("ready-to-show", () => window.show());
-  window.webContents.once("did-finish-load", () => {
-    const capturePath = process.env.DESK_PET_CAPTURE_PATH;
-    if (!capturePath) return;
-    setTimeout(() => {
-      void window
-        .capturePage()
-        .then((image) => fs.writeFile(capturePath, image.toPNG()))
-        .catch((error) => console.error("Failed to capture desk-pet view:", error))
-        .finally(() => {
-          isQuitting = true;
-          app.quit();
-        });
-    }, 900);
+  window.on("moved", () => {
+    const { x, y } = window.getBounds();
+    windowUiState = { ...windowUiState, petPosition: { x, y } };
+    scheduleWindowStateSave();
   });
-  window.on("close", (event) => {
-    if (isQuitting) return;
-    event.preventDefault();
-    window.hide();
-  });
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("https://")) void shell.openExternal(url);
-    return { action: "deny" };
-  });
-  window.webContents.on("will-navigate", (event, url) => {
-    if (url !== window.webContents.getURL()) {
-      event.preventDefault();
-      if (url.startsWith("https://")) void shell.openExternal(url);
-    }
-  });
-
-  void window.loadURL(rendererUrl());
+  secureWindow(window);
+  configureCapture(window, "pet");
+  void window.loadURL(rendererUrl("pet", "pet"));
   return window;
+}
+
+function createWorkbenchWindow(initialMode: WindowMode): BrowserWindow {
+  const window = new BrowserWindow({
+    ...restoredWorkbenchBounds(),
+    minWidth: WORKBENCH_MIN_SIZE.width,
+    minHeight: WORKBENCH_MIN_SIZE.height,
+    frame: true,
+    transparent: false,
+    backgroundColor: "#fff8e5",
+    title: "desk-pet",
+    autoHideMenuBar: true,
+    alwaysOnTop: false,
+    skipTaskbar: false,
+    resizable: true,
+    maximizable: true,
+    minimizable: true,
+    fullscreenable: false,
+    hasShadow: true,
+    show: false,
+    icon: assetPath("app-icon.png"),
+    webPreferences: {
+      preload: join(__dirname, "../preload/index.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  const updateNormalBounds = (): void => {
+    if (window.isMaximized() || window.isMinimized()) return;
+    windowUiState = { ...windowUiState, workbenchBounds: window.getNormalBounds() };
+    scheduleWindowStateSave();
+  };
+  window.on("moved", updateNormalBounds);
+  window.on("resized", updateNormalBounds);
+  window.on("maximize", () => {
+    windowUiState = { ...windowUiState, workbenchMaximized: true };
+    broadcastWorkbenchState();
+    scheduleWindowStateSave();
+  });
+  window.on("unmaximize", () => {
+    windowUiState = { ...windowUiState, workbenchMaximized: false };
+    broadcastWorkbenchState();
+    scheduleWindowStateSave();
+  });
+  secureWindow(window);
+  configureCapture(window, "workbench");
+  void window.loadURL(rendererUrl(initialMode, "workbench"));
+  return window;
+}
+
+function showPetWindow(): void {
+  if (!config.setupComplete || !petWindow || petWindow.isDestroyed()) return;
+  currentWindowMode = "pet";
+  mainWindow?.hide();
+  petWindow.show();
+  petWindow.moveTop();
+}
+
+function showWorkbenchWindow(mode: Exclude<WindowMode, "pet">): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const nextMode = config.setupComplete ? mode : "onboarding";
+  currentWindowMode = nextMode;
+  petWindow?.hide();
+  mainWindow.webContents.send("app:open-view", nextMode);
+  if (!mainWindow.isVisible()) {
+    pendingWindowReveal = nextMode;
+    mainWindow.setOpacity(0);
+    if (pendingWindowRevealTimer) clearTimeout(pendingWindowRevealTimer);
+    pendingWindowRevealTimer = setTimeout(() => {
+      pendingWindowRevealTimer = null;
+      if (!mainWindow || mainWindow.isDestroyed() || pendingWindowReveal !== nextMode) return;
+      pendingWindowReveal = null;
+      mainWindow.setOpacity(1);
+    }, 500);
+    mainWindow.show();
+  } else {
+    mainWindow.show();
+  }
+  if (windowUiState.workbenchMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
+  mainWindow.focus();
+}
+
+function setWindowMode(mode: WindowMode): void {
+  if (mode === "pet") showPetWindow();
+  else showWorkbenchWindow(mode);
+}
+
+function showWindow(mode = currentWindowMode): void {
+  setWindowMode(config.setupComplete ? mode : "onboarding");
+}
+
+function openWindowMode(mode: WindowMode): void {
+  setWindowMode(config.setupComplete ? mode : "onboarding");
 }
 
 function sendCaptionState(state: CaptionState): void {
@@ -479,7 +601,10 @@ function createTray(): Tray {
       {
         label: "显示 / 隐藏",
         click: () => {
-          if (mainWindow?.isVisible()) mainWindow.hide();
+          if (mainWindow?.isVisible() || petWindow?.isVisible()) {
+            mainWindow?.hide();
+            petWindow?.hide();
+          }
           else showWindow();
         },
       },
@@ -510,105 +635,13 @@ function createTray(): Tray {
     ]),
   );
   nextTray.on("click", () => {
-    if (mainWindow?.isVisible()) mainWindow.hide();
+    if (mainWindow?.isVisible() || petWindow?.isVisible()) {
+      mainWindow?.hide();
+      petWindow?.hide();
+    }
     else showWindow();
   });
   return nextTray;
-}
-
-async function pickFile(
-  title: string,
-  filters: Electron.FileFilter[],
-): Promise<FilePickResult | null> {
-  const options: Electron.OpenDialogOptions = {
-    title,
-    properties: ["openFile"],
-    filters,
-  };
-  const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, options)
-    : await dialog.showOpenDialog(options);
-  if (result.canceled || !result.filePaths[0]) return null;
-  const path = result.filePaths[0];
-  return { path, name: basename(path) };
-}
-
-const CHAT_IMAGE_MIME_TYPES: Record<string, ChatImageMimeType> = {
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-};
-
-async function pickChatImages(): Promise<ChatImage[]> {
-  const options: Electron.OpenDialogOptions = {
-    title: "选择要发送给视觉模型的图片",
-    properties: ["openFile", "multiSelections"],
-    filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "webp", "gif"] }],
-  };
-  const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, options)
-    : await dialog.showOpenDialog(options);
-  if (result.canceled) return [];
-  if (result.filePaths.length > 4) throw new Error("一次最多选择 4 张图片。");
-
-  const images: ChatImage[] = [];
-  let totalBytes = 0;
-  for (const path of result.filePaths) {
-    const name = basename(path);
-    const mimeType = CHAT_IMAGE_MIME_TYPES[extname(path).toLowerCase()];
-    if (!mimeType) throw new Error(`不支持图片格式：${name}`);
-    const stats = await fs.stat(path);
-    if (stats.size > 10 * 1024 * 1024) throw new Error(`图片 ${name} 超过 10 MB。`);
-    totalBytes += stats.size;
-    if (totalBytes > 10 * 1024 * 1024) throw new Error("所选图片合计不能超过 10 MB。");
-
-    let preview = nativeImage.createFromPath(path);
-    if (preview.isEmpty()) throw new Error(`无法读取图片：${name}`);
-    const size = preview.getSize();
-    const scale = Math.min(1, 512 / size.width, 512 / size.height);
-    if (scale < 1) {
-      preview = preview.resize({
-        width: Math.max(1, Math.round(size.width * scale)),
-        height: Math.max(1, Math.round(size.height * scale)),
-        quality: "good",
-      });
-    }
-    images.push({ path, name, mimeType, previewUrl: preview.toDataURL() });
-  }
-  return images;
-}
-
-async function pickChatDocuments(): Promise<ChatDocument[]> {
-  const options: Electron.OpenDialogOptions = {
-    title: "选择要加入对话的文本或 PDF 文档",
-    properties: ["openFile", "multiSelections"],
-    filters: [{ name: "文本与 PDF", extensions: [...CHAT_TEXT_EXTENSIONS, "pdf"] }],
-  };
-  const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, options)
-    : await dialog.showOpenDialog(options);
-  if (result.canceled) return [];
-  if (result.filePaths.length > MAX_CHAT_DOCUMENTS) {
-    throw new Error(`一次最多选择 ${MAX_CHAT_DOCUMENTS} 个文档。`);
-  }
-
-  let totalBytes = 0;
-  for (const path of result.filePaths) totalBytes += (await fs.stat(path)).size;
-  if (totalBytes > MAX_CHAT_DOCUMENT_TOTAL_BYTES) {
-    throw new Error("所选文档合计不能超过 20 MB。");
-  }
-
-  const perDocumentLimit = Math.max(
-    1,
-    Math.floor(MAX_CHAT_DOCUMENT_TOTAL_CHARACTERS / Math.max(1, result.filePaths.length)),
-  );
-  const documents: ChatDocument[] = [];
-  for (const path of result.filePaths) {
-    documents.push(await readChatDocument(path, perDocumentLimit));
-  }
-  return documents;
 }
 
 async function probeExecutable(requested?: string): Promise<ProbeResult> {
@@ -702,7 +735,9 @@ function registerIpc(): void {
     tts.updateConfig(config.tts);
     caption.updateThreads(config.speech.threads);
     configureSpeechShortcut();
-    return bootstrap();
+    const data = bootstrap();
+    sendToAppWindows("app:bootstrap", data);
+    return data;
   });
   ipcMain.handle("runtime:probe", (_event, executable?: string) => probeExecutable(executable));
   ipcMain.handle("runtime:start", () => runtime.start());
@@ -796,18 +831,18 @@ function registerIpc(): void {
     caption.captureEnded(String(message || "系统输出音频已停止，请重新启动实时字幕。"));
   });
   ipcMain.handle("dialog:pick-executable", () =>
-    pickFile("选择 llama.cpp 可执行文件", [
+    chatAttachments.pickFile("选择 llama.cpp 可执行文件", [
       { name: "llama.cpp", extensions: process.platform === "win32" ? ["exe"] : ["*"] },
     ]),
   );
   ipcMain.handle("dialog:pick-model", () =>
-    pickFile("选择 llama.cpp GGUF 模型", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
+    chatAttachments.pickFile("选择 llama.cpp GGUF 模型", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
   );
   ipcMain.handle("dialog:pick-mmproj", () =>
-    pickFile("选择视觉投影模型（mmproj）", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
+    chatAttachments.pickFile("选择视觉投影模型（mmproj）", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
   );
   ipcMain.handle("dialog:pick-mcp-servers-config", async () => {
-    const selection = await pickFile(
+    const selection = await chatAttachments.pickFile(
       "选择 MCP Servers 配置",
       [{ name: "JSON 配置", extensions: ["json"] }],
     );
@@ -815,38 +850,48 @@ function registerIpc(): void {
     validateMcpServersConfigContents(await fs.readFile(selection.path, "utf8"));
     return selection;
   });
-  ipcMain.handle("dialog:pick-chat-images", () => pickChatImages());
-  ipcMain.handle("dialog:pick-chat-documents", () => pickChatDocuments());
-  ipcMain.handle("chat-history:list", () => {
-    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
-    return chatHistoryStore.listConversations();
+  ipcMain.handle("dialog:pick-chat-images", () => chatAttachments.pickImages());
+  ipcMain.handle("dialog:pick-chat-documents", () => chatAttachments.pickDocuments());
+  registerChatIpc({
+    runtime,
+    tts,
+    getHistoryStore: () => chatHistoryStore,
+    isQuitting: () => isQuitting,
   });
-  ipcMain.handle("chat-history:create", () => {
-    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
-    return chatHistoryStore.createConversation();
+  ipcMain.handle("window:set-mode", (event, mode: WindowMode) => {
+    const trustedSender = event.sender === mainWindow?.webContents || event.sender === petWindow?.webContents;
+    if (!trustedSender) throw new Error("不允许此窗口切换应用视图。");
+    if (!["pet", "chat", "settings", "onboarding"].includes(mode)) {
+      throw new Error("未知的窗口视图。");
+    }
+    setWindowMode(mode);
   });
-  ipcMain.handle("chat-history:load", (_event, conversationId: string) => {
-    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
-    return chatHistoryStore.loadMessages(conversationId);
+  ipcMain.handle("window:hide", (event) => {
+    if (event.sender === petWindow?.webContents) petWindow?.hide();
+    else if (event.sender === mainWindow?.webContents) mainWindow?.hide();
+    else throw new Error("不允许此窗口隐藏应用。");
   });
-  ipcMain.handle(
-    "chat-history:save",
-    (_event, conversationId: string, messages: ChatMessage[]) => {
-      if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
-      return chatHistoryStore.saveMessages(conversationId, messages);
-    },
-  );
-  ipcMain.handle("chat-history:delete", (_event, conversationId: string) => {
-    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
-    chatHistoryStore.deleteConversation(conversationId);
+  ipcMain.handle("window:minimize", (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("仅工作台可以最小化。");
+    mainWindow.minimize();
   });
-  ipcMain.handle("chat-history:delete-many", (_event, conversationIds: string[]) => {
-    if (!chatHistoryStore) throw new Error("本地聊天数据库不可用。");
-    if (!Array.isArray(conversationIds)) throw new Error("批量删除参数无效。");
-    chatHistoryStore.deleteConversations(conversationIds);
+  ipcMain.handle("window:toggle-maximize", (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("仅工作台可以最大化。");
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
+    return workbenchSnapshot();
   });
-  ipcMain.handle("window:set-mode", (_event, mode: WindowMode) => setWindowMode(mode));
-  ipcMain.handle("window:hide", () => mainWindow?.hide());
+  ipcMain.handle("window:get-state", (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("仅工作台可以读取窗口状态。");
+    return workbenchSnapshot();
+  });
+  ipcMain.handle("window:set-sidebar-collapsed", async (event, collapsed: boolean) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("仅工作台可以更新侧栏状态。");
+    windowUiState = { ...windowUiState, sidebarCollapsed: collapsed === true };
+    await persistWindowState();
+    broadcastWorkbenchState();
+    return workbenchSnapshot();
+  });
   ipcMain.on("window:view-ready", (event, mode: WindowMode) => {
     if (
       !mainWindow ||
@@ -870,46 +915,35 @@ function registerIpc(): void {
     if (parsed.protocol !== "https:") throw new Error("只允许打开 HTTPS 链接。");
     await shell.openExternal(parsed.toString());
   });
-  ipcMain.on("chat:start", (event, request: ChatRequest) => {
-    tts.onChatStart(request.requestId);
-    void runtime.streamChat(request, (chatEvent) => {
-      tts.onChatEvent(chatEvent);
-      if (!event.sender.isDestroyed()) event.sender.send("chat:event", chatEvent);
-    });
-  });
-  ipcMain.on("chat:abort", (_event, requestId: string) => {
-    runtime.abortChat(requestId);
-    tts.interrupt(requestId);
-  });
-  ipcMain.on(
-    "chat:tool-approval",
-    (_event, payload: { requestId: string; toolCallId: string; approved: boolean }) => {
-      runtime.resolveToolApproval(payload.requestId, payload.toolCallId, payload.approved === true);
-    },
-  );
 }
 
 function sendSpeechState(state: SpeechState): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("speech:state", state);
+  sendToAppWindows("speech:state", state);
 }
 
 function sendTtsState(state: TtsState): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("tts:state", state);
+  sendToAppWindows("tts:state", state);
 }
 
 function sendSpeechEvent(event: SpeechEvent): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("speech:event", event);
+  sendToAppWindows("speech:event", event);
+}
+
+function sendToAppWindows(channel: string, payload: unknown): void {
+  for (const window of [mainWindow, petWindow]) {
+    if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send(channel, payload);
+    }
+  }
 }
 
 function revealGlobalDictation(): void {
   if (!config.setupComplete) return;
-  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return;
-  setWindowMode("pet");
-  mainWindow.webContents.send("app:open-view", "pet");
-  if (!mainWindow.isVisible()) {
-    mainWindow.showInactive();
-  }
-  mainWindow.moveTop();
+  if (!petWindow || petWindow.isDestroyed() || mainWindow?.isFocused()) return;
+  currentWindowMode = "pet";
+  mainWindow?.hide();
+  if (!petWindow.isVisible()) petWindow.showInactive();
+  petWindow.moveTop();
 }
 
 async function insertGlobalDictation(event: Extract<SpeechEvent, { type: "final" }>): Promise<void> {
@@ -1000,9 +1034,6 @@ function configureSpeechShortcut(): void {
 }
 
 async function initialize(): Promise<void> {
-  if (process.env.DESK_PET_USER_DATA) {
-    app.setPath("userData", process.env.DESK_PET_USER_DATA);
-  }
   app.setAppUserModelId("cn.local.deskpet");
   try {
     await migrateLegacyUserData();
@@ -1022,6 +1053,8 @@ async function initialize(): Promise<void> {
   }
   configStore = new ConfigStore();
   config = await configStore.read();
+  windowStateStore = new WindowStateStore();
+  windowUiState = await windowStateStore.read();
   try {
     await fs.mkdir(app.getPath("userData"), { recursive: true });
     chatHistoryStore = new ChatHistoryStore(join(app.getPath("userData"), "chat-history.sqlite"));
@@ -1064,17 +1097,29 @@ async function initialize(): Promise<void> {
   );
   tts.on("state", sendTtsState);
   runtime.on("state", (state) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("runtime:state", state);
-    }
+    sendToAppWindows("runtime:state", state);
+  });
+  runtime.on("log", (message: string) => {
+    console.warn(`[llama-runtime] ${message}`);
   });
 
   registerIpc();
   configureDisplayMediaCapture();
-  mainWindow = createMainWindow();
+  const requestedMode = requestedWindowMode();
+  const initialMode: WindowMode = config.setupComplete
+    ? requestedMode ?? "pet"
+    : "onboarding";
+  currentWindowMode = initialMode;
+  mainWindow = createWorkbenchWindow(initialMode === "pet" ? "chat" : initialMode);
+  petWindow = createPetWindow();
   mainWindow.on("blur", () => {
     speechComposerFocused = false;
   });
+  if (initialMode === "pet") {
+    petWindow.once("ready-to-show", showPetWindow);
+  } else {
+    mainWindow.once("ready-to-show", () => showWorkbenchWindow(initialMode));
+  }
   tray = createTray();
   configureSpeechShortcut();
   void speech.initializeAvailability();
@@ -1082,15 +1127,27 @@ async function initialize(): Promise<void> {
   void tts.initializeAvailability();
 
   globalShortcut.register("CommandOrControl+Shift+M", () => {
-    toggleShortcutWindow(mainWindow, () => openWindowMode("pet"));
+    if (mainWindow?.isVisible() || petWindow?.isVisible()) {
+      mainWindow?.hide();
+      petWindow?.hide();
+    } else {
+      openWindowMode("pet");
+    }
   });
   if (config.setupComplete && config.autoStart) {
     setTimeout(() => void runtime.start(false), 700);
   }
 }
 
+if (process.env.DESK_PET_USER_DATA) {
+  // The single-instance lock is scoped to userData, so test profiles must be
+  // selected before requesting it.
+  app.setPath("userData", process.env.DESK_PET_USER_DATA);
+}
+
 const hasLock =
-  Boolean(process.env.DESK_PET_CAPTURE_PATH) || app.requestSingleInstanceLock();
+  Boolean(process.env.DESK_PET_CAPTURE_PATH)
+  || app.requestSingleInstanceLock();
 if (!hasLock) {
   app.quit();
 } else {
@@ -1103,22 +1160,50 @@ if (!hasLock) {
 }
 
 app.on("activate", () => showWindow());
-app.on("before-quit", () => {
-  isQuitting = true;
-  globalShortcut.unregisterAll();
-  if (shortcutHookStarted) shortcutHook?.stop();
-  shortcutHookStarted = false;
-  tray?.destroy();
-  void runtime?.stop();
-  void speech?.dispose();
-  void caption?.dispose();
-  void tts?.dispose();
-  closeCaptionAudioPort();
-  captionWindow?.destroy();
-  captionWindow = null;
-  chatHistoryStore?.close();
-  chatHistoryStore = null;
-});
+app.on("before-quit", createAsyncBeforeQuitHandler({
+  begin: () => {
+    isQuitting = true;
+    globalShortcut.unregisterAll();
+    if (shortcutHookStarted) shortcutHook?.stop();
+    shortcutHookStarted = false;
+    tray?.destroy();
+    closeCaptionAudioPort();
+    captionWindow?.destroy();
+    captionWindow = null;
+    petWindow?.destroy();
+    petWindow = null;
+    if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
+    windowStateSaveTimer = undefined;
+  },
+  cleanup: async () => {
+    const results = await Promise.allSettled([
+      prepareRendererChatForQuit(),
+      runtime?.stop(),
+      speech?.dispose(),
+      caption?.dispose(),
+      tts?.dispose(),
+      windowStateStore ? persistWindowState() : Promise.resolve(),
+    ]);
+    const failures: unknown[] = results.flatMap((result) => result.status === "rejected"
+      ? [result.reason]
+      : []);
+    if (results[0].status === "fulfilled") {
+      try {
+        chatHistoryStore?.close();
+        chatHistoryStore = null;
+      } catch (error) {
+        failures.push(error);
+      }
+    } else {
+      console.warn("Leaving chat history open because the renderer did not acknowledge persistence.");
+    }
+    if (failures.length) throw new AggregateError(failures, "应用退出清理失败");
+  },
+  quit: () => app.quit(),
+  onError: (error) => {
+    console.error("desk-pet shutdown cleanup failed:", error);
+  },
+}));
 app.on("window-all-closed", () => {
   // The tray keeps the pet alive until the user explicitly quits.
 });

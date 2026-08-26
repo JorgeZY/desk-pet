@@ -1,5 +1,42 @@
 import type { ChatMessage } from "../../shared/types";
 
+const PANEL_UNMOUNT_CANCELLED_MESSAGE = "任务因聊天界面关闭而取消。";
+
+export function cancelActiveGenerationForUnmount(
+  requestId: string,
+  assistantId: string | undefined,
+  messages: ChatMessage[],
+  abortChat: (requestId: string) => void,
+): ChatMessage[] {
+  abortChat(requestId);
+  if (!assistantId) return messages;
+  return terminalizeAssistantGeneration(
+    assistantId,
+    messages,
+    "（团子停下了）",
+    PANEL_UNMOUNT_CANCELLED_MESSAGE,
+  );
+}
+
+export function terminalizeAssistantGeneration(
+  assistantId: string,
+  messages: ChatMessage[],
+  fallbackContent: string,
+  activeToolError: string,
+): ChatMessage[] {
+  return messages.map((message) => message.id === assistantId
+    ? {
+        ...message,
+        content: message.content || fallbackContent,
+        toolCalls: message.toolCalls?.map((call) => (
+          call.status === "pending-approval" || call.status === "running"
+            ? { ...call, status: "error" as const, error: activeToolError }
+            : call
+        )),
+      }
+    : message);
+}
+
 export function isCurrentConversationOperation(
   operationToken: number,
   currentToken: number,

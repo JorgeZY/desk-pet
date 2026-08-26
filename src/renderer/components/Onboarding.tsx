@@ -1,6 +1,16 @@
 import { useMemo, useState } from "react";
 import type { ProbeResult, RuntimeConfig } from "../../shared/types";
-import { Pet } from "./Pet";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { PixelIcon } from "./PixelIcon";
 
 interface OnboardingProps {
@@ -8,6 +18,8 @@ interface OnboardingProps {
   platform: string;
   onComplete: (config: RuntimeConfig) => Promise<void>;
 }
+
+const STEP_TITLES = ["欢迎使用团子", "连接 llama.cpp", "选择端侧模型", "调整本地运行参数"];
 
 export function Onboarding({ initialConfig, platform, onComplete }: OnboardingProps) {
   const [step, setStep] = useState(0);
@@ -35,10 +47,16 @@ export function Onboarding({ initialConfig, platform, onComplete }: OnboardingPr
   const testRuntime = async () => {
     setBusy(true);
     setError("");
-    const result = await window.desktopPet.probeRuntime(config.executable);
-    setProbe(result);
-    if (!result.ok) setError("没有找到可用的 llama.cpp。请先安装，或选择 llama/llama-server 可执行文件。");
-    setBusy(false);
+    try {
+      const result = await window.desktopPet.probeRuntime(config.executable);
+      setProbe(result);
+      if (!result.ok) setError("没有找到可用的 llama.cpp。请先安装，或选择 llama/llama-server 可执行文件。");
+    } catch (probeError) {
+      setProbe(null);
+      setError(probeError instanceof Error ? probeError.message : String(probeError));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const selectModel = async () => {
@@ -62,207 +80,144 @@ export function Onboarding({ initialConfig, platform, onComplete }: OnboardingPr
   };
 
   return (
-    <main className="surface onboarding">
-      <div className="window-drag-strip" />
-      <header className="onboarding__header">
-        <div>
-          <p className="eyebrow">DESK-PET · LOCAL FIRST</p>
-          <h1>{["你好，我是团子", "连接 llama.cpp", "选择端侧模型", "调好我的小脑袋"][step]}</h1>
-        </div>
-        <span className="step-count">{step + 1} / 4</span>
-      </header>
-
-      <div className="step-track" aria-label={`第 ${step + 1} 步，共 4 步`}>
-        {[0, 1, 2, 3].map((item) => (
-          <span
-            key={item}
-            className={item <= step ? "active" : ""}
-            aria-current={item === step ? "step" : undefined}
-          />
-        ))}
-      </div>
-
-      <section className="onboarding__body">
-        {step === 0 && (
-          <div className="welcome-step">
-            <Pet mood="idle" compact />
-            <div className="welcome-copy">
-              <p>
-                团子是一只完全运行在你电脑上的 AI 桌宠。日常对话不会发送给云端服务，也不需要 API Key。
-              </p>
-              <ul className="feature-list">
-                <li><b>任意 GGUF</b><span>按需切换 llama.cpp 支持的本地模型</span></li>
-                <li><b>llama.cpp</b><span>CPU / Vulkan / CUDA 本地推理</span></li>
-                <li><b>隐私优先</b><span>对话只发往 127.0.0.1</span></li>
-              </ul>
+    <main className="onboarding flex h-full w-full items-center justify-center bg-background p-6 text-foreground">
+      <Card className="h-full max-h-[700px] w-full max-w-4xl gap-0 overflow-hidden py-0 shadow-lg">
+        <CardHeader className="border-b px-7 py-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardDescription className="mb-1 text-xs font-medium tracking-[0.14em]">本地优先 · 四步完成配置</CardDescription>
+              <CardTitle><h1 className="m-0 text-2xl tracking-tight">{STEP_TITLES[step]}</h1></CardTitle>
             </div>
+            <Badge variant="secondary" className="font-mono">{step + 1} / 4</Badge>
           </div>
-        )}
+          <Progress value={(step + 1) * 25} aria-label={`第 ${step + 1} 步，共 4 步`} />
+        </CardHeader>
 
-        {step === 1 && (
-          <div className="form-stack">
-            <div className="callout">
-              <span>01</span>
-              <p>
-                {platform === "win32"
-                  ? "Windows 推荐先在终端运行 winget install llama.cpp，然后点击检测。"
-                  : "请通过 llama.app 安装 llama.cpp，或选择已有的 llama-server。"}
-              </p>
-            </div>
-            <label>
-              <span>可执行文件或命令</span>
-              <div className="field-row">
-                <input
-                  value={config.executable}
-                  onChange={(event) => {
-                    update("executable", event.target.value);
-                    setProbe(null);
-                  }}
-                  placeholder="llama"
-                />
-                <button className="button button--quiet" type="button" onClick={selectExecutable}>选择</button>
+        <CardContent className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
+          {step === 0 && (
+            <section className="mx-auto grid max-w-2xl gap-6" aria-labelledby="onboarding-welcome-title">
+              <div className="grid gap-2 text-center">
+                <h2 id="onboarding-welcome-title" className="text-xl font-semibold">一个真正运行在本机的 AI 助手</h2>
+                <p className="text-sm leading-relaxed text-muted-foreground">日常对话只会发送到本机的 llama.cpp 服务，不需要 API Key。接下来会检查运行时、选择模型并设置基础参数。</p>
               </div>
-            </label>
-            <div className="button-row">
-              <button className="button button--secondary" type="button" onClick={testRuntime} disabled={busy}>
-                {busy ? "检测中…" : "检测 llama.cpp"}
-              </button>
-              <button
-                className="text-button text-button--with-icon"
-                type="button"
-                onClick={() => window.desktopPet.openExternal("https://github.com/ggml-org/llama.cpp/releases")}
-              >
-                打开官方下载页 <PixelIcon name="open" />
-              </button>
-            </div>
-            {probe && (
-              <div className={`probe-result ${probe.ok ? "success" : "failure"}`}>
-                <b>{probe.ok ? "运行时可用" : "检测失败"}</b>
-                <span>{probe.ok ? probe.version : probe.error}</span>
+              <div className="grid grid-cols-3 gap-3">
+                <Card className="gap-2 border-border/70 p-4 py-4 shadow-none"><CardTitle className="text-sm">任意 GGUF</CardTitle><CardDescription>按需切换 llama.cpp 支持的本地模型</CardDescription></Card>
+                <Card className="gap-2 border-border/70 p-4 py-4 shadow-none"><CardTitle className="text-sm">端侧推理</CardTitle><CardDescription>支持 CPU、Vulkan 与 CUDA 运行</CardDescription></Card>
+                <Card className="gap-2 border-border/70 p-4 py-4 shadow-none"><CardTitle className="text-sm">隐私优先</CardTitle><CardDescription>模型服务仅绑定到 127.0.0.1</CardDescription></Card>
               </div>
-            )}
-          </div>
-        )}
+            </section>
+          )}
 
-        {step === 2 && (
-          <div className="form-stack">
-            <div className="segmented">
-              <button
-                type="button"
-                className={config.modelMode === "huggingface" ? "active" : ""}
-                onClick={() => update("modelMode", "huggingface")}
-              >
-                自动下载
-                <small>联网</small>
-              </button>
-              <button
-                type="button"
-                className={config.modelMode === "local" ? "active" : ""}
-                onClick={() => update("modelMode", "local")}
-              >
-                本地 GGUF
-                <small>离线</small>
-              </button>
-            </div>
-            {config.modelMode === "huggingface" ? (
-              <>
-                <div className="model-card">
-                  <div className="model-card__icon"><img src="./app-icon.png" alt="" /></div>
-                  <div>
-                    <b>准备下载的模型</b>
-                    <span>{config.hfRepo}</span>
-                  </div>
-                  <strong>可切换</strong>
-                </div>
-                <label>
-                  <span>Hugging Face 模型标识</span>
-                  <input
-                    value={config.hfRepo}
-                    onChange={(event) => update("hfRepo", event.target.value)}
-                    placeholder="owner/repo:quant"
+          {step === 1 && (
+            <section className="mx-auto grid max-w-2xl gap-5" aria-label="连接 llama.cpp">
+              <Alert>
+                <AlertTitle>准备运行时</AlertTitle>
+                <AlertDescription>{platform === "win32" ? "Windows 推荐先在终端运行 winget install llama.cpp，然后点击检测。" : "请通过 llama.app 安装 llama.cpp，或选择已有的 llama-server。"}</AlertDescription>
+              </Alert>
+              <div className="grid gap-2">
+                <Label htmlFor="onboarding-executable">可执行文件或命令</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="onboarding-executable"
+                    value={config.executable}
+                    onChange={(event) => {
+                      update("executable", event.target.value);
+                      setProbe(null);
+                    }}
+                    placeholder="llama"
                   />
-                </label>
-                <p className="hint">
-                  格式为 owner/repo:quant。内置默认模型支持镜像与断点续传；其他模型由 llama.cpp 下载。
-                </p>
-              </>
-            ) : (
-              <label>
-                <span>llama.cpp 支持的 GGUF 文件</span>
-                <div className="field-row">
-                  <input value={config.modelPath} readOnly placeholder="请选择 .gguf 文件" />
-                  <button className="button button--quiet" type="button" onClick={selectModel}>选择</button>
+                  <Button variant="outline" type="button" onClick={selectExecutable}>选择</Button>
                 </div>
-              </label>
-            )}
-            <button
-              className="text-button text-button--with-icon align-left"
-              type="button"
-              onClick={() => window.desktopPet.openExternal("https://huggingface.co/models?library=gguf")}
-            >
-              浏览 GGUF 模型并检查许可 <PixelIcon name="open" />
-            </button>
-          </div>
-        )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" type="button" onClick={() => void testRuntime()} disabled={busy}>{busy ? "检测中…" : "检测 llama.cpp"}</Button>
+                <Button variant="ghost" type="button" onClick={() => window.desktopPet.openExternal("https://github.com/ggml-org/llama.cpp/releases")}>打开官方下载页 <PixelIcon name="open" /></Button>
+              </div>
+              {probe && (
+                <Alert variant={probe.ok ? "default" : "destructive"}>
+                  <AlertTitle>{probe.ok ? "运行时可用" : "检测失败"}</AlertTitle>
+                  <AlertDescription>{probe.ok ? probe.version : probe.error}</AlertDescription>
+                </Alert>
+              )}
+            </section>
+          )}
 
-        {step === 3 && (
-          <div className="form-stack">
-            <div className="metric-grid">
-              <label>
-                <span>上下文长度</span>
-                <select value={config.contextSize} onChange={(event) => update("contextSize", Number(event.target.value))}>
-                  <option value={4096}>4K · 更省内存</option>
-                  <option value={8192}>8K · 推荐</option>
-                  <option value={16384}>16K · 长对话</option>
-                  <option value={32768}>32K · 高内存</option>
-                </select>
-              </label>
-              <label>
-                <span>GPU 卸载层数</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={999}
-                  value={config.gpuLayers}
-                  onChange={(event) => update("gpuLayers", Number(event.target.value))}
-                />
-              </label>
-            </div>
-            <label>
-              <span>团子的性格设定</span>
-              <textarea
-                value={config.systemPrompt}
-                rows={6}
-                onChange={(event) => update("systemPrompt", event.target.value)}
-              />
-            </label>
-            <label className="switch-row">
-              <div><b>开机后自动准备模型</b><span>启动桌宠时自动拉起 llama.cpp</span></div>
-              <input
-                type="checkbox"
-                checked={config.autoStart}
-                onChange={(event) => update("autoStart", event.target.checked)}
-              />
-            </label>
-          </div>
-        )}
-      </section>
+          {step === 2 && (
+            <section className="mx-auto grid max-w-2xl gap-5" aria-label="选择端侧模型">
+              <RadioGroup
+                value={config.modelMode}
+                onValueChange={(value) => update("modelMode", value as RuntimeConfig["modelMode"])}
+                className="grid grid-cols-2 gap-3"
+                aria-label="模型来源"
+              >
+                <div className="flex items-start gap-3 rounded-lg border p-4 has-data-[state=checked]:border-primary has-data-[state=checked]:bg-accent/50">
+                  <RadioGroupItem id="onboarding-model-huggingface" value="huggingface" aria-label="自动下载" />
+                  <Label htmlFor="onboarding-model-huggingface" className="grid flex-1 cursor-pointer gap-1"><b>自动下载</b><small className="font-normal text-muted-foreground">联网获取模型，可随时切换</small></Label>
+                </div>
+                <div className="flex items-start gap-3 rounded-lg border p-4 has-data-[state=checked]:border-primary has-data-[state=checked]:bg-accent/50">
+                  <RadioGroupItem id="onboarding-model-local" value="local" aria-label="本地 GGUF" />
+                  <Label htmlFor="onboarding-model-local" className="grid flex-1 cursor-pointer gap-1"><b>本地 GGUF</b><small className="font-normal text-muted-foreground">完全离线，使用已有文件</small></Label>
+                </div>
+              </RadioGroup>
 
-      {error && <p className="inline-error">{error}</p>}
+              {config.modelMode === "huggingface" ? (
+                <div className="grid gap-2">
+                  <Label htmlFor="onboarding-hf-repo">Hugging Face 模型标识</Label>
+                  <Input id="onboarding-hf-repo" value={config.hfRepo} onChange={(event) => update("hfRepo", event.target.value)} placeholder="owner/repo:quant" />
+                  <p className="text-xs leading-relaxed text-muted-foreground">格式为 owner/repo:quant。内置默认模型支持镜像与断点续传；其他模型由 llama.cpp 下载。</p>
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  <Label htmlFor="onboarding-model-path">llama.cpp 支持的 GGUF 文件</Label>
+                  <div className="flex gap-2">
+                    <Input id="onboarding-model-path" value={config.modelPath} readOnly placeholder="请选择 .gguf 文件" />
+                    <Button variant="outline" type="button" onClick={selectModel}>选择</Button>
+                  </div>
+                </div>
+              )}
+              <Button variant="ghost" className="w-fit" type="button" onClick={() => window.desktopPet.openExternal("https://huggingface.co/models?library=gguf")}>浏览 GGUF 模型并检查许可 <PixelIcon name="open" /></Button>
+            </section>
+          )}
 
-      <footer className="onboarding__footer">
-        <button
-          className="button button--quiet"
-          type="button"
-          onClick={() => setStep((value) => Math.max(0, value - 1))}
-          disabled={step === 0 || busy}
-        >
-          上一步
-        </button>
-        <button className="button button--primary" type="button" onClick={next} disabled={!canContinue || busy}>
-          {step === 3 ? (busy ? "正在保存…" : "完成并唤醒团子") : "继续"}
-        </button>
-      </footer>
+          {step === 3 && (
+            <section className="mx-auto grid max-w-2xl gap-5" aria-label="调整本地运行参数">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="onboarding-context">上下文长度</Label>
+                  <Select value={String(config.contextSize)} onValueChange={(value) => update("contextSize", Number(value))}>
+                    <SelectTrigger id="onboarding-context" className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="4096">4K · 更省内存</SelectItem>
+                      <SelectItem value="8192">8K · 推荐</SelectItem>
+                      <SelectItem value="16384">16K · 长对话</SelectItem>
+                      <SelectItem value="32768">32K · 高内存</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="onboarding-gpu-layers">GPU 卸载层数</Label>
+                  <Input id="onboarding-gpu-layers" type="number" min={0} max={999} value={config.gpuLayers} onChange={(event) => update("gpuLayers", Number(event.target.value))} />
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="onboarding-system-prompt">团子的性格设定</Label>
+                <Textarea id="onboarding-system-prompt" value={config.systemPrompt} rows={6} onChange={(event) => update("systemPrompt", event.target.value)} />
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-lg border p-4">
+                <Label htmlFor="onboarding-auto-start" className="grid gap-1"><b>开机后自动准备模型</b><span className="text-xs font-normal text-muted-foreground">启动桌宠时自动拉起 llama.cpp</span></Label>
+                <Switch id="onboarding-auto-start" aria-label="开机后自动准备模型" checked={config.autoStart} onCheckedChange={(checked) => update("autoStart", checked)} />
+              </div>
+            </section>
+          )}
+        </CardContent>
+
+        <div className="px-7">{error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}</div>
+
+        <CardFooter className="justify-between border-t px-7 py-4">
+          <Button variant="ghost" type="button" onClick={() => setStep((value) => Math.max(0, value - 1))} disabled={step === 0 || busy}>上一步</Button>
+          <Button type="button" onClick={() => void next()} disabled={!canContinue || busy}>{step === 3 ? (busy ? "正在保存…" : "完成并启动") : "继续"}</Button>
+        </CardFooter>
+      </Card>
     </main>
   );
 }

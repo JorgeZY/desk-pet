@@ -37,7 +37,8 @@ preload 使用 `contextBridge` 暴露以下能力：
 - 通过 Chromium 网络栈下载 GGUF，并通过打包的 PowerShell 脚本下载语音模型
 - `llama` / `llama-server` 子进程生命周期
 - `/health` 就绪轮询
-- OpenAI Chat Completions SSE 解析
+- 通过 OpenAI-compatible adapter 驱动 Vercel AI SDK `ToolLoopAgent`
+- 管理 builtin tools、直连 MCP 客户端、串行执行与副作用确认
 - 默认麦克风采集、F8 按下/释放与 Sherpa-ONNX 语音识别
 - 退出时终止由应用启动的运行时
 
@@ -104,7 +105,11 @@ F8 会以 `button` 来源启动同一语音会话，直接更新聊天草稿，�
 读取和更新历史。聊天首页的 3 条快捷模板属于普通配置，由 `config.json` 持久化；Chat Panel
 直接读取配置并在点击后填入草稿，不会启动额外推理或自动发送。
 
-渲染进程发送最近 20 条历史。主进程添加桌宠系统提示词，并发送：
+渲染进程发送完整的已加载历史，主进程将持久化消息直接转换为 AI SDK `ModelMessage`。AI SDK
+完成 OpenAI-compatible 序列化后，主进程使用 llama.cpp
+`/v1/chat/completions/input_tokens` 对最终请求精确计数；每个 Agent step 都按
+`contextSize - maxOutputTokens` 重新装箱，从最新向前保留完整 user turn，工具调用和结果不会被拆开。
+若当前正文单独仍超限则拒绝请求，附件内容则可以先截断。随后发送：
 
 ```json
 {
@@ -120,6 +125,25 @@ F8 会以 `button` 来源启动同一语音会话，直接更新聊天草稿，�
 `delta.reasoning_content` 和 `delta.content` 分成不同 IPC 事件，renderer 累积原始文本并用
 禁用原始 HTML 与远程图片的 Markdown / GFM 组件安全渲染。外部链接只允许 HTTPS，并通过
 主进程交给系统浏览器打开。
+
+Agent loop 由应用自己的 `AgentRunner` 承载，模型请求使用 Vercel AI SDK Core，llama.cpp
+仅提供本地 OpenAI-compatible 推理和 builtin tool 接口。MCP 配置由主进程直接连接本地
+stdio、Streamable HTTP 或 legacy SSE server，不再交给 llama.cpp。工具按 FIFO 顺序执行；
+builtin 权限元数据不完整及所有 MCP 调用均先请求用户确认。远程 MCP 地址必须使用 HTTPS，
+只有本机 loopback 可使用 HTTP；URL 禁止携带凭据，header 支持环境变量占位符，敏感值建议
+使用占位符注入。
+用户选择配置并重启模型时，受信任配置中的 stdio command 会直接启动；逐次确认只覆盖随后
+发起的 MCP tool call，不是对 server 进程启动的沙箱或审批。
+首期不持久化未完成 run，也不做
+对话摘要、RAG 或长期 memory；工具结果仍保留最近两轮临时 scratchpad，并由精确请求计数作为
+8K/16K 本地上下文的最终边界。首期回注模型的 MCP 结果以文本为主，image、audio、
+resource 等富媒体结果暂不作为多模态 tool result 处理。
+模型可见的工具 schema 同样受限：每轮最多 32 个，且估算占用不超过上下文的 50%；超过时
+按 provider 顺序保留并向用户明确列出本轮未启用的工具，避免首个请求因工具定义直接溢出。
+
+应用退出采用有界的两阶段清理：renderer 先终止活动 run 并等待聊天保存 IPC 提交，主进程收到
+匹配的 ACK 后才关闭 SQLite；若 ACK 失败或超时，则保留数据库句柄直到进程退出，避免主动
+截断仍在途的保存。
 
 ## 下一阶段
 

@@ -1,22 +1,34 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatMessage } from "../shared/types";
 import { ChatHistoryStore } from "./chat-history-store";
 
 const stores: ChatHistoryStore[] = [];
+const tempDirectories: string[] = [];
 
 afterEach(() => {
   while (stores.length) stores.pop()?.close();
+  while (tempDirectories.length) {
+    rmSync(tempDirectories.pop()!, { force: true, recursive: true });
+  }
 });
 
-function createStore(): ChatHistoryStore {
+function createStore(filePath = ":memory:"): ChatHistoryStore {
   let timestamp = 1000;
   let id = 0;
-  const store = new ChatHistoryStore(":memory:", {
+  const store = new ChatHistoryStore(filePath, {
     now: () => timestamp++,
     createId: () => `conversation-${id++}`,
   });
   stores.push(store);
   return store;
+}
+
+function closeStore(store: ChatHistoryStore): void {
+  store.close();
+  stores.splice(stores.indexOf(store), 1);
 }
 
 function message(
@@ -121,6 +133,98 @@ describe("ChatHistoryStore", () => {
     ])).toThrow();
     expect(store.loadMessages(conversation.id)).toEqual(original);
     expect(store.listConversations()[0]?.title).toBe("原始内容");
+  });
+
+  it("restores ordered message parts after reopening without requiring context usage", () => {
+    const directory = mkdtempSync(join(tmpdir(), "desk-pet-chat-history-"));
+    tempDirectories.push(directory);
+    const databasePath = join(directory, "history.sqlite");
+    const store = createStore(databasePath);
+    const conversation = store.createConversation();
+    const call = {
+      id: "tool-ordered",
+      name: "read_file",
+      displayName: "读取文件",
+      arguments: "{\"path\":\"README.md\"}",
+      status: "completed" as const,
+      requiresApproval: false,
+      result: "文件内容",
+    };
+    store.saveMessages(conversation.id, [message(
+      "message-ordered",
+      "assistant",
+      "调用前调用后",
+      {
+        reasoning: "检查结果",
+        images: [{
+          path: "D:\\cat.png",
+          name: "cat.png",
+          mimeType: "image/png",
+          previewUrl: "data:image/png;base64,large",
+        }],
+        documents: [{
+          path: "D:\\notes.txt",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          text: "notes",
+          characterCount: 5,
+        }],
+        toolCalls: [call],
+        parts: [
+          { type: "text", text: "调用前" },
+          { type: "dynamic-tool", call },
+          {
+            type: "data-tool-result",
+            data: {
+              toolCallId: call.id,
+              status: "completed",
+              resultPresent: true,
+              errorPresent: false,
+              result: "文件内容",
+            },
+          },
+          { type: "reasoning", text: "检查结果" },
+          {
+            type: "data-image-attachment",
+            data: {
+              path: "D:\\cat.png",
+              name: "cat.png",
+              mimeType: "image/png",
+              previewUrl: "data:image/png;base64,large",
+            },
+          },
+          {
+            type: "data-document-attachment",
+            data: {
+              path: "D:\\notes.txt",
+              name: "notes.txt",
+              mimeType: "text/plain",
+              text: "notes",
+              characterCount: 5,
+            },
+          },
+          { type: "text", text: "调用后" },
+        ],
+      },
+    )]);
+    closeStore(store);
+
+    const reopened = createStore(databasePath);
+    const restored = reopened.loadMessages(conversation.id)[0];
+
+    expect(restored?.contextUsage).toBeUndefined();
+    expect(restored?.parts?.map((part) => part.type)).toEqual([
+      "text",
+      "dynamic-tool",
+      "data-tool-result",
+      "reasoning",
+      "data-image-attachment",
+      "data-document-attachment",
+      "text",
+    ]);
+    expect(restored?.images?.[0]).not.toHaveProperty("previewUrl");
+    expect(restored?.parts?.find((part) => part.type === "data-image-attachment"))
+      .not.toHaveProperty("data.previewUrl");
   });
 
   it("retains only the 30 newest conversations", () => {

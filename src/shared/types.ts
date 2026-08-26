@@ -2,6 +2,29 @@ export type ModelMode = "huggingface" | "local";
 
 export type WindowMode = "pet" | "chat" | "settings" | "onboarding";
 
+export interface WindowPosition {
+  x: number;
+  y: number;
+}
+
+export interface WindowBounds extends WindowPosition {
+  width: number;
+  height: number;
+}
+
+export interface WindowUiState {
+  layoutVersion: 1;
+  petPosition?: WindowPosition;
+  workbenchBounds?: WindowBounds;
+  workbenchMaximized: boolean;
+  sidebarCollapsed: boolean;
+}
+
+export interface WorkbenchWindowSnapshot {
+  maximized: boolean;
+  sidebarCollapsed: boolean;
+}
+
 export interface CaptionWindowBounds {
   x: number;
   y: number;
@@ -218,6 +241,12 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /**
+   * Ordered renderer parts used to restore interleaved text, reasoning,
+   * attachments, and tool activity. Older history rows omit this field and
+   * continue to use the flattened fields below.
+   */
+  parts?: ChatMessagePart[];
   images?: ChatImage[];
   documents?: ChatDocument[];
   reasoning?: string;
@@ -279,6 +308,23 @@ export interface ChatToolCall {
   result?: string;
   error?: string;
 }
+
+export interface ChatMessageToolResultPart {
+  toolCallId: string;
+  status: Extract<ChatToolCallStatus, "completed" | "denied" | "error">;
+  resultPresent: boolean;
+  errorPresent: boolean;
+  result?: string;
+  error?: string;
+}
+
+export type ChatMessagePart =
+  | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
+  | { type: "data-image-attachment"; data: ChatImage }
+  | { type: "data-document-attachment"; data: ChatDocument }
+  | { type: "dynamic-tool"; call: ChatToolCall }
+  | { type: "data-tool-result"; data: ChatMessageToolResultPart };
 
 export interface ChatToolDefinition {
   id: string;
@@ -368,12 +414,22 @@ export interface DesktopPetApi {
   deleteChatConversations(conversationIds: string[]): Promise<void>;
   setWindowMode(mode: WindowMode): Promise<void>;
   hideWindow(): Promise<void>;
+  minimizeWorkbench(): Promise<void>;
+  toggleMaximizeWorkbench(): Promise<WorkbenchWindowSnapshot>;
+  getWorkbenchWindowState(): Promise<WorkbenchWindowSnapshot>;
+  setSidebarCollapsed(collapsed: boolean): Promise<WorkbenchWindowSnapshot>;
   openExternal(url: string): Promise<void>;
   copyText(text: string): Promise<void>;
   startChat(request: ChatRequest): void;
   abortChat(requestId: string): void;
   resolveToolApproval(requestId: string, toolCallId: string, approved: boolean): void;
+  onPrepareQuit(listener: (token: string) => void): () => void;
+  acknowledgeQuitPreparation(
+    token: string,
+    result: { ok: boolean; error?: string },
+  ): void;
   onChatEvent(listener: (event: ChatEvent) => void): () => void;
+  onBootstrap(listener: (data: BootstrapData) => void): () => void;
   onRuntimeState(listener: (state: RuntimeState) => void): () => void;
   onSpeechState(listener: (state: SpeechState) => void): () => void;
   onSpeechEvent(listener: (event: SpeechEvent) => void): () => void;
@@ -382,5 +438,6 @@ export interface DesktopPetApi {
   onCaptionEvent(listener: (event: CaptionEvent) => void): () => void;
   onCaptionConfig(listener: (config: CaptionConfig) => void): () => void;
   onOpenView(listener: (mode: WindowMode) => void): () => void;
+  onWorkbenchWindowState(listener: (state: WorkbenchWindowSnapshot) => void): () => void;
   notifyViewReady(mode: WindowMode): void;
 }

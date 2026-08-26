@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  cancelActiveGenerationForUnmount,
   conversationOperationUiPolicy,
   continuationRequestMessages,
   isNearChatBottom,
@@ -7,7 +8,90 @@ import {
   regenerationBaseMessages,
   shouldResetComposer,
   shouldResetComposerAfterInitialization,
+  terminalizeAssistantGeneration,
 } from "./chat-panel-state";
+
+describe("chat panel generation cleanup", () => {
+  it("aborts an unmounted request and persists a terminal tool state", () => {
+    const abortChat = vi.fn();
+    const messages = cancelActiveGenerationForUnmount(
+      "request-1",
+      "assistant-1",
+      [{
+        id: "assistant-1",
+        role: "assistant",
+        content: "",
+        createdAt: 1,
+        toolCalls: [{
+          id: "tool-1",
+          name: "mcp__files__write",
+          displayName: "files · write",
+          arguments: "{}",
+          status: "pending-approval",
+          requiresApproval: true,
+        }],
+      }],
+      abortChat,
+    );
+
+    expect(abortChat).toHaveBeenCalledWith("request-1");
+    expect(messages[0]).toMatchObject({
+      content: "（团子停下了）",
+      toolCalls: [{
+        status: "error",
+        error: "任务因聊天界面关闭而取消。",
+      }],
+    });
+  });
+
+  it("terminalizes pending and running tools when the user stops generation", () => {
+    const messages = terminalizeAssistantGeneration(
+      "assistant-1",
+      [{
+        id: "assistant-1",
+        role: "assistant",
+        content: "partial answer",
+        createdAt: 1,
+        toolCalls: [
+          {
+            id: "pending",
+            name: "write_file",
+            displayName: "write_file",
+            arguments: "{}",
+            status: "pending-approval",
+            requiresApproval: true,
+          },
+          {
+            id: "running",
+            name: "read_file",
+            displayName: "read_file",
+            arguments: "{}",
+            status: "running",
+            requiresApproval: false,
+          },
+          {
+            id: "completed",
+            name: "list_files",
+            displayName: "list_files",
+            arguments: "{}",
+            status: "completed",
+            requiresApproval: false,
+            result: "done",
+          },
+        ],
+      }],
+      "（团子停下了）",
+      "任务已由用户停止。",
+    );
+
+    expect(messages[0].content).toBe("partial answer");
+    expect(messages[0].toolCalls).toMatchObject([
+      { id: "pending", status: "error", error: "任务已由用户停止。" },
+      { id: "running", status: "error", error: "任务已由用户停止。" },
+      { id: "completed", status: "completed", result: "done" },
+    ]);
+  });
+});
 
 describe("chat stream scrolling", () => {
   it("keeps following only while the reader remains near the bottom", () => {

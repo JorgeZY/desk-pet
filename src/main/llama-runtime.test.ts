@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { dynamicTool, jsonSchema } from "ai";
+import { promises as fs } from "node:fs";
+import { EventEmitter } from "node:events";
 import { DEFAULT_CONFIG } from "./config-store";
+import type { RuntimeState } from "../shared/types";
+import type { ToolProvider } from "./agent/tool-provider";
+import type { AgentToolDescriptor } from "./agent/tool-provider";
+import { McpToolProvider } from "./agent/mcp-tool-provider";
 import {
-  buildChatCompletionMessages,
+  DIAGNOSTIC_TEXT_BYTE_LIMIT,
+  utf8ByteLength,
+} from "./agent/tool-result-budget";
+import {
   buildLlamaCommand,
   contextUsageFromCompletion,
   LlamaRuntime,
@@ -9,6 +19,24 @@ import {
 } from "./llama-runtime";
 
 afterEach(() => vi.restoreAllMocks());
+
+function stoppableChild(pid: number) {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    exitCode: number | null;
+    killed: boolean;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.pid = pid;
+  child.exitCode = null;
+  child.killed = false;
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    child.emit("exit", 0, null);
+    return true;
+  });
+  return child;
+}
 
 describe("contextUsageFromCompletion", () => {
   it("includes cached and newly processed llama.cpp prompt tokens", () => {
@@ -59,257 +87,25 @@ describe("buildLlamaCommand", () => {
     expect(command.args).toContain("D:\\models\\vision-mmproj.gguf");
   });
 
-  it("converts attached images to OpenAI-compatible image_url content", async () => {
-    const messages = await buildChatCompletionMessages(
-      DEFAULT_CONFIG,
-      [{
-        id: "user-image",
-        role: "user",
-        content: "这是什么？",
-        images: [{ path: "D:\\images\\cat.png", name: "cat.png", mimeType: "image/png" }],
-        createdAt: 1,
-      }],
-      {
-        visionEnabled: true,
-        getImageSize: async () => 3,
-        readImage: async () => Buffer.from([1, 2, 3]),
-      },
-    );
-
-    expect(messages[1]).toEqual({
-      role: "user",
-      content: [
-        { type: "text", text: "这是什么？" },
-        { type: "image_url", image_url: { url: "data:image/png;base64,AQID" } },
-      ],
-    });
-  });
-
-  it("omits unavailable historical images and reports a recoverable warning", async () => {
-    const warnings: string[] = [];
-    const messages = await buildChatCompletionMessages(
-      DEFAULT_CONFIG,
-      [
-        {
-          id: "old-image",
-          role: "user",
-          content: "看看这张图",
-          images: [{ path: "D:\\images\\gone.png", name: "gone.png", mimeType: "image/png" }],
-          createdAt: 1,
-        },
-        { id: "old-answer", role: "assistant", content: "看到了", createdAt: 2 },
-        { id: "new-text", role: "user", content: "继续聊", createdAt: 3 },
-      ],
-      {
-        visionEnabled: true,
-        getImageSize: async () => { throw new Error("ENOENT"); },
-        onWarning: (message) => warnings.push(message),
-      },
-    );
-
-    expect(messages[1]).toEqual({ role: "user", content: "看看这张图" });
-    expect(messages[3]).toEqual({ role: "user", content: "继续聊" });
-    expect(warnings).toEqual(["历史图片 gone.png 已不可用，已跳过。"]);
-  });
-
-  it("caps images and bytes across the entire completion request", async () => {
-    const warnings: string[] = [];
-    const readImage = vi.fn(async () => Buffer.from([1]));
-    const imageMessages = Array.from({ length: 5 }, (_value, index) => ({
-      id: `image-${index}`,
-      role: "user" as const,
-      content: `图片 ${index}`,
-      images: [{
-        path: `D:\\images\\${index}.png`,
-        name: `${index}.png`,
-        mimeType: "image/png" as const,
-      }],
-      createdAt: index,
-    }));
-
-    const messages = await buildChatCompletionMessages(DEFAULT_CONFIG, imageMessages, {
-      visionEnabled: true,
-      getImageSize: async () => 3 * 1024 * 1024,
-      readImage,
-      onWarning: (message) => warnings.push(message),
-    });
-
-    expect(readImage).toHaveBeenCalledTimes(3);
-    expect(readImage).toHaveBeenNthCalledWith(1, "D:\\images\\4.png");
-    expect(readImage).toHaveBeenNthCalledWith(3, "D:\\images\\2.png");
-    expect(messages[1]).toEqual({ role: "user", content: "图片 0" });
-    expect(warnings).toContain("为保护内存，本次请求图片合计不超过 10 MB，较早图片已跳过。");
-  });
-
-  it("keeps no more than four recent images across message history", async () => {
-    const warnings: string[] = [];
-    const readImage = vi.fn(async () => Buffer.from([1]));
-    const imageMessages = Array.from({ length: 5 }, (_value, index) => ({
-      id: `image-count-${index}`,
-      role: "user" as const,
-      content: `图片 ${index}`,
-      images: [{
-        path: `D:\\images\\count-${index}.png`,
-        name: `count-${index}.png`,
-        mimeType: "image/png" as const,
-      }],
-      createdAt: index,
-    }));
-
-    await buildChatCompletionMessages(DEFAULT_CONFIG, imageMessages, {
-      visionEnabled: true,
-      getImageSize: async () => 1,
-      readImage,
-      onWarning: (message) => warnings.push(message),
-    });
-
-    expect(readImage).toHaveBeenCalledTimes(4);
-    expect(readImage).toHaveBeenNthCalledWith(1, "D:\\images\\count-4.png");
-    expect(readImage).toHaveBeenNthCalledWith(4, "D:\\images\\count-1.png");
-    expect(warnings).toContain("为保护内存，本次请求仅发送最近 4 张图片，较早图片已跳过。");
-  });
-
-  it("strips all historical image metadata when vision is disabled", async () => {
-    const readImage = vi.fn(async () => Buffer.from([1]));
-    const messages = await buildChatCompletionMessages(
-      { ...DEFAULT_CONFIG, mmprojPath: "D:\\models\\vision-mmproj.gguf" },
-      [{
-        id: "old-image",
-        role: "user",
-        content: "只保留文本",
-        images: [{ path: "D:\\images\\cat.png", name: "cat.png", mimeType: "image/png" }],
-        createdAt: 1,
-      }],
-      { visionEnabled: false, readImage },
-    );
-
-    expect(readImage).not.toHaveBeenCalled();
-    expect(messages[1]).toEqual({ role: "user", content: "只保留文本" });
-  });
-
-  it("adds an MCP servers config only when custom tools are configured", () => {
+  it("keeps MCP configuration app-owned instead of passing it to llama.cpp", () => {
     const path = "D:\\tools\\mcp.json";
     const command = buildLlamaCommand({ ...DEFAULT_CONFIG, mcpServersConfigPath: path });
-    expect(command.command).toBe(process.platform === "win32" ? "llama-server.exe" : "llama-server");
-    expect(command.args[0]).not.toBe("serve");
-    expect(command.args.slice(
-      command.args.indexOf("--mcp-servers-config"),
-      command.args.indexOf("--mcp-servers-config") + 2,
-    )).toEqual(["--mcp-servers-config", path]);
-    expect(buildLlamaCommand(DEFAULT_CONFIG).args).not.toContain("--mcp-servers-config");
+    expect(command.command).toBe("llama");
+    expect(command.args[0]).toBe("serve");
+    expect(command.args).not.toContain("--mcp-servers-config");
+    expect(command.args).not.toContain(path);
   });
 
-  it("uses the sibling dedicated server for an absolute unified llama path with MCP", () => {
+  it("does not change an absolute unified llama path when MCP is configured", () => {
     const command = buildLlamaCommand({
       ...DEFAULT_CONFIG,
       executable: "C:\\llama.cpp\\llama.exe",
       mcpServersConfigPath: "D:\\tools\\mcp.json",
     });
 
-    expect(command.command).toBe("C:\\llama.cpp\\llama-server.exe");
-    expect(command.args[0]).not.toBe("serve");
-  });
-
-  it("injects document text and replays completed tool calls", async () => {
-    const messages = await buildChatCompletionMessages(DEFAULT_CONFIG, [
-      {
-        id: "document",
-        role: "user",
-        content: "总结附件",
-        documents: [{
-          path: "D:\\docs\\notes.pdf",
-          name: "notes.pdf",
-          mimeType: "application/pdf",
-          text: "附件正文",
-          characterCount: 4,
-        }],
-        createdAt: 1,
-      },
-      {
-        id: "assistant",
-        role: "assistant",
-        content: "最终回答",
-        toolCalls: [{
-          id: "call-1",
-          name: "read_file",
-          displayName: "Read file",
-          arguments: "{\"path\":\"notes.txt\"}",
-          status: "completed",
-          requiresApproval: false,
-          result: "文件内容",
-        }],
-        createdAt: 2,
-      },
-    ], { visionEnabled: false });
-
-    expect(messages[1]?.content).toContain("<document name=\"notes.pdf\">");
-    expect(messages.slice(2)).toEqual([
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: [{
-          id: "call-1",
-          type: "function",
-          function: { name: "read_file", arguments: "{\"path\":\"notes.txt\"}" },
-        }],
-      },
-      { role: "tool", content: "文件内容", tool_call_id: "call-1" },
-      { role: "assistant", content: "最终回答" },
-    ]);
-  });
-
-  it("budgets documents across the request context and keeps the newest attachment first", async () => {
-    const warnings: string[] = [];
-    const config = {
-      ...DEFAULT_CONFIG,
-      contextSize: 1024,
-      maxTokens: 128,
-      systemPrompt: "系统",
-    };
-    const messages = await buildChatCompletionMessages(config, [
-      {
-        id: "old-document",
-        role: "user",
-        content: "旧问题",
-        documents: [{
-          path: "D:\\docs\\old.txt",
-          name: "old.txt",
-          mimeType: "text/plain",
-          text: "旧".repeat(400),
-          characterCount: 400,
-        }],
-        createdAt: 1,
-      },
-      { id: "answer", role: "assistant", content: "旧回答", createdAt: 2 },
-      {
-        id: "new-document",
-        role: "user",
-        content: "新问题",
-        documents: [{
-          path: "D:\\docs\\new.txt",
-          name: "new.txt",
-          mimeType: "text/plain",
-          text: "新".repeat(400),
-          characterCount: 400,
-        }],
-        createdAt: 3,
-      },
-    ], {
-      visionEnabled: false,
-      onWarning: (message) => warnings.push(message),
-    });
-
-    expect(messages[3]?.content).toContain("新".repeat(20));
-    expect(messages[1]).toEqual({ role: "user", content: "旧问题" });
-    const requestTextBytes = messages.reduce((total, message) => (
-      total + (typeof message.content === "string" ? Buffer.byteLength(message.content, "utf8") : 0)
-    ), 0);
-    expect(requestTextBytes).toBeLessThanOrEqual(
-      config.contextSize - config.maxTokens - 3 * 16 - 256,
-    );
-    expect(warnings).toEqual([
-      "附件内容已按 1,024 token 上下文预算截断，优先保留最近消息中的文档。",
-    ]);
+    expect(command.command).toBe("C:\\llama.cpp\\llama.exe");
+    expect(command.args[0]).toBe("serve");
+    expect(command.args).not.toContain("--mcp-servers-config");
   });
 
   it("keeps medium reasoning within half of the configured output budget", () => {
@@ -331,5 +127,330 @@ describe("buildLlamaCommand", () => {
     await vi.waitFor(() => expect(runtime.snapshot.message).toContain("自动下载或导入本地 GGUF"));
     expect(allowDownload).toBe(false);
     expect(runtime.snapshot.phase).toBe("stopped");
+  });
+
+  it("rejects a healthy server that lacks exact token counting", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).endsWith("/health")) return new Response("ok");
+      return new Response("missing", { status: 404 });
+    });
+    const runtime = new LlamaRuntime(DEFAULT_CONFIG);
+
+    await expect(runtime.start()).resolves.toMatchObject({
+      phase: "error",
+      error: expect.stringContaining("精确 token 计数"),
+    });
+  });
+
+  it("does not become ready after stop wins an in-flight health probe", async () => {
+    let resolveHealth!: (response: Response) => void;
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      new Promise<Response>((resolve) => { resolveHealth = resolve; }));
+    const runtime = new LlamaRuntime(DEFAULT_CONFIG);
+
+    const starting = runtime.start();
+    await vi.waitFor(() => expect(runtime.snapshot.phase).toBe("starting"));
+    await runtime.stop();
+    resolveHealth(new Response("ok"));
+
+    expect((await starting).phase).toBe("stopped");
+    expect(runtime.snapshot.phase).toBe("stopped");
+  });
+
+  it("does not revive a launched child when stop wins its readiness probe", async () => {
+    let resolveHealth!: (response: Response) => void;
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      new Promise<Response>((resolve) => { resolveHealth = resolve; }));
+    const runtime = new LlamaRuntime(DEFAULT_CONFIG);
+    const child = stoppableChild(4_301);
+    const internals = runtime as unknown as {
+      generation: number;
+      child: typeof child | null;
+      state: RuntimeState;
+      waitUntilReady(generation: number): Promise<void>;
+    };
+    internals.generation = 1;
+    internals.child = child;
+    internals.state = {
+      phase: "starting",
+      visionEnabled: false,
+      endpoint: runtime.endpoint,
+      message: "starting",
+      updatedAt: 1,
+    };
+    const phases: RuntimeState["phase"][] = [];
+    runtime.on("state", (state: RuntimeState) => phases.push(state.phase));
+
+    const waiting = internals.waitUntilReady(1);
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    await runtime.stop();
+    resolveHealth(new Response("ok"));
+    await waiting;
+
+    const stoppingIndex = phases.indexOf("stopping");
+    expect(stoppingIndex).toBeGreaterThanOrEqual(0);
+    expect(phases.slice(stoppingIndex)).not.toContain("ready");
+    expect(runtime.snapshot.phase).toBe("stopped");
+  });
+
+  it("does not revive a child that exits during its readiness probe", async () => {
+    let resolveHealth!: (response: Response) => void;
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      new Promise<Response>((resolve) => { resolveHealth = resolve; }));
+    const runtime = new LlamaRuntime(DEFAULT_CONFIG);
+    const child = stoppableChild(4_302);
+    const internals = runtime as unknown as {
+      generation: number;
+      child: typeof child | null;
+      state: RuntimeState;
+      waitUntilReady(generation: number): Promise<void>;
+      handleUnexpectedRuntimeExit(message: string): void;
+    };
+    internals.generation = 1;
+    internals.child = child;
+    internals.state = {
+      phase: "starting",
+      visionEnabled: false,
+      endpoint: runtime.endpoint,
+      message: "starting",
+      updatedAt: 1,
+    };
+
+    const waiting = internals.waitUntilReady(1);
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    internals.child = null;
+    internals.handleUnexpectedRuntimeExit("llama exited during probe");
+    resolveHealth(new Response("ok"));
+    await waiting;
+
+    expect(runtime.snapshot).toMatchObject({
+      phase: "error",
+      error: "llama exited during probe",
+    });
+    await runtime.stop();
+  });
+
+  it("stops while shared tool discovery is pending even when fetch ignores abort", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      if (String(input).endsWith("/health")) {
+        return Promise.resolve(new Response("ok"));
+      }
+      if (String(input).endsWith("/v1/chat/completions/input_tokens")) {
+        return Promise.resolve(Response.json({ input_tokens: 8 }));
+      }
+      return new Promise<Response>(() => undefined);
+    });
+    const runtime = new LlamaRuntime(DEFAULT_CONFIG);
+    await runtime.start();
+    expect(runtime.snapshot.phase).toBe("ready");
+
+    const listing = expect(runtime.listTools()).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/tools"))).toBe(true);
+    });
+
+    await runtime.stop();
+    await listing;
+    expect(runtime.snapshot.phase).toBe("stopped");
+  });
+
+  it("bounds a hanging provider close during stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = new LlamaRuntime(DEFAULT_CONFIG);
+      const provider: ToolProvider = {
+        start: async () => undefined,
+        getDescriptors: () => [],
+        close: () => new Promise<void>(() => undefined),
+      };
+      const internals = runtime as unknown as {
+        toolProviders: {
+          snapshot: { providers: ToolProvider[]; descriptors: []; warnings: [] } | null;
+        };
+      };
+      internals.toolProviders.snapshot = { providers: [provider], descriptors: [], warnings: [] };
+      const logs: string[] = [];
+      runtime.on("log", (message: string) => logs.push(message));
+
+      const stopping = runtime.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopping;
+
+      expect(runtime.snapshot.phase).toBe("stopped");
+      expect(logs.some((message) => message.includes("关闭超时"))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for stale providers to close before starting replacements", async () => {
+    let releaseClose!: () => void;
+    const oldProvider: ToolProvider = {
+      start: async () => undefined,
+      getDescriptors: () => [],
+      close: vi.fn(() => new Promise<void>((resolve) => { releaseClose = resolve; })),
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("missing", { status: 404 }));
+    const runtime = new LlamaRuntime(DEFAULT_CONFIG);
+    const internals = runtime as unknown as {
+      state: RuntimeState;
+      toolProviders: {
+        snapshot: { providers: ToolProvider[]; descriptors: []; warnings: [] } | null;
+        getSnapshot(signal: AbortSignal): Promise<unknown>;
+      };
+    };
+    internals.state = {
+      phase: "ready",
+      visionEnabled: false,
+      endpoint: runtime.endpoint,
+      message: "ready",
+      updatedAt: 1,
+    };
+    internals.toolProviders.snapshot = {
+      providers: [oldProvider],
+      descriptors: [],
+      warnings: [],
+    };
+
+    runtime.updateConfig({ ...DEFAULT_CONFIG, temperature: 0.3 });
+    const replacement = internals.toolProviders.getSnapshot(new AbortController().signal);
+    await vi.waitFor(() => expect(oldProvider.close).toHaveBeenCalledTimes(1));
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    releaseClose();
+    await replacement;
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/tools"))).toBe(true);
+    await runtime.stop();
+  });
+
+  it("does not create a replacement provider once stop begins", async () => {
+    let releaseClose!: () => void;
+    const oldProvider: ToolProvider = {
+      start: async () => undefined,
+      getDescriptors: () => [],
+      close: vi.fn(() => new Promise<void>((resolve) => { releaseClose = resolve; })),
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("missing", { status: 404 }));
+    const runtime = new LlamaRuntime(DEFAULT_CONFIG);
+    const internals = runtime as unknown as {
+      state: RuntimeState;
+      toolProviders: {
+        snapshot: { providers: ToolProvider[]; descriptors: []; warnings: [] } | null;
+      };
+    };
+    internals.state = {
+      phase: "ready",
+      visionEnabled: false,
+      endpoint: runtime.endpoint,
+      message: "ready",
+      updatedAt: 1,
+    };
+    internals.toolProviders.snapshot = {
+      providers: [oldProvider],
+      descriptors: [],
+      warnings: [],
+    };
+
+    runtime.updateConfig({ ...DEFAULT_CONFIG, temperature: 0.3 });
+    const listing = runtime.listTools();
+    const stopping = runtime.stop();
+    expect(runtime.snapshot.phase).toBe("stopping");
+    expect((await runtime.start()).phase).toBe("stopping");
+    await vi.waitFor(() => expect(oldProvider.close).toHaveBeenCalledTimes(1));
+
+    releaseClose();
+    await expect(listing).rejects.toThrow("本地模型正在停止");
+    await stopping;
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(runtime.snapshot.phase).toBe("stopped");
+  });
+
+  it("closes active tool providers after an unexpected llama exit", async () => {
+    const provider: ToolProvider = {
+      start: async () => undefined,
+      getDescriptors: () => [],
+      close: vi.fn(async () => undefined),
+    };
+    const runtime = new LlamaRuntime(DEFAULT_CONFIG);
+    const internals = runtime as unknown as {
+      abortControllers: Map<string, AbortController>;
+      toolApprovals: Map<string, { resolve: (approved: boolean) => void }>;
+      toolProviders: {
+        snapshot: { providers: ToolProvider[]; descriptors: []; warnings: [] } | null;
+      };
+      handleUnexpectedRuntimeExit(message: string): void;
+    };
+    internals.toolProviders.snapshot = {
+      providers: [provider],
+      descriptors: [],
+      warnings: [],
+    };
+    const chatController = new AbortController();
+    const resolveApproval = vi.fn();
+    internals.abortControllers.set("request-1", chatController);
+    internals.toolApprovals.set("request-1:call-1", { resolve: resolveApproval });
+
+    internals.handleUnexpectedRuntimeExit("llama exited");
+    await vi.waitFor(() => expect(provider.close).toHaveBeenCalledTimes(1));
+    expect(chatController.signal.aborted).toBe(true);
+    expect(resolveApproval).toHaveBeenCalledWith(false);
+    expect(internals.abortControllers.size).toBe(0);
+    expect(internals.toolApprovals.size).toBe(0);
+    expect(runtime.snapshot).toMatchObject({ phase: "error", error: "llama exited" });
+    await runtime.stop();
+  });
+
+  it("surfaces an isolated MCP startup failure while retaining healthy tools", async () => {
+    vi.spyOn(fs, "readFile").mockResolvedValue('{"mcpServers":{"broken":{"command":"broken"},"healthy":{"command":"healthy"}}}');
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("missing", { status: 404 }));
+    const healthyDescriptor: AgentToolDescriptor = {
+      name: "mcp__healthy__ping",
+      displayName: "healthy · ping",
+      source: "mcp",
+      requiresApproval: true,
+      tool: dynamicTool({
+        inputSchema: jsonSchema({ type: "object", properties: {} }),
+        execute: async () => "pong",
+      }),
+    };
+    const mcpProvider: ToolProvider = {
+      start: async () => undefined,
+      getDescriptors: () => [healthyDescriptor],
+      close: async () => undefined,
+    };
+    vi.spyOn(McpToolProvider, "fromConfigContents").mockImplementation((_contents, options) => {
+      options.onServerStartError?.("broken", new Error(`spawn failed: ${"坏".repeat(100_000)}`));
+      return mcpProvider as McpToolProvider;
+    });
+
+    const runtime = new LlamaRuntime({
+      ...DEFAULT_CONFIG,
+      mcpServersConfigPath: "D:\\tools\\mcp.json",
+    });
+    const internals = runtime as unknown as {
+      state: RuntimeState;
+      toolProviders: {
+        getSnapshot(signal: AbortSignal): Promise<{
+          descriptors: AgentToolDescriptor[];
+          warnings: string[];
+        }>;
+      };
+    };
+    internals.state = {
+      phase: "ready",
+      visionEnabled: false,
+      endpoint: runtime.endpoint,
+      message: "ready",
+      updatedAt: 1,
+    };
+    const snapshot = await internals.toolProviders.getSnapshot(new AbortController().signal);
+
+    expect(snapshot.descriptors.map(({ name }) => name)).toContain("mcp__healthy__ping");
+    const warning = snapshot.warnings.find((message) => message.includes("spawn failed"));
+    expect(warning).toContain("[诊断信息过长，已截断]");
+    expect(utf8ByteLength(warning ?? "")).toBeLessThanOrEqual(DIAGNOSTIC_TEXT_BYTE_LIMIT);
+    await runtime.stop();
   });
 });

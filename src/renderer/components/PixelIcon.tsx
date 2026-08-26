@@ -8,9 +8,15 @@ import {
   ExternalLink,
   FileText,
   History,
+  Captions,
+  Cat,
   Image,
+  Maximize2,
   Mic,
+  Minimize2,
   Minus,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Plus,
   RefreshCw,
@@ -50,7 +56,13 @@ export type PixelIconName =
   | "refresh"
   | "copy"
   | "continue"
-  | "chevron-down";
+  | "chevron-down"
+  | "captions"
+  | "cat"
+  | "maximize"
+  | "restore"
+  | "sidebar-close"
+  | "sidebar-open";
 
 interface PixelIconProps {
   name: PixelIconName;
@@ -82,6 +94,12 @@ const LUCIDE_ICONS: Record<PixelIconName, LucideIcon> = {
   copy: Copy,
   continue: StepForward,
   "chevron-down": ChevronDown,
+  captions: Captions,
+  cat: Cat,
+  maximize: Maximize2,
+  restore: Minimize2,
+  "sidebar-close": PanelLeftClose,
+  "sidebar-open": PanelLeftOpen,
 };
 
 export function PixelIcon({ name, className }: PixelIconProps) {

@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ImageAttachButton, ImageAttachmentTray } from "./ImageAttachments";
 import { PixelIcon, type PixelIconName } from "./PixelIcon";
+import { TooltipProvider } from "./ui/tooltip";
 import { VoiceButton } from "./VoiceButton";
 
 const ICONS: PixelIconName[] = [
@@ -29,6 +30,12 @@ const ICONS: PixelIconName[] = [
   "copy",
   "continue",
   "chevron-down",
+  "captions",
+  "cat",
+  "maximize",
+  "restore",
+  "sidebar-close",
+  "sidebar-open",
 ];
 
 describe("PixelIcon", () => {
@@ -56,11 +63,13 @@ describe("PixelIcon", () => {
 
   it("uses the Lucide image symbol for the image attachment button", () => {
     const markup = renderToStaticMarkup(
-      <ImageAttachButton
-        images={[]}
-        onChange={() => undefined}
-        onError={() => undefined}
-      />,
+      <TooltipProvider>
+        <ImageAttachButton
+          images={[]}
+          onChange={() => undefined}
+          onError={() => undefined}
+        />
+      </TooltipProvider>,
     );
 
     expect(markup).toContain('data-lucide-icon="image"');
@@ -75,30 +84,56 @@ describe("PixelIcon", () => {
       />,
     );
 
-    expect(markup).toContain("image-attachment__remove-icon");
     expect(markup).toContain('data-lucide-icon="close"');
     expect(markup).toContain('aria-label="移除 cat.png"');
   });
 
   it("renders the Lucide microphone as the centered compact button item", () => {
     const markup = renderToStaticMarkup(
-      <VoiceButton
-        speech={{
-          enabled: true,
-          phase: "ready",
-          message: "语音输入已就绪。",
-          modelDirectory: "C:/models/speech",
-          updatedAt: 1,
-        }}
-        compact
-        onPrepare={async () => undefined}
-        onStart={async () => undefined}
-        onStop={async () => undefined}
-      />,
+      <TooltipProvider>
+        <VoiceButton
+          speech={{
+            enabled: true,
+            phase: "ready",
+            message: "语音输入已就绪。",
+            modelDirectory: "C:/models/speech",
+            updatedAt: 1,
+          }}
+          compact
+          onPrepare={async () => undefined}
+          onStart={async () => undefined}
+          onStop={async () => undefined}
+        />
+      </TooltipProvider>,
     );
 
     expect(markup).toContain("lucide-mic");
-    expect(markup).toContain("voice-button__icon");
     expect(markup).toContain('data-lucide-icon="mic"');
+  });
+
+  it("renders recording feedback as an icon-only waveform", () => {
+    const markup = renderToStaticMarkup(
+      <TooltipProvider>
+        <VoiceButton
+          speech={{
+            enabled: true,
+            phase: "recording",
+            message: "正在聆听…",
+            modelDirectory: "C:/models/speech",
+            activeSessionId: "speech-1",
+            level: 0.7,
+            updatedAt: 1,
+          }}
+          compact
+          onPrepare={async () => undefined}
+          onStart={async () => undefined}
+          onStop={async () => undefined}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(markup).toContain('aria-label="录音中，松开结束"');
+    expect(markup).toContain("animate-pulse");
+    expect(markup).not.toContain(">录音中，松开结束<");
   });
 });

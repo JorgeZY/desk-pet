@@ -1,19 +1,33 @@
-# Project instructions
+# Repository Guidelines
 
-## Release workflow
+## Project Structure & Module Organization
 
-Use this workflow for every desk-pet release unless the user explicitly requests a different scope.
+`src/main/` owns Electron lifecycle, runtimes, storage, and privileged IPC. `src/preload/` exposes the narrow `contextBridge` API; keep system access out of the sandboxed React code in `src/renderer/`. Shared IPC types and helpers live in `src/shared/`. Tests are colocated as `*.test.ts(x)`. Use `assets/` for source artwork/icons, `src/renderer/public/` for served media, `scripts/` for model helpers, and `docs/` for design notes. Build outputs and local `models/` contents are not source.
 
-1. Start from an up-to-date `main` and create a `codex/<version>-<topic>` branch. Do not release from a dirty working tree.
-2. Update `package.json` and `package-lock.json` to the requested version with `npm version <version> --no-git-tag-version`.
-3. Run `npm run check`. For Windows/Electron changes, also verify the relevant unpacked or packaged runtime path.
-4. Commit and push the branch, create a PR against `main`, and comment `@codex review`.
-5. Fix every P0 and P1 Codex finding. Fix lower-severity findings when the change is small and release-safe. Re-run `npm run check` after review fixes.
-6. Require the Windows CI job to pass on the final commit before merging. Use a merge commit, matching the repository's existing history.
-7. Build the Windows NSIS installer from the merged `main` with `npm run dist:win`.
-8. This project currently permits unsigned Windows releases: `build.win.forceCodeSigning` is `false`. Verify the final installer with `Get-AuthenticodeSignature`; it must report the observed status honestly in release notes. Never claim an unsigned binary is signed.
-9. Compute SHA-256 for every uploaded installer with `Get-FileHash -Algorithm SHA256`.
-10. Create and push annotated tag `v<version>` at the verified `main` commit. Create a non-draft GitHub Release, upload the installer, blockmap, and `latest.yml`, and include features, fixes, unsigned-publisher warning, and installer SHA-256.
-11. Verify through the GitHub API that the tag, release target, asset names, sizes, and digests are correct. Confirm `main` CI passes after merge and leave the local worktree clean.
+## Build, Test, and Development Commands
 
-Never overwrite an existing tag or Release asset silently. If a version already exists, stop and ask for a new version or explicit replacement authority.
+- `npm ci` installs the locked Node dependencies (Node 22.12+).
+- `npm run dev` starts the TypeScript/Vite watchers and Electron.
+- `npm run typecheck` checks the strict main and renderer TypeScript projects.
+- `npm test` runs the Vitest suite once.
+- `npm run build` type-checks and builds main and renderer outputs.
+- `npm run check` runs the full pre-PR validation sequence.
+- `npm run dist:win` creates the Windows x64 NSIS installer in `release/`.
+
+## Coding Style & Naming Conventions
+
+Use strict TypeScript/TSX, two-space indentation, semicolons, double quotes, and existing trailing-comma patterns. Use `PascalCase` for components/types, `camelCase` for functions/variables, and kebab-case filenames (`live-caption-runtime.ts`). Type IPC payloads through `src/shared/types.ts`. No formatter or linter is configured; match nearby code.
+
+## Testing Guidelines
+
+Use Vitest and `vi` for mocks. Place tests beside the unit and name behavior explicitly. Add regression coverage for IPC validation, migrations, runtime states, and UI accessibility. There is no numeric coverage gate; behavior changes should include relevant tests. Run `npm run check` before a PR.
+
+## Commit & Pull Request Guidelines
+
+Follow Conventional Commits: `feat: add Windows live captions`, `fix: preserve live caption preferences`, or `chore: document release workflow`. Keep commits scoped and imperative. PRs must explain impact and validation, link issues when applicable, and include screenshots for visual changes. Windows CI must pass; use a merge commit.
+
+## Security, Configuration & Releases
+
+Bind llama.cpp to `127.0.0.1` and expose privileges only through validated preload IPC. Do not commit models, generated `.codex/` state, secrets, or machine-specific paths. Development models belong in `models/`; packaged models live beside the executable.
+
+For releases, work on `codex/<version>-<topic>`, run `npm run check`, open a PR, request `@codex review`, and fix all P0/P1 findings before merge. Build from merged `main`. Windows releases are intentionally unsigned (`forceCodeSigning: false`): report that status honestly, verify Authenticode, publish SHA-256 hashes, and never replace an existing tag or asset without explicit approval.

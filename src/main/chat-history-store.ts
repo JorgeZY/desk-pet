@@ -6,6 +6,7 @@ import type {
   ChatDocument,
   ChatImage,
   ChatMessage,
+  ChatMessagePart,
   ChatToolCall,
 } from "../shared/types";
 
@@ -69,23 +70,77 @@ function serializeToolCalls(toolCalls?: ChatToolCall[]): string | null {
   return toolCalls?.length ? JSON.stringify(toolCalls) : null;
 }
 
-function parseContextUsage(value: string | null): ChatContextUsage | undefined {
-  if (!value) return undefined;
+interface PersistedMessageMetadata {
+  version: 1;
+  contextUsage?: ChatContextUsage;
+  parts?: ChatMessagePart[];
+}
+
+function parseContextUsage(value: unknown): ChatContextUsage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const usage = value as Partial<ChatContextUsage>;
+  if (
+    typeof usage.promptTokens !== "number" ||
+    typeof usage.completionTokens !== "number" ||
+    typeof usage.totalTokens !== "number"
+  ) return undefined;
+  return {
+    promptTokens: usage.promptTokens,
+    completionTokens: usage.completionTokens,
+    totalTokens: usage.totalTokens,
+  };
+}
+
+function parseMessageMetadata(value: string | null): {
+  contextUsage?: ChatContextUsage;
+  parts?: ChatMessagePart[];
+} {
+  if (!value) return {};
   try {
-    const usage = JSON.parse(value) as Partial<ChatContextUsage>;
-    if (
-      typeof usage.promptTokens !== "number" ||
-      typeof usage.completionTokens !== "number" ||
-      typeof usage.totalTokens !== "number"
-    ) return undefined;
+    const parsed = JSON.parse(value) as unknown;
+    const legacyUsage = parseContextUsage(parsed);
+    if (legacyUsage) return { contextUsage: legacyUsage };
+    if (!parsed || typeof parsed !== "object") return {};
+    const metadata = parsed as Partial<PersistedMessageMetadata>;
+    if (metadata.version !== 1) return {};
+    const contextUsage = parseContextUsage(metadata.contextUsage);
+    const parts = Array.isArray(metadata.parts) && metadata.parts.length
+      ? metadata.parts as ChatMessagePart[]
+      : undefined;
     return {
-      promptTokens: usage.promptTokens,
-      completionTokens: usage.completionTokens,
-      totalTokens: usage.totalTokens,
+      ...(contextUsage ? { contextUsage } : {}),
+      ...(parts ? { parts } : {}),
     };
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+function serializeMessageMetadata(message: ChatMessage): string | null {
+  const parts = sanitizeMessageParts(message.parts);
+  if (!parts?.length) {
+    return message.contextUsage ? JSON.stringify(message.contextUsage) : null;
+  }
+  const metadata: PersistedMessageMetadata = {
+    version: 1,
+    ...(message.contextUsage ? { contextUsage: message.contextUsage } : {}),
+    parts,
+  };
+  return JSON.stringify(metadata);
+}
+
+function sanitizeMessageParts(parts?: ChatMessagePart[]): ChatMessagePart[] | undefined {
+  if (!parts?.length) return undefined;
+  return parts.map((part) => part.type === "data-image-attachment"
+    ? {
+        ...part,
+        data: {
+          path: part.data.path,
+          name: part.data.name,
+          mimeType: part.data.mimeType,
+        },
+      }
+    : part);
 }
 
 function conversationFromRow(row: ConversationRow): ChatConversation {
@@ -190,16 +245,17 @@ export class ChatHistoryStore {
       const images = parseImages(row.images_json);
       const documents = parseJsonArray<ChatDocument>(row.documents_json);
       const toolCalls = parseJsonArray<ChatToolCall>(row.tool_calls_json);
-      const contextUsage = parseContextUsage(row.context_usage_json);
+      const metadata = parseMessageMetadata(row.context_usage_json);
       return {
         id: row.id,
         role: row.role,
         content: row.content,
+        ...(metadata.parts ? { parts: metadata.parts } : {}),
         ...(row.reasoning ? { reasoning: row.reasoning } : {}),
         ...(images ? { images } : {}),
         ...(documents ? { documents } : {}),
         ...(toolCalls ? { toolCalls } : {}),
-        ...(contextUsage ? { contextUsage } : {}),
+        ...(metadata.contextUsage ? { contextUsage: metadata.contextUsage } : {}),
         createdAt: row.created_at,
       };
     });
@@ -229,7 +285,7 @@ export class ChatHistoryStore {
           serializeImages(message.images),
           serializeDocuments(message.documents),
           serializeToolCalls(message.toolCalls),
-          message.contextUsage ? JSON.stringify(message.contextUsage) : null,
+          serializeMessageMetadata(message),
           message.createdAt,
         );
       });
