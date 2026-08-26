@@ -42,6 +42,12 @@ describe("LlamaRuntime local HTTP integration", () => {
         }]));
         return;
       }
+      if (request.url === "/v1/chat/completions/input_tokens") {
+        await readBody(request);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end('{"input_tokens":32}');
+        return;
+      }
       if (request.url === "/v1/chat/completions") {
         requestPayload = JSON.parse(await readBody(request)) as Record<string, unknown>;
         response.writeHead(200, {
@@ -49,9 +55,10 @@ describe("LlamaRuntime local HTTP integration", () => {
           "cache-control": "no-cache",
         });
         response.write(
-          'data: {"choices":[{"delta":{"reasoning_content":"先想一想"}}]}\n\n',
+          'data: {"id":"chatcmpl-1","created":1,"model":"desk-pet-model","choices":[{"delta":{"role":"assistant","reasoning_content":"先想一想"},"finish_reason":null}]}\n\n',
         );
-        response.write('data: {"choices":[{"delta":{"content":"你好"}}]}\n\n');
+        response.write('data: {"id":"chatcmpl-1","created":1,"model":"desk-pet-model","choices":[{"delta":{"content":"你好"},"finish_reason":null}]}\n\n');
+        response.write('data: {"id":"chatcmpl-1","created":1,"model":"desk-pet-model","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}\n\n');
         response.end("data: [DONE]\n\n");
         return;
       }
@@ -118,11 +125,13 @@ describe("LlamaRuntime local HTTP integration", () => {
       reasoning_effort: "medium",
       thinking_budget_tokens: 256,
       chat_template_kwargs: { enable_thinking: true, reasoning_effort: "medium" },
+      parallel_tool_calls: false,
     });
   });
 
   it("runs a streamed builtin tool call and continues to the final answer", async () => {
     let completionCount = 0;
+    let tokenCountRequests = 0;
     let toolPayload: Record<string, unknown> | undefined;
     const server = createServer(async (request, response) => {
       if (request.url === "/health") {
@@ -157,13 +166,21 @@ describe("LlamaRuntime local HTTP integration", () => {
         response.end(JSON.stringify({ plain_text_response: "文件里的内容" }));
         return;
       }
+      if (request.url === "/v1/chat/completions/input_tokens") {
+        tokenCountRequests += 1;
+        await readBody(request);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end('{"input_tokens":48}');
+        return;
+      }
       if (request.url === "/v1/chat/completions") {
         completionCount += 1;
         const body = JSON.parse(await readBody(request)) as { messages?: unknown[] };
         response.writeHead(200, { "content-type": "text/event-stream" });
         if (completionCount === 1) {
-          response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_file","arguments":"{\\"path\\":"}}]}}]}\n\n');
-          response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"notes.txt\\"}"}}]}}]}\n\n');
+          response.write('data: {"id":"chatcmpl-tool","created":1,"model":"desk-pet-model","choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":"}}]},"finish_reason":null}]}\n\n');
+          response.write('data: {"id":"chatcmpl-tool","created":1,"model":"desk-pet-model","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"notes.txt\\"}"}}]},"finish_reason":null}]}\n\n');
+          response.write('data: {"id":"chatcmpl-tool","created":1,"model":"desk-pet-model","choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n');
           response.end("data: [DONE]\n\n");
         } else {
           expect(body.messages?.at(-1)).toEqual({
@@ -171,7 +188,8 @@ describe("LlamaRuntime local HTTP integration", () => {
             content: "文件里的内容",
             tool_call_id: "call-1",
           });
-          response.write('data: {"choices":[{"delta":{"content":"已经读取完成"}}]}\n\n');
+          response.write('data: {"id":"chatcmpl-final","created":2,"model":"desk-pet-model","choices":[{"delta":{"role":"assistant","content":"已经读取完成"},"finish_reason":null}]}\n\n');
+          response.write('data: {"id":"chatcmpl-final","created":2,"model":"desk-pet-model","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14,"completion_tokens":3,"total_tokens":17}}\n\n');
           response.end("data: [DONE]\n\n");
         }
         return;
@@ -222,6 +240,7 @@ describe("LlamaRuntime local HTTP integration", () => {
     });
     expect(toolPayload).toEqual({ tool: "read_file", params: { path: "notes.txt" } });
     expect(completionCount).toBe(2);
+    expect(tokenCountRequests).toBe(3);
   });
 
 });

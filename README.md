@@ -20,15 +20,15 @@ desk-pet is a Windows desktop companion that runs GGUF models locally through
 - Quick chat, full chat, and SQLite conversation history with batch deletion
 - Image and document input for compatible models
 - Local speech recognition, global dictation, and text-to-speech
-- MCP tools over local stdio processes or remote servers
+- Vercel AI SDK agent loop with builtin and direct MCP tools
 - Configurable model parameters, system prompt, shortcuts, and runtime paths
 - Sandboxed Electron renderer with a narrow preload IPC API
 
 ## Requirements
 
 - Windows 10/11 x64
-- Node.js 20 or later for development
-- A recent `llama-server.exe`
+- Node.js 22.12 or later for development
+- A recent `llama-server.exe` with `/v1/chat/completions/input_tokens` support
 - A compatible GGUF model and sufficient disk/RAM/VRAM capacity
 
 Download the Windows installer from
@@ -51,7 +51,7 @@ packaged builds use the `models/` directory beside the executable.
 React renderer
   -> contextBridge / typed IPC
   -> Electron main
-       |- llama.cpp runtime and OpenAI-compatible streaming
+       |- Vercel AI SDK agent runner over llama.cpp
        |- SQLite history and local configuration
        |- speech, TTS, downloads, and MCP lifecycle
   -> llama-server on 127.0.0.1
@@ -69,7 +69,8 @@ npm run dist:win
 ```
 
 Inference and conversation data stay local. Network access is used only for
-explicit model downloads and user-configured remote MCP servers.
+explicit model downloads and user-configured remote MCP servers. Remote MCP
+URLs require HTTPS; plain HTTP is accepted only for loopback servers.
 
 ## Acknowledgements
 
@@ -90,14 +91,14 @@ desk-pet 是一款由 `llama.cpp` 驱动的本地优先 Windows AI 桌宠。它�
 - 快捷聊天、完整聊天及 SQLite 会话历史，支持批量删除
 - 为兼容模型提供图片和文档输入
 - 本地语音识别、全局听写与语音合成
-- 支持本地 stdio 进程和远程服务器两种 MCP 工具
+- 基于 Vercel AI SDK 的 agent loop，支持 builtin 与直连 MCP 工具
 - 可配置模型参数、系统提示词、快捷键及运行路径
 - Electron 渲染进程启用沙箱，仅通过受限 IPC 访问系统能力
 
 ### 运行要求
 
 - Windows 10/11 x64
-- 开发环境需要 Node.js 20 或更高版本
+- 开发环境需要 Node.js 22.12 或更高版本
 - 较新版本的 `llama-server.exe`
 - 兼容的 GGUF 模型，以及足够的磁盘、内存或显存
 
@@ -120,7 +121,7 @@ npm run dev
 React renderer
   -> contextBridge / 类型化 IPC
   -> Electron main
-       |- llama.cpp 运行时与 OpenAI 兼容流式接口
+       |- 基于 llama.cpp 的 Vercel AI SDK agent runner
        |- SQLite 历史和本地配置
        |- 语音、TTS、下载及 MCP 生命周期
   -> 127.0.0.1 上的 llama-server
@@ -137,7 +138,8 @@ npm run build
 npm run dist:win
 ```
 
-推理和会话数据保留在本机。只有用户主动下载模型或配置远程 MCP 服务时才会访问网络。
+推理和会话数据保留在本机。只有用户主动下载模型或配置远程 MCP 服务时才会访问网络。远程
+MCP 地址必须使用 HTTPS；明文 HTTP 只允许本机 loopback 服务。
 
 ### 致谢
 

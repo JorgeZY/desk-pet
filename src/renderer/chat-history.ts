@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../shared/types";
+import type { ChatMessage, ChatMessagePart } from "../shared/types";
 
 export const CHAT_HISTORY_KEY = "desk-pet:history:v1";
 export const LEGACY_CHAT_HISTORY_KEY = "minicpm5-desk-pet:history:v1";
@@ -13,12 +13,28 @@ export interface ChatHistoryStorage {
 function withoutImagePreviews(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => ({
     ...message,
+    ...(message.parts
+      ? { parts: withoutPartImagePreviews(message.parts) }
+      : {}),
     ...(message.images
       ? {
           images: message.images.map(({ path, name, mimeType }) => ({ path, name, mimeType })),
         }
       : {}),
   }));
+}
+
+function withoutPartImagePreviews(parts: ChatMessagePart[]): ChatMessagePart[] {
+  return parts.map((part) => part.type === "data-image-attachment"
+    ? {
+        ...part,
+        data: {
+          path: part.data.path,
+          name: part.data.name,
+          mimeType: part.data.mimeType,
+        },
+      }
+    : part);
 }
 
 export function readChatHistory(storage: ChatHistoryStorage = localStorage): ChatMessage[] {

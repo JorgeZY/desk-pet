@@ -15,6 +15,12 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "src/renderer/*"
+      ]
+    },
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
@@ -27,6 +33,7 @@
     "src/renderer/**/*.ts",
     "src/renderer/**/*.tsx",
     "src/shared/**/*.ts",
-    "vite.config.ts"
+    "vite.config.ts",
+    "vitest.config.ts"
   ]
 }

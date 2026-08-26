@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type {
   BootstrapData,
   ChatDocument,
@@ -10,16 +10,60 @@ import type {
   TtsState,
   WindowMode,
 } from "../shared/types";
-import { ChatPanel } from "./components/ChatPanel";
-import { Onboarding } from "./components/Onboarding";
 import { Pet, type PetMood } from "./components/Pet";
 import { resolveSpeechPetClipMood } from "./components/pet-clips";
-import { Settings } from "./components/Settings";
+import { Button } from "./components/ui/button";
+import { Spinner } from "./components/ui/spinner";
+import { flushChatPersistence } from "./chat-persistence-coordinator";
+import {
+  confirmWorkbenchNavigation,
+  shouldUpdateRendererView,
+} from "./workbench-navigation";
+
+const ChatPanel = lazy(() => import("./components/ChatPanel").then((module) => ({
+  default: module.ChatPanel,
+})));
+const Onboarding = lazy(() => import("./components/Onboarding").then((module) => ({
+  default: module.Onboarding,
+})));
+const Settings = lazy(() => import("./components/Settings").then((module) => ({
+  default: module.Settings,
+})));
 
 interface GlobalSpeechFeedback {
   sessionId: string;
   text: string;
   phase: "recording" | "transcribing" | "done" | "error";
+}
+
+function WorkbenchLoading() {
+  return (
+    <main
+      className="grid h-full place-items-center bg-background text-foreground"
+      aria-busy="true"
+    >
+      <div className="grid justify-items-center gap-3 text-center" role="status" aria-live="polite">
+        <Spinner className="size-5 text-primary" />
+        <div>
+          <b className="block text-sm font-medium">正在准备本地工作台</b>
+          <span className="mt-1 block text-xs text-muted-foreground">
+            正在恢复模型、对话和工具状态…
+          </span>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function SettingsLoading() {
+  return (
+    <div className="grid h-full place-items-center bg-card" role="status" aria-live="polite">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Spinner className="size-4 text-primary" />
+        正在载入设置…
+      </div>
+    </div>
+  );
 }
 
 export function App() {
@@ -40,6 +84,8 @@ export function App() {
   const viewTransitionRef = useRef(false);
   const preparingSpeechRef = useRef(false);
   const [globalSpeech, setGlobalSpeech] = useState<GlobalSpeechFeedback | null>(null);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const windowKind = new URLSearchParams(location.search).get("window");
 
   const updateDraft = (value: string) => {
     draftRef.current = value;
@@ -59,7 +105,7 @@ export function App() {
       root.classList.add("view-transitioning");
       await new Promise((resolve) => setTimeout(resolve, 165));
       await window.desktopPet.setWindowMode(nextView);
-      setView(nextView);
+      if (shouldUpdateRendererView(windowKind, nextView)) setView(nextView);
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
@@ -94,6 +140,18 @@ export function App() {
       .catch((error) => setFatalError(error instanceof Error ? error.message : String(error)));
     return window.desktopPet.onRuntimeState(setRuntime);
   }, []);
+
+  useEffect(() => window.desktopPet.onPrepareQuit((token) => {
+    document.documentElement.inert = true;
+    document.documentElement.setAttribute("aria-busy", "true");
+    void flushChatPersistence().then(
+      () => window.desktopPet.acknowledgeQuitPreparation(token, { ok: true }),
+      (error) => window.desktopPet.acknowledgeQuitPreparation(token, {
+        ok: false,
+        error: String(error instanceof Error ? error.message : error).slice(0, 2_000),
+      }),
+    );
+  }), []);
 
   const prepareSpeech = async (force = false) => {
     if (preparingSpeechRef.current) return;
@@ -217,12 +275,29 @@ export function App() {
     };
   }, []);
 
+  const acceptWorkbenchNavigation = (nextView: "chat" | "settings" | "pet"): boolean => {
+    const allowed = confirmWorkbenchNavigation(
+      view === "settings" ? "settings" : view === "pet" ? "pet" : "chat",
+      nextView,
+      settingsDirty,
+      () => window.confirm("设置尚未保存，确定要放弃这些修改吗？"),
+    );
+    if (!allowed) return false;
+    if (view === "settings" && settingsDirty && nextView !== "settings") {
+      setSettingsDirty(false);
+    }
+    return true;
+  };
+
   useEffect(() => window.desktopPet.onOpenView((mode) => {
-    setView(mode);
+    if (shouldUpdateRendererView(windowKind, mode)) {
+      const allowed = mode === "onboarding" || acceptWorkbenchNavigation(mode);
+      if (allowed) setView(mode);
+    }
     requestAnimationFrame(() => {
       requestAnimationFrame(() => window.desktopPet.notifyViewReady(mode));
     });
-  }), []);
+  }), [settingsDirty, view, windowKind]);
 
   const mood: PetMood = !runtime
     ? "sleeping"
@@ -249,13 +324,18 @@ export function App() {
     setBootstrap(data);
     setRuntime(data.runtime);
     setSpeech(data.speech);
+    setTts(data.tts);
     if (!data.config.mmprojPath) setDraftImages([]);
     if (restart) {
       setRuntime(await window.desktopPet.restartRuntime());
-      await transitionToView("pet");
-    } else {
-      await transitionToView("chat");
     }
+    setSettingsDirty(false);
+  };
+
+  const navigateFromWorkbench = (nextView: "chat" | "settings" | "pet"): boolean => {
+    if (!acceptWorkbenchNavigation(nextView)) return false;
+    void transitionToView(nextView);
+    return true;
   };
 
   const startRuntime = async () => setRuntime(await window.desktopPet.startRuntime());
@@ -277,23 +357,58 @@ export function App() {
   const globalSpeechPhase = globalSpeech?.phase === "recording" && speech?.phase === "transcribing"
     ? "transcribing"
     : globalSpeech?.phase;
+  const globalSpeechTitle = globalSpeechPhase === "recording"
+    ? "团子正在听"
+    : globalSpeechPhase === "transcribing"
+      ? "团子正在转成文字"
+      : globalSpeechPhase === "done"
+        ? "已输入当前文本框"
+        : "这次没有输入";
   const globalSpeechBubble = globalSpeech && globalSpeechPhase ? (
-    <aside className={`global-speech-bubble phase-${globalSpeechPhase}`} aria-live="polite">
-      <span className="global-speech-bubble__status" aria-hidden="true" />
-      <div>
-        <b>{globalSpeechPhase === "recording"
-          ? "团子正在听"
-          : globalSpeechPhase === "transcribing"
-            ? "团子正在转成文字"
-            : globalSpeechPhase === "done"
-              ? "已输入当前文本框"
-              : "这次没有输入"}</b>
-        <p>{globalSpeech.text}</p>
-      </div>
-    </aside>
+    windowKind === "workbench" ? (
+      <aside
+        aria-label={globalSpeechTitle}
+        className="fixed bottom-5 left-1/2 z-50 flex h-10 -translate-x-1/2 items-center gap-1 rounded-full border bg-popover px-4 text-popover-foreground shadow-[var(--ui-surface-shadow)]"
+        aria-live="polite"
+      >
+        {[0.6, 1, 0.75, 0.9].map((height, index) => (
+          <i
+            aria-hidden="true"
+            className={`w-0.5 animate-pulse rounded-full ${
+              globalSpeechPhase === "error" ? "bg-destructive" : "bg-primary"
+            }`}
+            key={height}
+            style={{ animationDelay: `${index * 100}ms`, height: `${8 + height * 12}px` }}
+          />
+        ))}
+      </aside>
+    ) : (
+      <aside className={`global-speech-bubble phase-${globalSpeechPhase}`} aria-live="polite">
+        <span className="global-speech-bubble__status" aria-hidden="true" />
+        <div>
+          <b>{globalSpeechTitle}</b>
+          <p>{globalSpeech.text}</p>
+        </div>
+      </aside>
+    )
   ) : null;
 
   if (fatalError) {
+    if (windowKind === "workbench") {
+      return (
+        <main className="grid h-full place-items-center bg-background p-6 text-foreground">
+          <section className="grid w-full max-w-md gap-4 rounded-xl border bg-card p-6 text-center shadow-[var(--ui-surface-shadow)]">
+            <div>
+              <h1 className="text-xl font-semibold">工作台启动失败</h1>
+              <p className="mt-2 text-sm text-muted-foreground">{fatalError}</p>
+            </div>
+            <Button className="justify-self-center" type="button" onClick={() => location.reload()}>
+              重试
+            </Button>
+          </section>
+        </main>
+      );
+    }
     return (
       <main className="surface fatal-error">
         <h1>desk-pet 没能醒来</h1>
@@ -304,6 +419,9 @@ export function App() {
   }
 
   if (!bootstrap || !runtime || !speech || !tts) {
+    if (windowKind === "workbench") {
+      return <WorkbenchLoading />;
+    }
     return (
       <main className="loading-screen" aria-busy="true">
         <div className="loading-pet" aria-hidden="true">
@@ -324,17 +442,22 @@ export function App() {
 
   if (view === "onboarding" || !bootstrap.config.setupComplete) {
     return (
-      <Onboarding
-        initialConfig={bootstrap.config}
-        platform={bootstrap.platform}
-        onComplete={finishOnboarding}
-      />
+      <Suspense fallback={<WorkbenchLoading />}>
+        <Onboarding
+          initialConfig={bootstrap.config}
+          platform={bootstrap.platform}
+          onComplete={finishOnboarding}
+        />
+      </Suspense>
     );
   }
 
-  if (view === "chat") {
+  if (windowKind !== "pet" && (view === "chat" || view === "settings")) {
+    const modelLabel = bootstrap.config.modelMode === "local"
+      ? bootstrap.config.modelPath.split(/[\\/]/).pop()?.replace(/\.gguf$/i, "") || "本地 GGUF"
+      : bootstrap.config.hfRepo;
     return (
-      <>
+      <Suspense fallback={<WorkbenchLoading />}>
         <ChatPanel
           runtime={runtime}
           speech={speech}
@@ -342,6 +465,7 @@ export function App() {
           chatTemplates={bootstrap.config.chatTemplates}
           maxTokens={bootstrap.config.maxTokens}
           contextSize={bootstrap.config.contextSize}
+          modelLabel={modelLabel}
           draft={draft}
           images={draftImages}
           documents={draftDocuments}
@@ -354,37 +478,37 @@ export function App() {
           onStopSpeech={stopSpeech}
           onSpeakText={speakText}
           onStopSpeaking={stopSpeaking}
-          onClose={() => void transitionToView("pet")}
-          onSettings={() => void transitionToView("settings")}
+          onClose={() => navigateFromWorkbench("pet")}
           onStartRuntime={startRuntime}
+          activePage={view}
+          onNavigate={(page) => navigateFromWorkbench(page)}
+          onOpenCaption={() => void window.desktopPet.openCaptionWindow()}
+          settingsContent={view === "settings" ? (
+            <Suspense fallback={<SettingsLoading />}>
+              <Settings
+                initialConfig={bootstrap.config}
+                runtime={runtime}
+                speech={speech}
+                tts={tts}
+                embedded
+                onDirtyChange={setSettingsDirty}
+                onPrepareSpeech={prepareSpeech}
+                onImportSpeech={importSpeechModels}
+                onPrepareTts={prepareTts}
+                onImportTts={importTtsModels}
+                onSpeakText={speakText}
+                onStopSpeaking={stopSpeaking}
+                onOpenCaption={async () => {
+                  await window.desktopPet.openCaptionWindow();
+                }}
+                onClose={() => navigateFromWorkbench("chat")}
+                onSave={saveSettings}
+              />
+            </Suspense>
+          ) : null}
         />
         {globalSpeechBubble}
-      </>
-    );
-  }
-
-  if (view === "settings") {
-    return (
-      <>
-        <Settings
-          initialConfig={bootstrap.config}
-          runtime={runtime}
-          speech={speech}
-          tts={tts}
-          onPrepareSpeech={prepareSpeech}
-          onImportSpeech={importSpeechModels}
-          onPrepareTts={prepareTts}
-          onImportTts={importTtsModels}
-          onSpeakText={speakText}
-          onStopSpeaking={stopSpeaking}
-          onOpenCaption={async () => {
-            await window.desktopPet.openCaptionWindow();
-          }}
-          onClose={() => void transitionToView("chat")}
-          onSave={saveSettings}
-        />
-        {globalSpeechBubble}
-      </>
+      </Suspense>
     );
   }
 

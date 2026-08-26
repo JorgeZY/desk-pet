@@ -12,6 +12,7 @@ import type {
   SpeechState,
   TtsState,
   WindowMode,
+  WorkbenchWindowSnapshot,
 } from "../shared/types";
 
 ipcRenderer.on("caption:audio-port", (event) => {
@@ -63,12 +64,24 @@ const api: DesktopPetApi = {
     ipcRenderer.invoke("chat-history:delete-many", conversationIds),
   setWindowMode: (mode: WindowMode) => ipcRenderer.invoke("window:set-mode", mode),
   hideWindow: () => ipcRenderer.invoke("window:hide"),
+  minimizeWorkbench: () => ipcRenderer.invoke("window:minimize"),
+  toggleMaximizeWorkbench: () => ipcRenderer.invoke("window:toggle-maximize"),
+  getWorkbenchWindowState: () => ipcRenderer.invoke("window:get-state"),
+  setSidebarCollapsed: (collapsed: boolean) =>
+    ipcRenderer.invoke("window:set-sidebar-collapsed", collapsed),
   openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url),
   copyText: (text: string) => ipcRenderer.invoke("app:copy-text", text),
   startChat: (request: ChatRequest) => ipcRenderer.send("chat:start", request),
   abortChat: (requestId: string) => ipcRenderer.send("chat:abort", requestId),
   resolveToolApproval: (requestId: string, toolCallId: string, approved: boolean) =>
     ipcRenderer.send("chat:tool-approval", { requestId, toolCallId, approved }),
+  onPrepareQuit: (listener: (token: string) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, token: string): void => listener(token);
+    ipcRenderer.on("chat:prepare-quit", wrapped);
+    return () => ipcRenderer.removeListener("chat:prepare-quit", wrapped);
+  },
+  acknowledgeQuitPreparation: (token, result) =>
+    ipcRenderer.send("chat:quit-ready", { token, ...result }),
   onChatEvent: (listener: (event: ChatEvent) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: ChatEvent): void => listener(payload);
     ipcRenderer.on("chat:event", wrapped);
@@ -120,6 +133,14 @@ const api: DesktopPetApi = {
     const wrapped = (_event: Electron.IpcRendererEvent, mode: WindowMode): void => listener(mode);
     ipcRenderer.on("app:open-view", wrapped);
     return () => ipcRenderer.removeListener("app:open-view", wrapped);
+  },
+  onWorkbenchWindowState: (listener: (state: WorkbenchWindowSnapshot) => void) => {
+    const wrapped = (
+      _event: Electron.IpcRendererEvent,
+      state: WorkbenchWindowSnapshot,
+    ): void => listener(state);
+    ipcRenderer.on("window:state", wrapped);
+    return () => ipcRenderer.removeListener("window:state", wrapped);
   },
   notifyViewReady: (mode: WindowMode) => ipcRenderer.send("window:view-ready", mode),
 };

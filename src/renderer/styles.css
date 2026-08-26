@@ -990,82 +990,6 @@ select {
   opacity: 1;
 }
 
-.confirm-dialog-backdrop {
-  position: absolute;
-  z-index: 30;
-  inset: 0;
-  display: grid;
-  padding: 20px;
-  place-items: center;
-  background: rgba(63, 43, 37, 0.42);
-  -webkit-app-region: no-drag;
-  animation: confirm-backdrop-arrive 120ms steps(2, end);
-}
-
-.confirm-dialog {
-  width: min(330px, 100%);
-  padding: 20px;
-  color: var(--ink);
-  background: var(--paper-solid);
-  border: 2px solid rgba(85, 57, 49, 0.22);
-  border-radius: 15px;
-  box-shadow: 0 14px 36px rgba(57, 36, 30, 0.25);
-  animation: confirm-dialog-arrive 180ms var(--ease-soft-spring);
-}
-
-.confirm-dialog__heading {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 12px;
-}
-
-.confirm-dialog__icon {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  color: var(--red);
-  background: #ffe1d8;
-  border: 1px solid rgba(159, 65, 61, 0.2);
-  border-radius: 11px;
-}
-
-.confirm-dialog__heading h2 {
-  margin: 1px 0 6px;
-  font-size: 16px;
-}
-
-.confirm-dialog__heading p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.confirm-dialog__error {
-  padding: 8px 10px;
-  margin: 14px 0 0;
-  color: #963e42;
-  background: #fff0ec;
-  border: 1px solid rgba(150, 62, 66, 0.22);
-  border-radius: 8px;
-  font-size: 10px;
-  line-height: 1.5;
-}
-
-.confirm-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 9px;
-  margin-top: 18px;
-}
-
-.confirm-dialog__actions .button {
-  min-width: 104px;
-}
-
 .chat-log {
   flex: 1;
   min-height: 0;
@@ -1199,150 +1123,9 @@ select {
   word-break: break-word;
 }
 
-.markdown-message {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.markdown-message > :first-child {
-  margin-top: 0;
-}
-
-.markdown-message > :last-child {
-  margin-bottom: 0;
-}
-
-.markdown-message p,
-.markdown-message ul,
-.markdown-message ol,
-.markdown-message blockquote,
-.markdown-message pre,
-.markdown-message table,
-.markdown-message h1,
-.markdown-message h2,
-.markdown-message h3,
-.markdown-message h4,
-.markdown-message h5,
-.markdown-message h6 {
-  margin: 0 0 0.72em;
-}
-
-.markdown-message h1,
-.markdown-message h2,
-.markdown-message h3,
-.markdown-message h4,
-.markdown-message h5,
-.markdown-message h6 {
-  color: #46342f;
-  line-height: 1.35;
-}
-
-.markdown-message h1 { font-size: 1.34em; }
-.markdown-message h2 { font-size: 1.24em; }
-.markdown-message h3 { font-size: 1.14em; }
-.markdown-message h4,
-.markdown-message h5,
-.markdown-message h6 { font-size: 1.05em; }
-
-.markdown-message ul,
-.markdown-message ol {
-  padding-left: 1.55em;
-}
-
-.markdown-message .contains-task-list {
-  padding-left: 0;
-  list-style: none;
-}
-
-.markdown-message .task-list-item {
-  list-style: none;
-}
-
-.markdown-message input[type="checkbox"] {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  min-height: 0;
-  padding: 0;
-  margin: 0 0.4em 0 0;
-  box-shadow: none;
-  opacity: 1;
-  vertical-align: -1px;
-}
-
-.markdown-message li + li {
-  margin-top: 0.25em;
-}
-
-.markdown-message blockquote {
-  padding: 2px 0 2px 9px;
-  color: #725e57;
-  border-left: 3px solid #efb392;
-}
-
-.markdown-message code {
-  padding: 1px 4px;
-  color: #7a4937;
-  background: rgba(109, 76, 65, 0.09);
-  border-radius: 4px;
-  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-  font-size: 0.9em;
-}
-
-.markdown-message pre {
-  max-width: 100%;
-  padding: 9px 10px;
-  overflow-x: auto;
-  color: #f8eee9;
-  background: #4c3a35;
-  border-radius: 8px;
-  scrollbar-width: thin;
-}
-
-.markdown-message pre code {
-  padding: 0;
-  color: inherit;
-  background: transparent;
-  border-radius: 0;
-  white-space: pre;
-}
-
-.markdown-message table {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
-  border-collapse: collapse;
-  font-size: 0.9em;
-}
-
-.markdown-message th,
-.markdown-message td {
-  padding: 4px 7px;
-  border: 1px solid rgba(94, 65, 57, 0.16);
-  text-align: left;
-  white-space: nowrap;
-}
-
-.markdown-message th {
-  background: rgba(236, 141, 98, 0.09);
-}
-
-.markdown-message a {
-  color: #bd6042;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-}
-
 .markdown-link--blocked,
 .markdown-image-alt {
   color: #806b64;
-}
-
-.markdown-message hr {
-  margin: 0.8em 0;
-  border: 0;
-  border-top: 1px solid rgba(94, 65, 57, 0.16);
 }
 
 .message-actions {
@@ -1659,88 +1442,6 @@ select {
 .message--user .document-attachment small,
 .message--user .document-attachment > svg {
   color: rgba(255, 255, 255, 0.82);
-}
-
-.tool-call {
-  margin: 7px 0;
-  overflow: hidden;
-  background: rgba(235, 243, 238, 0.72);
-  border: 1px solid rgba(70, 118, 101, 0.22);
-  border-radius: 6px;
-  font-size: 9px;
-}
-
-.tool-call--pending-approval {
-  background: rgba(255, 236, 194, 0.75);
-  border-color: rgba(172, 104, 45, 0.32);
-}
-
-.tool-call--error,
-.tool-call--denied {
-  background: rgba(255, 226, 218, 0.72);
-  border-color: rgba(169, 76, 57, 0.28);
-}
-
-.tool-call summary {
-  display: flex;
-  padding: 6px 7px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  cursor: pointer;
-  font-weight: 800;
-}
-
-.tool-call summary small {
-  color: var(--muted);
-  font-size: 8px;
-}
-
-.tool-call__body {
-  padding: 0 7px 7px;
-}
-
-.tool-call__body label {
-  display: block;
-  margin: 4px 0 3px;
-  color: var(--muted);
-  font-weight: 700;
-}
-
-.tool-call__body pre {
-  max-height: 160px;
-  margin: 0;
-  padding: 6px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: rgba(255, 255, 255, 0.62);
-  border-radius: 4px;
-  font-family: Consolas, monospace;
-  font-size: 8px;
-}
-
-.tool-call__body > p {
-  margin: 5px 0 0;
-  color: var(--red);
-}
-
-.tool-call__actions {
-  display: flex;
-  margin-top: 7px;
-  justify-content: flex-end;
-  gap: 5px;
-}
-
-.tool-call__actions button {
-  padding: 4px 7px;
-  color: #6f4434;
-  background: #fff8e7;
-  border: 1px solid rgba(115, 70, 50, 0.25);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 8px;
-  font-weight: 800;
 }
 
 .reasoning {
@@ -3097,16 +2798,6 @@ select {
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-@keyframes confirm-backdrop-arrive {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes confirm-dialog-arrive {
-  from { opacity: 0; transform: translateY(4px) scale(0.985); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
 @keyframes loading-glow {
   0%, 100% { opacity: 0.42; }
   50% { opacity: 0.92; }
@@ -3118,8 +2809,6 @@ select {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .confirm-dialog-backdrop,
-  .confirm-dialog,
   .loading-pet__glow,
   .loading-paws i {
     animation: none;

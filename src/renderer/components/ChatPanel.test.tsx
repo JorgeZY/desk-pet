@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { RuntimeState, SpeechState, TtsState } from "../../shared/types";
 import { ChatPanel } from "./ChatPanel";
+import { TooltipProvider } from "./ui/tooltip";
 
 const runtime: RuntimeState = {
   phase: "ready",
@@ -29,57 +30,58 @@ const tts: TtsState = {
 };
 
 describe("ChatPanel empty state", () => {
-  it("keeps templates in place and folds listening status into the empty state", () => {
+  it("keeps templates in place and renders voice capture as an icon-only animation", () => {
     const markup = renderToStaticMarkup(
-      <ChatPanel
-        runtime={runtime}
-        speech={recordingSpeech}
-        tts={tts}
-        chatTemplates={["模板甲", "  ", "模板丙"]}
-        maxTokens={2048}
-        contextSize={8192}
-        draft=""
-        images={[]}
-        documents={[]}
-        onDraftChange={() => undefined}
-        onImagesChange={() => undefined}
-        onDocumentsChange={() => undefined}
-        visionEnabled={false}
-        onPrepareSpeech={async () => undefined}
-        onStartSpeech={async () => undefined}
-        onStopSpeech={async () => undefined}
-        onSpeakText={async () => undefined}
-        onStopSpeaking={async () => undefined}
-        onClose={() => undefined}
-        onSettings={() => undefined}
-        onStartRuntime={async () => undefined}
-      />,
+      <TooltipProvider>
+        <ChatPanel
+          runtime={runtime}
+          speech={recordingSpeech}
+          tts={tts}
+          chatTemplates={["模板甲", "  ", "模板丙"]}
+          maxTokens={2048}
+          contextSize={8192}
+          modelLabel="MiniCPM5-1B-Q4_K_M"
+          draft=""
+          images={[]}
+          documents={[]}
+          onDraftChange={() => undefined}
+          onImagesChange={() => undefined}
+          onDocumentsChange={() => undefined}
+          visionEnabled={false}
+          onPrepareSpeech={async () => undefined}
+          onStartSpeech={async () => undefined}
+          onStopSpeech={async () => undefined}
+          onSpeakText={async () => undefined}
+          onStopSpeaking={async () => undefined}
+          onClose={() => undefined}
+          onStartRuntime={async () => undefined}
+        />
+      </TooltipProvider>,
     );
 
-    expect(markup).toContain("empty-chat__voice-status");
-    expect(markup).toContain("团子在认真听…");
-    expect(markup).toContain("chat-template-grid");
+    expect(markup).not.toContain("正在聆听…");
     expect(markup).toContain("模板甲");
     expect(markup).toContain("模板丙");
-    expect(markup).toContain("mood-listening");
-    expect(markup).toContain("clip-idle");
-    expect(markup).toContain("pet-idle-v1.gif");
-    expect(markup).not.toContain("pet-talking-v1.gif");
-    expect(markup).not.toContain("pet-listening-v1.gif");
+    expect(markup).toContain("今天想完成什么？");
+    expect(markup).toContain("workbench-empty-title");
+    expect(markup).toContain("min-h-11 max-w-72");
+    expect(markup).not.toContain('class="pet');
     expect(markup).not.toContain("voice-pet-indicator");
     expect(markup).toContain('rows="3"');
-    expect(markup).toContain('aria-label="推理强度：中，思考预算最多 1024 token"');
-    expect(markup).toContain('class="thinking-toggle"');
-    expect(markup).toContain('class="thinking-effort"');
-    expect(markup).toContain('class="thinking-effort__value">中</span>');
-    expect(markup).not.toContain('class="thinking-effort__icon"');
-    expect(markup).toContain("预算 ≤ 1,024");
-    expect(markup).toContain("总输出 ≤ 2,048");
-    expect(markup).toContain('class="thinking-effort__menu"');
+    expect(markup).toContain('aria-label="模型 MiniCPM5-1B-Q4_K_M，推理关闭"');
+    expect(markup).toContain('data-slot="dropdown-menu-trigger"');
     expect(markup).toContain('aria-label="上下文上限 8,192 token，完成一次回答后显示用量"');
-    expect(markup).not.toContain("<select");
-    expect(markup.indexOf("chat-template-grid")).toBeLessThan(
-      markup.indexOf('class="composer"'),
-    );
+    expect(markup.indexOf("模板甲")).toBeLessThan(markup.indexOf('rows="3"'));
+    expect(markup).not.toContain('class="workbench-titlebar"');
+    expect(markup).not.toContain("LOCAL AI");
+    expect(markup).not.toContain("AI 工作台");
+    expect(markup).not.toContain('aria-label="功能"');
+    expect(markup).toContain("bg-emerald-500");
+    expect(markup).toContain("MiniCPM5-1B-Q4_K_M");
+    expect(markup).toContain('aria-label="工作台侧栏"');
+    expect(markup).toContain("最近对话");
+    expect(markup).toContain('aria-label="打开实时字幕"');
+    expect(markup).toContain('aria-label="返回桌面宠物"');
+    expect(markup).toContain("animate-pulse");
   });
 });

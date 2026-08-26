@@ -1,5 +1,12 @@
-import { useEffect, useRef } from "react";
+import {
+  useEffect,
+  useRef,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 import type { SpeechState } from "../../shared/types";
+import { Button } from "@/components/ui/button";
+import { PromptInputButton } from "./ai-elements/prompt-input";
 import { createHoldToTalkController } from "./hold-to-talk";
 import { PixelIcon } from "./PixelIcon";
 
@@ -49,40 +56,71 @@ export function VoiceButton({
           ? "正在转换语音"
           : "按住说话";
 
-  return (
-    <button
-      className={`voice-button ${compact ? "voice-button--compact" : ""} phase-${speech.phase}`}
-      type="button"
-      disabled={busy}
-      aria-label={label}
-      title={label}
-      onPointerDown={(event) => {
+  const commonProps = {
+      type: "button" as const,
+      disabled: busy,
+      "aria-label": label,
+      onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
         if (event.button !== 0) return;
         event.currentTarget.setPointerCapture(event.pointerId);
         void begin();
-      }}
-      onPointerUp={() => void finish()}
-      onPointerCancel={() => void finish()}
-      onLostPointerCapture={() => void finish()}
-      onBlur={() => void finish()}
-      onKeyDown={(event) => {
+      },
+      onPointerUp: () => void finish(),
+      onPointerCancel: () => void finish(),
+      onLostPointerCapture: () => void finish(),
+      onBlur: () => void finish(),
+      onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
         if ((event.key === " " || event.key === "Enter") && !event.repeat) {
           event.preventDefault();
           void begin();
         }
-      }}
-      onKeyUp={(event) => {
+      },
+      onKeyUp: (event: KeyboardEvent<HTMLButtonElement>) => {
         if (event.key === " " || event.key === "Enter") {
           event.preventDefault();
           void finish();
         }
-      }}
-    >
-      <PixelIcon name="mic" className="voice-button__icon" />
-      {!compact && <span>{label}</span>}
-      {speech.phase === "recording" && (
-        <i className="voice-button__level" style={{ transform: `scaleY(${0.25 + (speech.level ?? 0) * 0.75})` }} />
+      },
+  } as const;
+  const voiceActive = speech.phase === "recording" || speech.phase === "transcribing";
+  const level = speech.phase === "recording" ? speech.level ?? 0.35 : 0.55;
+  const content = (
+    <>
+      {voiceActive ? (
+        <span className="flex h-4 items-center gap-0.5" aria-hidden="true">
+          {[0.55, 1, 0.72].map((multiplier, index) => (
+            <i
+              className="h-3 w-0.5 origin-center animate-pulse rounded-full bg-primary transition-transform"
+              key={multiplier}
+              style={{
+                animationDelay: `${index * 110}ms`,
+                transform: `scaleY(${Math.max(0.28, level * multiplier)})`,
+              }}
+            />
+          ))}
+        </span>
+      ) : (
+        <PixelIcon name="mic" />
       )}
-    </button>
+      {!compact ? <span>{label}</span> : null}
+    </>
+  );
+
+  if (compact) {
+    return (
+      <PromptInputButton
+        {...commonProps}
+        tooltip={label}
+        variant={speech.phase === "recording" ? "secondary" : "ghost"}
+      >
+        {content}
+      </PromptInputButton>
+    );
+  }
+
+  return (
+    <Button {...commonProps} variant={speech.phase === "recording" ? "secondary" : "outline"}>
+      {content}
+    </Button>
   );
 }
