@@ -296,7 +296,7 @@ export class McpToolProvider implements ToolProvider {
       return {
         client: await this.createConfiguredClient(
           serverName,
-          this.createStdioTransport(normalizeStdioConfig(config)),
+          this.createStdioTransport(normalizeStdioConfig(config, this.processEnv)),
           signal,
         ),
         transport: "stdio",
@@ -403,14 +403,21 @@ export function createMcpAgentToolName(serverName: string, toolName: string): st
 
 export function normalizeStdioConfig(
   config: McpStdioServerConfig,
+  processEnv: NodeJS.ProcessEnv = process.env,
 ): McpStdioTransportConfig {
+  const inheritedEnvironment = config.env === undefined
+    ? undefined
+    : Object.fromEntries(
+      Object.entries({ ...processEnv, ...config.env })
+        .filter((entry): entry is [string, string] => entry[1] !== undefined),
+    );
   return {
     // @ai-sdk/mcp uses cross-spawn, which resolves npm/npx through PATHEXT and
     // applies cmd.exe escaping on Windows. Appending `.cmd` here would bypass
     // that portable command-resolution contract.
     command: config.command,
     ...(config.args === undefined ? {} : { args: [...config.args] }),
-    ...(config.env === undefined ? {} : { env: { ...config.env } }),
+    ...(inheritedEnvironment === undefined ? {} : { env: inheritedEnvironment }),
     ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
     // The SDK transport does not consume a piped stderr stream; inheriting it
     // prevents verbose MCP servers from blocking on a full pipe buffer.

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
+  BootstrapData,
   ChatEvent,
   ChatRequest,
   CaptionConfig,
@@ -86,6 +87,12 @@ const api: DesktopPetApi = {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: ChatEvent): void => listener(payload);
     ipcRenderer.on("chat:event", wrapped);
     return () => ipcRenderer.removeListener("chat:event", wrapped);
+  },
+  onBootstrap: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: BootstrapData): void =>
+      listener(payload);
+    ipcRenderer.on("app:bootstrap", wrapped);
+    return () => ipcRenderer.removeListener("app:bootstrap", wrapped);
   },
   onRuntimeState: (listener: (state: RuntimeState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: RuntimeState): void =>

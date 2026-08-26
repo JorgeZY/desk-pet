@@ -116,13 +116,16 @@ export function App() {
   };
 
   useEffect(() => {
+    const applyBootstrap = (data: BootstrapData): void => {
+      setBootstrap(data);
+      setRuntime(data.runtime);
+      setSpeech(data.speech);
+      setTts(data.tts);
+    };
     window.desktopPet
       .getBootstrap()
       .then((data) => {
-        setBootstrap(data);
-        setRuntime(data.runtime);
-        setSpeech(data.speech);
-        setTts(data.tts);
+        applyBootstrap(data);
         const requestedView = new URLSearchParams(location.search).get("view");
         const isKnownView =
           requestedView === "pet" ||
@@ -138,8 +141,16 @@ export function App() {
         );
       })
       .catch((error) => setFatalError(error instanceof Error ? error.message : String(error)));
-    return window.desktopPet.onRuntimeState(setRuntime);
-  }, []);
+    const stopBootstrapUpdates = window.desktopPet.onBootstrap((data) => {
+      applyBootstrap(data);
+      if (windowKind === "pet" && data.config.setupComplete) setView("pet");
+    });
+    const stopRuntimeUpdates = window.desktopPet.onRuntimeState(setRuntime);
+    return () => {
+      stopBootstrapUpdates();
+      stopRuntimeUpdates();
+    };
+  }, [windowKind]);
 
   useEffect(() => window.desktopPet.onPrepareQuit((token) => {
     document.documentElement.inert = true;

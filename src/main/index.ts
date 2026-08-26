@@ -735,7 +735,9 @@ function registerIpc(): void {
     tts.updateConfig(config.tts);
     caption.updateThreads(config.speech.threads);
     configureSpeechShortcut();
-    return bootstrap();
+    const data = bootstrap();
+    sendToAppWindows("app:bootstrap", data);
+    return data;
   });
   ipcMain.handle("runtime:probe", (_event, executable?: string) => probeExecutable(executable));
   ipcMain.handle("runtime:start", () => runtime.start());

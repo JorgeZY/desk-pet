@@ -74,14 +74,20 @@ const bootstrap: BootstrapData = {
 };
 
 let openViewListener: ((mode: WindowMode) => void) | undefined;
+let bootstrapListener: ((data: BootstrapData) => void) | undefined;
 
 beforeEach(() => {
   window.history.replaceState({}, "", "/?window=workbench&view=settings");
   openViewListener = undefined;
+  bootstrapListener = undefined;
   Object.defineProperty(window, "desktopPet", {
     configurable: true,
     value: {
       getBootstrap: vi.fn().mockResolvedValue(bootstrap),
+      onBootstrap: vi.fn((listener: (data: BootstrapData) => void) => {
+        bootstrapListener = listener;
+        return () => undefined;
+      }),
       onRuntimeState: vi.fn().mockReturnValue(() => undefined),
       onPrepareQuit: vi.fn().mockReturnValue(() => undefined),
       onSpeechState: vi.fn().mockReturnValue(() => undefined),
@@ -102,6 +108,21 @@ afterEach(() => {
 });
 
 describe("App main-process view navigation", () => {
+  it("refreshes a pre-created pet renderer after onboarding completes", async () => {
+    window.history.replaceState({}, "", "/?window=pet&view=pet");
+    vi.mocked(window.desktopPet.getBootstrap).mockResolvedValueOnce({
+      ...bootstrap,
+      config: { ...bootstrap.config, setupComplete: false },
+    });
+    render(<App />);
+
+    expect(await screen.findByText("onboarding")).toBeTruthy();
+
+    act(() => bootstrapListener?.(bootstrap));
+
+    expect(await screen.findByText("pet")).toBeTruthy();
+  });
+
   it("renders a self-contained workbench error state without pet-only classes", async () => {
     vi.mocked(window.desktopPet.getBootstrap).mockRejectedValueOnce(
       new Error("bootstrap failed"),

@@ -95,6 +95,7 @@ describe("McpToolProvider", () => {
         clientConfigs.push(config);
         return clients.shift()!;
       },
+      processEnv: { PATH: "inherited-path" },
     });
 
     await provider.start();
@@ -102,7 +103,7 @@ describe("McpToolProvider", () => {
     expect(stdioConfigs).toEqual([{
       command: "npx",
       args: ["-y", "local-mcp"],
-      env: { LOCAL_TOKEN: "local-secret" },
+      env: { PATH: "inherited-path", LOCAL_TOKEN: "local-secret" },
       cwd: "D:\\tools",
       stderr: "inherit",
     }]);
@@ -471,6 +472,25 @@ describe("MCP tool safety helpers", () => {
     });
     expect(normalizeStdioConfig({ transport: "stdio", command: "node" }))
       .toMatchObject({ command: "node" });
+  });
+
+  it("merges stdio server variables over the inherited process environment", () => {
+    expect(normalizeStdioConfig({
+      transport: "stdio",
+      command: "npx",
+      env: { TOKEN: "configured", PATH: "configured-path" },
+    }, {
+      PATH: "inherited-path",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      SystemRoot: "C:\\Windows",
+    })).toMatchObject({
+      env: {
+        PATH: "configured-path",
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        SystemRoot: "C:\\Windows",
+        TOKEN: "configured",
+      },
+    });
   });
 
   it("generates stable names within the OpenAI-compatible tool name limit", () => {

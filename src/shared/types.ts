@@ -429,6 +429,7 @@ export interface DesktopPetApi {
     result: { ok: boolean; error?: string },
   ): void;
   onChatEvent(listener: (event: ChatEvent) => void): () => void;
+  onBootstrap(listener: (data: BootstrapData) => void): () => void;
   onRuntimeState(listener: (state: RuntimeState) => void): () => void;
   onSpeechState(listener: (state: SpeechState) => void): () => void;
   onSpeechEvent(listener: (event: SpeechEvent) => void): () => void;
