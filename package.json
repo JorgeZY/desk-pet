@@ -134,6 +134,8 @@
     ],
     "win": {
       "forceCodeSigning": false,
+      "signExecutable": false,
+      "signAndEditExecutable": true,
       "target": [
         {
           "target": "nsis",
