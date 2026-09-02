@@ -308,6 +308,7 @@ export class LongTaskRuntime extends EventEmitter {
         let output = "";
         let persistedCharacters = 0;
         let finalError = "";
+        let finishReason: string | undefined;
 
         await this.modelRuntime.streamChat(request, (event) => {
           if (
@@ -328,6 +329,7 @@ export class LongTaskRuntime extends EventEmitter {
             }
           }
           if (event.type === "error") finalError = event.message;
+          if (event.type === "done") finishReason = event.finishReason;
           if (event.type === "tool-call" && event.call.status === "pending-approval") {
             const latest = this.store.getTask(taskId);
             if (latest.status === "running") {
@@ -375,6 +377,15 @@ export class LongTaskRuntime extends EventEmitter {
           return;
         }
         if (latest.status !== "running") return;
+        if (finishReason === "length") {
+          this.persistActiveOutput(taskId);
+          this.clearPendingApproval(taskId);
+          this.emitTask(this.store.pauseTask(
+            taskId,
+            "模型输出达到长度上限，当前步骤已保存但未完成。请提高最大输出长度后继续。",
+          ));
+          return;
+        }
         this.clearPendingApproval(taskId);
         const checkpoint = output.trim()
           || runningStep.output?.trim()

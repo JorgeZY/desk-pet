@@ -145,13 +145,27 @@ async function fileSize(path: string): Promise<number> {
   }
 }
 
-async function sha256File(path: string): Promise<string> {
+async function sha256File(path: string, signal: AbortSignal): Promise<string> {
+  signal.throwIfAborted();
   const hash = createHash("sha256");
   await new Promise<void>((resolve, reject) => {
     const stream = createReadStream(path);
+    let settled = false;
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = (): void => finish(() => {
+      stream.destroy();
+      reject(new DOMException("校验已取消", "AbortError"));
+    });
     stream.on("data", (chunk) => hash.update(chunk));
-    stream.once("error", reject);
-    stream.once("end", resolve);
+    stream.once("error", (error) => finish(() => reject(error)));
+    stream.once("end", () => finish(resolve));
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
   });
   return hash.digest("hex");
 }
@@ -429,7 +443,7 @@ export class ManagedEmbeddingModelDownloader {
     const partialPath = `${targetPath}.part`;
     const forceDownload = options.forceDownload === true;
 
-    if (!forceDownload && await this.isValid(targetPath)) return targetPath;
+    if (!forceDownload && await this.isValid(targetPath, options.signal)) return targetPath;
     if (options.allowDownload === false) return null;
 
     await fs.mkdir(this.modelDirectory, { recursive: true });
@@ -456,7 +470,7 @@ export class ManagedEmbeddingModelDownloader {
           options,
         );
         transferCompleted = true;
-        await this.validate(partialPath);
+        await this.validate(partialPath, options.signal);
         await fs.rm(targetPath, { force: true });
         await fs.rename(partialPath, targetPath);
         return targetPath;
@@ -472,19 +486,19 @@ export class ManagedEmbeddingModelDownloader {
     );
   }
 
-  private async isValid(path: string): Promise<boolean> {
+  private async isValid(path: string, signal: AbortSignal): Promise<boolean> {
     if ((await fileSize(path)) !== this.sizeBytes) return false;
-    return (await sha256File(path)).toLowerCase() === this.sha256;
+    return (await sha256File(path, signal)).toLowerCase() === this.sha256;
   }
 
-  private async validate(path: string): Promise<void> {
+  private async validate(path: string, signal: AbortSignal): Promise<void> {
     const actualSize = await fileSize(path);
     if (actualSize !== this.sizeBytes) {
       throw new Error(
         `文件大小不符：${formatBytes(actualSize)} / ${formatBytes(this.sizeBytes)}`,
       );
     }
-    const actualSha256 = (await sha256File(path)).toLowerCase();
+    const actualSha256 = (await sha256File(path, signal)).toLowerCase();
     if (actualSha256 !== this.sha256) {
       throw new Error(`SHA-256 校验失败：收到 ${actualSha256}`);
     }

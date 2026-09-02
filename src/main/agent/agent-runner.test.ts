@@ -28,7 +28,10 @@ const usage = (input: number, output: number) => ({
   },
 });
 
-const finishReason = (unified: "stop" | "tool-calls", raw = unified) => ({ unified, raw });
+const finishReason = (unified: "stop" | "tool-calls" | "length", raw = unified) => ({
+  unified,
+  raw,
+});
 
 function modelStream(chunks: unknown[]) {
   return { stream: simulateReadableStream({ chunks, chunkDelayInMs: null }) };
@@ -92,6 +95,22 @@ async function run(
 }
 
 describe("AgentRunner", () => {
+  it("propagates a length finish reason to durable task consumers", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: modelStream([
+        { type: "stream-start", warnings: [] },
+        { type: "text-start", id: "truncated" },
+        { type: "text-delta", id: "truncated", delta: "partial" },
+        { type: "text-end", id: "truncated" },
+        { type: "finish", finishReason: finishReason("length"), usage: usage(8, 64) },
+      ]),
+    });
+
+    const events = await run(model, []);
+
+    expect(events.at(-1)).toMatchObject({ type: "done", finishReason: "length" });
+  });
+
   it("adds compact prompt-injection guidance only when local knowledge is available", () => {
     const knowledge = descriptor("search_local_knowledge", async () => "result");
     knowledge.source = "knowledge";
@@ -285,6 +304,65 @@ describe("AgentRunner", () => {
     expect(result.result).toContain("[工具结果过长，已截断]");
     expect(utf8ByteLength(result.result))
       .toBeLessThanOrEqual(toolResultPromptByteBudget(DEFAULT_CONFIG));
+  });
+
+  it("uses effective defaults to budget tool results when overrides are disabled", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        modelStream([
+          { type: "stream-start", warnings: [] },
+          { type: "tool-call", toolCallId: "call-default-budget", toolName: "read_large", input: "{}" },
+          { type: "finish", finishReason: finishReason("tool-calls"), usage: usage(5, 1) },
+        ]),
+        modelStream([
+          { type: "stream-start", warnings: [] },
+          { type: "text-start", id: "text-default-budget" },
+          { type: "text-delta", id: "text-default-budget", delta: "done" },
+          { type: "text-end", id: "text-default-budget" },
+          { type: "finish", finishReason: finishReason("stop"), usage: usage(8, 1) },
+        ]),
+      ],
+    });
+    const effectiveConfig = {
+      ...DEFAULT_CONFIG,
+      contextSize: 512,
+      maxTokens: 8_192,
+      modelParameterOverrides: {
+        ...DEFAULT_CONFIG.modelParameterOverrides,
+        contextSize: false,
+        maxTokens: false,
+      },
+    };
+    const events: ChatEvent[] = [];
+    const runner = new AgentRunner({
+      config: effectiveConfig,
+      endpoint: "http://127.0.0.1:1234",
+      tools: [descriptor("read_large", async () => "你".repeat(10_000))],
+      waitForApproval: async () => true,
+      createModelAdapter: adapterFactory(model),
+    });
+
+    await runner.run({
+      request: {
+        requestId: "effective-default-budget",
+        messages: [],
+        thinking: false,
+        thinkingEffort: "medium",
+      },
+      messages: [{ role: "user", content: "read" }],
+      signal: new AbortController().signal,
+      emit: (event) => events.push(event),
+    });
+
+    const result = events.find((event) => event.type === "tool-result");
+    expect(result).toMatchObject({ status: "completed" });
+    if (!result || result.type !== "tool-result") throw new Error("missing tool result");
+    expect(result.result).toContain("[工具结果过长，已截断]");
+    expect(utf8ByteLength(result.result!)).toBeLessThanOrEqual(toolResultPromptByteBudget({
+      ...effectiveConfig,
+      contextSize: 8_192,
+      maxTokens: 512,
+    }));
   });
 
   it("reclaims the shared budget after pruning older historical tool rounds", async () => {

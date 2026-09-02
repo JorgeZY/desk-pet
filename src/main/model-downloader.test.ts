@@ -247,4 +247,30 @@ describe("ManagedEmbeddingModelDownloader", () => {
       onProgress: () => undefined,
     })).resolves.toBe(targetPath);
   });
+
+  it("cancels validation of an existing cached embedding model", async () => {
+    const directory = await temporaryDirectory();
+    const payload = new Uint8Array(8 * 1024 * 1024).fill(7);
+    const targetPath = join(directory, MANAGED_EMBEDDING_MODEL.filename);
+    await fs.writeFile(targetPath, payload);
+    let fetched = false;
+    const downloader = new ManagedEmbeddingModelDownloader(
+      directory,
+      async () => {
+        fetched = true;
+        throw new Error("should not fetch");
+      },
+      { sizeBytes: payload.byteLength, sha256: sha256(payload) },
+    );
+    const controller = new AbortController();
+
+    const result = downloader.resolve(MANAGED_EMBEDDING_MODEL.id, {
+      signal: controller.signal,
+      onProgress: () => undefined,
+    });
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetched).toBe(false);
+  });
 });

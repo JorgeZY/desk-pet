@@ -322,6 +322,27 @@ describe("LongTaskRuntime", () => {
     expect(model.streamChat).toHaveBeenCalledTimes(1);
   });
 
+  it("pauses a step instead of completing it when model output reaches its limit", async () => {
+    const { store } = createStore();
+    const model = createModel(async (request, emit) => {
+      emit({ requestId: request.requestId, type: "delta", text: "被截断的部分输出" });
+      emit({ requestId: request.requestId, type: "done", finishReason: "length" });
+    });
+    const runtime = new LongTaskRuntime(store, model.runtime);
+    const task = runtime.createTask(taskInput(2));
+    runtime.startTask(task.id);
+
+    await vi.waitFor(() => expect(store.getTask(task.id).status).toBe("paused"));
+    const paused = store.getTask(task.id);
+    expect(paused.error).toContain("模型输出达到长度上限");
+    expect(paused.steps[0]).toMatchObject({
+      status: "interrupted",
+      output: "被截断的部分输出",
+    });
+    expect(paused.steps[1]?.status).toBe("pending");
+    expect(model.streamChat).toHaveBeenCalledTimes(1);
+  });
+
   it("persists a rejected model run as a failed task and step", async () => {
     const { store } = createStore();
     const model = createModel(async () => {

@@ -113,7 +113,7 @@ export class AgentRunner {
         onWarning: (message) => emit({ requestId: request.requestId, type: "warning", message }),
       }),
     });
-    const tools = this.createTools(request.requestId, signal, emit);
+    const tools = this.createTools(request.requestId, signal, emit, effectiveConfig);
     const agent = new ToolLoopAgent({
       model: adapter.model,
       instructions: agentInstructions(this.config.systemPrompt, this.descriptors),
@@ -196,11 +196,22 @@ export class AgentRunner {
     if (finishReason === "tool-calls") {
       throw new Error("Agent 达到安全轮次上限，但工具任务仍未完成。");
     }
-    emit({ requestId: request.requestId, type: "done", timings, contextUsage });
+    emit({
+      requestId: request.requestId,
+      type: "done",
+      finishReason,
+      timings,
+      contextUsage,
+    });
   }
 
-  private createTools(requestId: string, signal: AbortSignal, emit: EventEmitter): ToolSet {
-    const resultByteLimit = toolResultPromptByteBudget(this.config);
+  private createTools(
+    requestId: string,
+    signal: AbortSignal,
+    emit: EventEmitter,
+    effectiveConfig: RuntimeConfig,
+  ): ToolSet {
+    const resultByteLimit = toolResultPromptByteBudget(effectiveConfig);
     return Object.fromEntries(this.descriptors.map((descriptor) => {
       const source = descriptor.tool;
       return [descriptor.name, dynamicTool({

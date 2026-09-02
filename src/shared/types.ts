@@ -493,6 +493,7 @@ export type ChatEvent =
   | {
       requestId: string;
       type: "done";
+      finishReason?: string;
       timings?: Record<string, unknown>;
       contextUsage?: ChatContextUsage;
     }
