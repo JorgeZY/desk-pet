@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatConversation } from "../../shared/types";
@@ -80,7 +80,7 @@ describe("ChatHistoryList", () => {
     expect(conversationRow?.className).not.toContain("focus-within:bg-sidebar-accent");
   });
 
-  it("contains and truncates long topic titles inside the sidebar", () => {
+  it("contains long topics, reserves the menu column, and prepares hover scrolling", () => {
     const longTitle = "帮我翻译下面这句话 > desk-pet@0.2.1 dev 并继续补充一段很长的说明";
     const longConversation: ChatConversation = {
       ...conversations[0],
@@ -94,14 +94,22 @@ describe("ChatHistoryList", () => {
     const topicButton = screen.getByTitle(longTitle);
     const row = topicButton.closest('[data-slot="conversation-history-item"]');
     const title = within(topicButton).getByText(longTitle);
+    const titleViewport = title.parentElement as HTMLSpanElement;
     const menuTrigger = screen.getByRole("button", { name: `管理 ${longTitle}` });
+
+    Object.defineProperty(titleViewport, "clientWidth", { configurable: true, value: 120 });
+    Object.defineProperty(title, "scrollWidth", { configurable: true, value: 420 });
+    fireEvent.pointerEnter(titleViewport);
 
     expect(container.firstElementChild?.className).toContain("overflow-hidden");
     expect(row?.className).toContain("max-w-full");
     expect(row?.className).toContain("overflow-x-hidden");
+    expect(row?.className).toContain("grid-cols-[minmax(0,1fr)_auto]");
     expect(topicButton.className).toContain("overflow-hidden");
-    expect(title.className).toContain("truncate");
-    expect(title.parentElement?.className).toContain("flex-1");
+    expect(title.className).toContain("conversation-history-title-track");
+    expect(titleViewport.className).toContain("overflow-hidden");
+    expect(titleViewport.dataset.overflowing).toBe("true");
+    expect(titleViewport.style.getPropertyValue("--conversation-title-overflow")).toBe("300px");
     expect(menuTrigger.className).toContain("shrink-0");
   });
 

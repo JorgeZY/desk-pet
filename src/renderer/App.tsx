@@ -3,6 +3,7 @@ import type {
   BootstrapData,
   ChatDocument,
   ChatImage,
+  EmbeddingState,
   RuntimeConfig,
   RuntimeState,
   SpeechEvent,
@@ -19,6 +20,7 @@ import {
   confirmWorkbenchNavigation,
   shouldUpdateRendererView,
 } from "./workbench-navigation";
+import { effectiveRequiredModelParameter } from "../shared/model-parameters";
 
 const ChatPanel = lazy(() => import("./components/ChatPanel").then((module) => ({
   default: module.ChatPanel,
@@ -28,6 +30,9 @@ const Onboarding = lazy(() => import("./components/Onboarding").then((module) =>
 })));
 const Settings = lazy(() => import("./components/Settings").then((module) => ({
   default: module.Settings,
+})));
+const LongTaskPanel = lazy(() => import("./components/LongTaskPanel").then((module) => ({
+  default: module.LongTaskPanel,
 })));
 
 interface GlobalSpeechFeedback {
@@ -69,6 +74,7 @@ function SettingsLoading() {
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapData | null>(null);
   const [runtime, setRuntime] = useState<RuntimeState | null>(null);
+  const [embedding, setEmbedding] = useState<EmbeddingState | null>(null);
   const [speech, setSpeech] = useState<SpeechState | null>(null);
   const [tts, setTts] = useState<TtsState | null>(null);
   const [view, setView] = useState<WindowMode>("pet");
@@ -85,6 +91,7 @@ export function App() {
   const preparingSpeechRef = useRef(false);
   const [globalSpeech, setGlobalSpeech] = useState<GlobalSpeechFeedback | null>(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const settingsDirtyRef = useRef(false);
   const windowKind = new URLSearchParams(location.search).get("window");
 
   const updateDraft = (value: string) => {
@@ -119,6 +126,7 @@ export function App() {
     const applyBootstrap = (data: BootstrapData): void => {
       setBootstrap(data);
       setRuntime(data.runtime);
+      setEmbedding(data.embedding);
       setSpeech(data.speech);
       setTts(data.tts);
     };
@@ -130,6 +138,7 @@ export function App() {
         const isKnownView =
           requestedView === "pet" ||
           requestedView === "chat" ||
+          requestedView === "tasks" ||
           requestedView === "settings" ||
           requestedView === "onboarding";
         setView(
@@ -146,9 +155,11 @@ export function App() {
       if (windowKind === "pet" && data.config.setupComplete) setView("pet");
     });
     const stopRuntimeUpdates = window.desktopPet.onRuntimeState(setRuntime);
+    const stopEmbeddingUpdates = window.desktopPet.onEmbeddingState(setEmbedding);
     return () => {
       stopBootstrapUpdates();
       stopRuntimeUpdates();
+      stopEmbeddingUpdates();
     };
   }, [windowKind]);
 
@@ -286,15 +297,16 @@ export function App() {
     };
   }, []);
 
-  const acceptWorkbenchNavigation = (nextView: "chat" | "settings" | "pet"): boolean => {
+  const acceptWorkbenchNavigation = (nextView: "chat" | "tasks" | "settings" | "pet"): boolean => {
     const allowed = confirmWorkbenchNavigation(
-      view === "settings" ? "settings" : view === "pet" ? "pet" : "chat",
+      view === "settings" ? "settings" : view === "tasks" ? "tasks" : view === "pet" ? "pet" : "chat",
       nextView,
-      settingsDirty,
+      settingsDirtyRef.current,
       () => window.confirm("设置尚未保存，确定要放弃这些修改吗？"),
     );
     if (!allowed) return false;
-    if (view === "settings" && settingsDirty && nextView !== "settings") {
+    if (view === "settings" && settingsDirtyRef.current && nextView !== "settings") {
+      settingsDirtyRef.current = false;
       setSettingsDirty(false);
     }
     return true;
@@ -326,6 +338,7 @@ export function App() {
     const data = await window.desktopPet.saveConfig(nextConfig);
     setBootstrap(data);
     setRuntime(data.runtime);
+    setEmbedding(data.embedding);
     await transitionToView("chat");
     setRuntime(await window.desktopPet.startRuntime());
   };
@@ -334,16 +347,52 @@ export function App() {
     const data = await window.desktopPet.saveConfig({ ...nextConfig, setupComplete: true });
     setBootstrap(data);
     setRuntime(data.runtime);
+    setEmbedding(data.embedding);
     setSpeech(data.speech);
     setTts(data.tts);
     if (!data.config.mmprojPath) setDraftImages([]);
     if (restart) {
       setRuntime(await window.desktopPet.restartRuntime());
+      if (
+        data.config.embedding.enabled
+        && embedding?.phase === "ready"
+        && data.embedding.phase !== "ready"
+      ) {
+        await window.desktopPet.stopEmbedding();
+        // Saving settings may restart an already-running embedding process, but
+        // it must never turn into an implicit ~639 MB model download. A missing
+        // cache remains "not-installed" until the user confirms Prepare.
+        setEmbedding(await window.desktopPet.startEmbedding());
+      }
     }
+    settingsDirtyRef.current = false;
     setSettingsDirty(false);
   };
 
-  const navigateFromWorkbench = (nextView: "chat" | "settings" | "pet"): boolean => {
+  const prepareEmbedding = async (force = false) => {
+    if (
+      bootstrap?.config.embedding.modelMode !== "local"
+      && !window.confirm(force
+        ? "将重新下载并校验约 639 MB 的 Qwen 向量模型，是否继续？"
+        : "首次启用语义检索需要下载约 639 MB 的 Qwen 向量模型。模型保存在项目或应用旁的 models，是否继续？")
+    ) return;
+    setEmbedding(await window.desktopPet.prepareEmbedding(force));
+  };
+
+  const stopEmbedding = async () => {
+    setEmbedding(await window.desktopPet.stopEmbedding());
+  };
+
+  const reindexKnowledge = async () => {
+    setEmbedding(await window.desktopPet.reindexKnowledge());
+  };
+
+  const updateSettingsDirty = (dirty: boolean) => {
+    settingsDirtyRef.current = dirty;
+    setSettingsDirty(dirty);
+  };
+
+  const navigateFromWorkbench = (nextView: "chat" | "tasks" | "settings" | "pet"): boolean => {
     if (!acceptWorkbenchNavigation(nextView)) return false;
     void transitionToView(nextView);
     return true;
@@ -429,7 +478,7 @@ export function App() {
     );
   }
 
-  if (!bootstrap || !runtime || !speech || !tts) {
+  if (!bootstrap || !runtime || !embedding || !speech || !tts) {
     if (windowKind === "workbench") {
       return <WorkbenchLoading />;
     }
@@ -463,7 +512,7 @@ export function App() {
     );
   }
 
-  if (windowKind !== "pet" && (view === "chat" || view === "settings")) {
+  if (windowKind !== "pet" && (view === "chat" || view === "tasks" || view === "settings")) {
     const modelLabel = bootstrap.config.modelMode === "local"
       ? bootstrap.config.modelPath.split(/[\\/]/).pop()?.replace(/\.gguf$/i, "") || "本地 GGUF"
       : bootstrap.config.hfRepo;
@@ -474,8 +523,8 @@ export function App() {
           speech={speech}
           tts={tts}
           chatTemplates={bootstrap.config.chatTemplates}
-          maxTokens={bootstrap.config.maxTokens}
-          contextSize={bootstrap.config.contextSize}
+          maxTokens={effectiveRequiredModelParameter(bootstrap.config, "maxTokens")}
+          contextSize={effectiveRequiredModelParameter(bootstrap.config, "contextSize")}
           modelLabel={modelLabel}
           draft={draft}
           images={draftImages}
@@ -494,15 +543,21 @@ export function App() {
           activePage={view}
           onNavigate={(page) => navigateFromWorkbench(page)}
           onOpenCaption={() => void window.desktopPet.openCaptionWindow()}
+          taskContent={view === "tasks" ? (
+            <Suspense fallback={<WorkbenchLoading />}>
+              <LongTaskPanel onClose={() => navigateFromWorkbench("chat")} />
+            </Suspense>
+          ) : null}
           settingsContent={view === "settings" ? (
             <Suspense fallback={<SettingsLoading />}>
               <Settings
                 initialConfig={bootstrap.config}
                 runtime={runtime}
+                embedding={embedding}
                 speech={speech}
                 tts={tts}
                 embedded
-                onDirtyChange={setSettingsDirty}
+                onDirtyChange={updateSettingsDirty}
                 onPrepareSpeech={prepareSpeech}
                 onImportSpeech={importSpeechModels}
                 onPrepareTts={prepareTts}
@@ -514,6 +569,9 @@ export function App() {
                 }}
                 onClose={() => navigateFromWorkbench("chat")}
                 onSave={saveSettings}
+                onPrepareEmbedding={prepareEmbedding}
+                onStopEmbedding={stopEmbedding}
+                onReindexKnowledge={reindexKnowledge}
               />
             </Suspense>
           ) : null}

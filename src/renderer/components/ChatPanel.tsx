@@ -107,9 +107,10 @@ interface ChatPanelProps {
   onStopSpeaking: () => Promise<void>;
   onClose: () => void;
   onStartRuntime: () => Promise<void>;
-  activePage?: "chat" | "settings";
+  activePage?: "chat" | "tasks" | "settings";
+  taskContent?: ReactNode;
   settingsContent?: ReactNode;
-  onNavigate?: (page: "chat" | "settings") => boolean;
+  onNavigate?: (page: "chat" | "tasks" | "settings") => boolean;
   onOpenCaption?: () => void;
 }
 
@@ -197,6 +198,7 @@ export function ChatPanel({
   onClose,
   onStartRuntime,
   activePage = "chat",
+  taskContent,
   settingsContent,
   onNavigate,
   onOpenCaption,
@@ -1123,6 +1125,19 @@ export function ChatPanel({
               <PixelIcon name="captions" />
             </Button>
             <Button
+              aria-label="长期任务"
+              aria-current={activePage === "tasks" ? "page" : undefined}
+              className={sidebarActionClassName}
+              data-active={activePage === "tasks"}
+              onClick={() => onNavigate?.("tasks")}
+              size="icon-sm"
+              title="打开长期任务"
+              type="button"
+              variant="soft"
+            >
+              <PixelIcon name="tasks" />
+            </Button>
+            <Button
               aria-label="设置"
               aria-current={activePage === "settings" ? "page" : undefined}
               className={sidebarActionClassName}
@@ -1378,6 +1393,22 @@ export function ChatPanel({
               </div>
             </footer>
           </div>
+          <Dialog
+            open={activePage === "tasks"}
+            onOpenChange={(open) => {
+              if (!open) onNavigate?.("chat");
+            }}
+          >
+            <DialogContent
+              className="h-[calc(100vh-28px)] max-h-[calc(100vh-28px)] w-[calc(100vw-28px)] max-w-none overflow-hidden border p-0 sm:max-w-none"
+            >
+              <DialogTitle className="sr-only">长期任务</DialogTitle>
+              <DialogDescription className="sr-only">
+                创建、执行、暂停和恢复可跨应用重启保存的长期任务。
+              </DialogDescription>
+              {taskContent}
+            </DialogContent>
+          </Dialog>
           <Dialog
             open={activePage === "settings"}
             onOpenChange={(open) => {

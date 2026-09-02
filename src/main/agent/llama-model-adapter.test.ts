@@ -1,9 +1,11 @@
 import { jsonSchema, streamText, tool, type LanguageModelUsage } from "ai";
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeConfig } from "../../shared/types";
+import { DEFAULT_MODEL_PARAMETER_OVERRIDES } from "../../shared/model-parameters";
 import {
   createLlamaModelAdapter,
   extractLlamaModelStepMetadata,
+  llamaCppCompatibleTools,
   LLAMA_CPP_PROVIDER_METADATA_KEY,
 } from "./llama-model-adapter";
 
@@ -16,6 +18,12 @@ function runtimeConfig(): RuntimeConfig {
     modelPath: "model.gguf",
     mmprojPath: "",
     mcpServersConfigPath: "",
+    toolSettings: {
+      builtinEnabled: true,
+      mcpEnabled: true,
+      disabledToolIds: [],
+    },
+    modelParameterOverrides: { ...DEFAULT_MODEL_PARAMETER_OVERRIDES },
     host: "127.0.0.1",
     port: 1234,
     contextSize: 8192,
@@ -110,7 +118,7 @@ describe("createLlamaModelAdapter", () => {
           description: "Read a file",
           inputSchema: jsonSchema<{ path: string }>({
             type: "object",
-            properties: { path: { type: "string" } },
+            properties: { path: { type: "string", maxLength: 8_000 } },
             required: ["path"],
             additionalProperties: false,
           }),
@@ -144,7 +152,15 @@ describe("createLlamaModelAdapter", () => {
     expect(requestBody.tools).toEqual([
       expect.objectContaining({
         type: "function",
-        function: expect.objectContaining({ name: "read_file" }),
+        function: expect.objectContaining({
+          name: "read_file",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+            additionalProperties: false,
+          },
+        }),
       }),
     ]);
 
@@ -182,6 +198,113 @@ describe("createLlamaModelAdapter", () => {
       },
     });
     expect(requestBody).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  it("downlevels grammar-incompatible schema copies without mutating the originals", () => {
+    const tools = [{
+      type: "function",
+      function: {
+        name: "create_long_task",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", maxLength: 160 },
+            objective: { type: "string", minLength: 1, maxLength: 8_000 },
+            steps: {
+              type: "array",
+              maxItems: 64,
+              items: {
+                type: "object",
+                properties: {
+                  instruction: { type: "string", minLength: 1, maxLength: 8_000 },
+                },
+              },
+            },
+          },
+        },
+      },
+    }, {
+      type: "function",
+      function: {
+        name: "list_long_tasks",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    }];
+
+    const compatible = llamaCppCompatibleTools(tools);
+
+    expect(compatible).toEqual([{
+      type: "function",
+      function: {
+        name: "create_long_task",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", maxLength: 160 },
+            objective: { type: "string", minLength: 1 },
+            steps: {
+              type: "array",
+              maxItems: 64,
+              items: {
+                type: "object",
+                properties: {
+                  instruction: { type: "string", minLength: 1 },
+                },
+              },
+            },
+          },
+        },
+      },
+    }, {
+      type: "function",
+      function: {
+        name: "list_long_tasks",
+        parameters: { type: "object" },
+      },
+    }]);
+    expect(tools[0].function.parameters.properties.objective.maxLength).toBe(8_000);
+    expect(tools[1].function.parameters).toHaveProperty("additionalProperties", false);
+  });
+
+  it("omits disabled sampling overrides from the llama.cpp request", async () => {
+    let requestBody: Record<string, unknown> = {};
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return sseResponse();
+    });
+    const config = runtimeConfig();
+    config.modelParameterOverrides = {
+      ...config.modelParameterOverrides,
+      temperature: false,
+      topK: false,
+      topP: false,
+      minP: false,
+      repeatPenalty: false,
+      presencePenalty: false,
+    };
+    const adapter = createLlamaModelAdapter(config, "http://127.0.0.1:1234", {
+      fetch: fetchMock,
+    });
+
+    const result = streamText({ model: adapter.model, ...adapter.settings, prompt: "你好" });
+    await result.text;
+
+    expect(requestBody.max_tokens).toBe(512);
+    for (const key of [
+      "temperature",
+      "top_k",
+      "top_p",
+      "min_p",
+      "repeat_penalty",
+      "presence_penalty",
+    ]) {
+      expect(requestBody).not.toHaveProperty(key);
+    }
   });
 
   it("rejects non-loopback endpoints", () => {

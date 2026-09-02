@@ -23,6 +23,7 @@ preload 使用 `contextBridge` 暴露以下能力：
 
 - 读取与保存经过主进程校验的设置
 - 选择 llama.cpp 或 GGUF 文件
+- 导入、列出和移除本地知识库文档
 - 启停本地运行时
 - 发起、停止聊天并订阅流事件
 - 准备语音模型、控制按钮录音并订阅语音状态与转写事件
@@ -35,10 +36,12 @@ preload 使用 `contextBridge` 暴露以下能力：
 - 透明置顶窗口、托盘和全局快捷键
 - JSON 配置的规范化、校验与原子写入
 - 通过 Chromium 网络栈下载 GGUF，并通过打包的 PowerShell 脚本下载语音模型
-- `llama` / `llama-server` 子进程生命周期
+- 聊天与 embedding 两个独立 `llama-server` 子进程的生命周期
 - `/health` 就绪轮询
 - 通过 OpenAI-compatible adapter 驱动 Vercel AI SDK `ToolLoopAgent`
 - 管理 builtin tools、直连 MCP 客户端、串行执行与副作用确认
+- 维护 SQLite 本地知识库、向量缓存和词法/语义混合只读检索
+- 维护 SQLite 长期任务、步骤检查点、审批和显式恢复
 - 默认麦克风采集、F8 按下/释放与 Sherpa-ONNX 语音识别
 - 退出时终止由应用启动的运行时
 
@@ -47,6 +50,14 @@ preload 使用 `contextBridge` 暴露以下能力：
 内置默认远程模型先下载到应用缓存，再与本地模式一样使用 `-m <path.gguf>`。其他远程
 标识使用 llama.cpp 的 `-hf owner/repo:quant`；本地模式接受任意 llama.cpp 支持的
 `.gguf`。运行时只监听 `127.0.0.1`，默认端口 18766，并将 CORS 限制为 localhost。
+模型参数逐项记录是否由应用覆盖；关闭覆盖后，GPU 层数、线程和采样参数不传给
+llama-server / completion API，上下文、最大输出和端口则使用应用的安全默认值，以便仍能
+执行精确预算和连接本机服务。
+
+知识库 embedding 使用独立的 `llama-server` 进程，默认只监听 `127.0.0.1:18767`。应用管理的
+默认模型是官方 `Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0`；只有用户明确执行“准备向量模型”时
+才允许下载，普通知识检索不会隐式触发下载。用户也可选择本地 embedding GGUF。托管模型在
+开发环境保存在项目 `models/`，打包后保存在可执行文件同级的 `models/`。
 
 ## 状态机
 
@@ -132,18 +143,55 @@ stdio、Streamable HTTP 或 legacy SSE server，不再交给 llama.cpp。工具�
 builtin 权限元数据不完整及所有 MCP 调用均先请求用户确认。远程 MCP 地址必须使用 HTTPS，
 只有本机 loopback 可使用 HTTP；URL 禁止携带凭据，header 支持环境变量占位符，敏感值建议
 使用占位符注入。
-用户选择配置并重启模型时，受信任配置中的 stdio command 会直接启动；逐次确认只覆盖随后
+用户保存受信任配置后，stdio command 会在下一次工具初始化时直接启动；逐次确认只覆盖随后
 发起的 MCP tool call，不是对 server 进程启动的沙箱或审批。
-首期不持久化未完成 run，也不做
-对话摘要、RAG 或长期 memory；工具结果仍保留最近两轮临时 scratchpad，并由精确请求计数作为
-8K/16K 本地上下文的最终边界。首期回注模型的 MCP 结果以文本为主，image、audio、
-resource 等富媒体结果暂不作为多模态 tool result 处理。
+普通聊天仍不持久化未完成的单次 run，也不做对话摘要或长期 memory；工具结果保留最近两轮
+临时 scratchpad，并由精确请求计数作为 8K/16K 本地上下文的最终边界。持久化长期任务在下文
+描述的步骤边界保存状态，但每次模型执行切片仍受相同上下文限制。首期回注模型的 MCP 结果以
+文本为主，image、audio、resource 等富媒体结果暂不作为多模态 tool result 处理。
 模型可见的工具 schema 同样受限：每轮最多 32 个，且估算占用不超过上下文的 50%；超过时
 按 provider 顺序保留并向用户明确列出本轮未启用的工具，避免首个请求因工具定义直接溢出。
 
 应用退出采用有界的两阶段清理：renderer 先终止活动 run 并等待聊天保存 IPC 提交，主进程收到
 匹配的 ACK 后才关闭 SQLite；若 ACK 失败或超时，则保留数据库句柄直到进程退出，避免主动
 截断仍在途的保存。
+
+## 本地知识库
+
+知识库使用独立于聊天历史的 `knowledge.sqlite`。主进程复用文本/PDF 提取器，将每个文档限制在
+400,000 字符内，按约 1,200 字符、160 字符重叠做确定性分块；文档和分块正文持久化到 SQLite。
+MiniSearch 在启动时从这些分块重建纯 JavaScript 中英文词法索引，因此即使独立 embedding 服务
+未安装、已关闭或异常，基础检索也不依赖 Electron 原生扩展或 Python sidecar。
+
+Agent 只看到一个只读的 `search_local_knowledge` 工具。默认返回 3 个短摘录，每个摘录围绕命中
+位置并保留文件名；通用工具结果预算会再次按 8K/16K 上下文裁剪。工具提示和系统指令都把检索
+内容标记为不可信参考数据，避免文档内容覆盖系统规则。知识库是独立工具源，可全局关闭，也可用
+现有 `disabledToolIds` 单独禁用。导入、替换和移除索引立即生效，不要求重启 llama-server，且
+移除索引不会删除原始文件。
+
+语义检索由独立 embedding runtime 提供，不复用聊天生成模型。分块 embedding 以 Float32 BLOB
+按 chunk 和模型 fingerprint 缓存在 SQLite；文档替换或删除会使相应向量失效，模型 fingerprint
+变化则产生待重建状态。查询时精确计算 cosine 相似度，再通过 reciprocal rank fusion（RRF）与
+MiniSearch 排名合并。embedding 服务不可用、响应无效或维度不匹配时，检索器可靠退回原始词法
+结果，不阻断 `search_local_knowledge` 工具。
+
+## 持久化长期任务
+
+长期任务使用独立的 `long-tasks.sqlite` 保存任务、预先定义的步骤、步骤输出和有界事件记录。
+任务状态为 `draft`、`queued`、`running`、`waiting-approval`、`paused`、`interrupted`、
+`completed`、`failed` 或 `cancelled`。任务必须由用户明确启动；通过 Agent 创建时也只生成需要
+确认的草稿，不会自动开始。
+
+每个持久步骤是一次短 Agent 执行，当前最多 6 个模型/工具 round。运行中会增量保存部分输出，
+步骤完成后保存简明检查点；下一步骤只回注有界的已完成检查点，而不是把任务的全部历史塞回
+上下文。因此 8K/16K 是每个执行切片的限制，不是整个长期任务的总长度。需要审批的工具会把
+任务置为 `waiting-approval`，批准或拒绝后再继续当前 run。
+
+聊天和长期任务共享聊天 `llama-server` 的 `-np 1` 单槽。尚未开始的 task 可被 chat 越过，但
+调度器在有 task 等待时最多连续运行 3 个 chat，避免长期任务无限饥饿；运行中的请求不会被抢占。
+应用退出或重新打开数据库时，原 `queued`、`running` 和 `waiting-approval` 任务恢复为
+`interrupted`，并保留步骤检查点，只有用户手动继续后才重新排队。本实现没有自动后台计划器，
+也不承诺无人值守的完全自治。
 
 ## 下一阶段
 

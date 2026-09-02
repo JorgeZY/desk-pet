@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../main/config-store";
-import type { BootstrapData, WindowMode } from "../shared/types";
+import type { BootstrapData, RuntimeConfig, WindowMode } from "../shared/types";
 import { App } from "./App";
 
 vi.mock("./components/ChatPanel", () => ({
@@ -23,10 +23,19 @@ vi.mock("./components/ChatPanel", () => ({
 }));
 
 vi.mock("./components/Settings", () => ({
-  Settings: ({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) => (
-    <button type="button" onClick={() => onDirtyChange?.(true)}>
-      修改设置
-    </button>
+  Settings: ({ initialConfig, onClose, onDirtyChange, onSave }: {
+    initialConfig: RuntimeConfig;
+    onClose: () => void;
+    onDirtyChange?: (dirty: boolean) => void;
+    onSave: (config: RuntimeConfig, restart: boolean) => Promise<void>;
+  }) => (
+    <div>
+      <button type="button" onClick={() => onDirtyChange?.(true)}>修改设置</button>
+      <button type="button" onClick={() => {
+        onDirtyChange?.(true);
+        void onSave(initialConfig, true).then(onClose);
+      }}>保存并重启</button>
+    </div>
   ),
 }));
 
@@ -45,6 +54,17 @@ const bootstrap: BootstrapData = {
     visionEnabled: false,
     endpoint: "http://127.0.0.1:18766",
     message: "模型已就绪。",
+    updatedAt: 1,
+  },
+  embedding: {
+    enabled: true,
+    phase: "ready",
+    endpoint: "http://127.0.0.1:18767",
+    modelPath: "D:\\models\\Qwen3-Embedding-0.6B-Q8_0.gguf",
+    message: "向量模型已就绪。",
+    indexedChunkCount: 0,
+    pendingChunkCount: 0,
+    embeddingDimension: 1024,
     updatedAt: 1,
   },
   speech: {
@@ -89,6 +109,7 @@ beforeEach(() => {
         return () => undefined;
       }),
       onRuntimeState: vi.fn().mockReturnValue(() => undefined),
+      onEmbeddingState: vi.fn().mockReturnValue(() => undefined),
       onPrepareQuit: vi.fn().mockReturnValue(() => undefined),
       onSpeechState: vi.fn().mockReturnValue(() => undefined),
       onTtsState: vi.fn().mockReturnValue(() => undefined),
@@ -98,6 +119,12 @@ beforeEach(() => {
         return () => undefined;
       }),
       notifyViewReady: vi.fn(),
+      saveConfig: vi.fn().mockResolvedValue(bootstrap),
+      restartRuntime: vi.fn().mockResolvedValue(bootstrap.runtime),
+      stopEmbedding: vi.fn().mockResolvedValue(bootstrap.embedding),
+      startEmbedding: vi.fn().mockResolvedValue(bootstrap.embedding),
+      prepareEmbedding: vi.fn().mockResolvedValue(bootstrap.embedding),
+      setWindowMode: vi.fn().mockResolvedValue(undefined),
     },
   });
 });
@@ -161,5 +188,45 @@ describe("App main-process view navigation", () => {
     await waitFor(() => {
       expect(screen.getByTestId("workbench").getAttribute("data-page")).toBe("chat");
     });
+  });
+
+  it("leaves settings after a successful save-and-restart without a discard prompt", async () => {
+    const user = userEvent.setup();
+    const confirmDiscard = vi.spyOn(window, "confirm");
+    render(<App />);
+
+    expect((await screen.findByTestId("workbench")).getAttribute("data-page")).toBe("settings");
+    await user.click(screen.getByRole("button", { name: "保存并重启" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench").getAttribute("data-page")).toBe("chat");
+    });
+    expect(window.desktopPet.restartRuntime).toHaveBeenCalledOnce();
+    expect(confirmDiscard).not.toHaveBeenCalled();
+  });
+
+  it("restarts a previously-ready embedding service without allowing an implicit download", async () => {
+    const user = userEvent.setup();
+    const stoppedEmbedding = {
+      ...bootstrap.embedding,
+      phase: "stopped" as const,
+      message: "向量模型尚未启动。",
+    };
+    vi.mocked(window.desktopPet.saveConfig).mockResolvedValueOnce({
+      ...bootstrap,
+      embedding: stoppedEmbedding,
+    });
+    vi.mocked(window.desktopPet.startEmbedding).mockResolvedValueOnce({
+      ...stoppedEmbedding,
+      phase: "not-installed",
+      message: "Embedding 模型尚未下载。",
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "保存并重启" }));
+
+    await waitFor(() => expect(window.desktopPet.startEmbedding).toHaveBeenCalledOnce());
+    expect(window.desktopPet.stopEmbedding).toHaveBeenCalledOnce();
+    expect(window.desktopPet.prepareEmbedding).not.toHaveBeenCalled();
   });
 });

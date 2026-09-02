@@ -1,6 +1,8 @@
+import type { ModelParameterOverrides } from "./model-parameters";
+
 export type ModelMode = "huggingface" | "local";
 
-export type WindowMode = "pet" | "chat" | "settings" | "onboarding";
+export type WindowMode = "pet" | "chat" | "tasks" | "settings" | "onboarding";
 
 export interface WindowPosition {
   x: number;
@@ -54,6 +56,25 @@ export interface TtsConfig {
   modelDirectory: string;
 }
 
+export interface ToolSettingsConfig {
+  builtinEnabled: boolean;
+  mcpEnabled: boolean;
+  knowledgeEnabled: boolean;
+  tasksEnabled: boolean;
+  disabledToolIds: string[];
+}
+
+export interface EmbeddingConfig {
+  enabled: boolean;
+  modelMode: ModelMode;
+  hfRepo: string;
+  modelPath: string;
+  port: number;
+  contextSize: number;
+  gpuLayers: number;
+  threads: number;
+}
+
 export interface RuntimeConfig {
   setupComplete: boolean;
   executable: string;
@@ -62,6 +83,9 @@ export interface RuntimeConfig {
   modelPath: string;
   mmprojPath: string;
   mcpServersConfigPath: string;
+  toolSettings: ToolSettingsConfig;
+  embedding: EmbeddingConfig;
+  modelParameterOverrides: ModelParameterOverrides;
   host: "127.0.0.1";
   port: number;
   contextSize: number;
@@ -230,6 +254,7 @@ export type CaptionEvent =
 export interface BootstrapData {
   config: RuntimeConfig;
   runtime: RuntimeState;
+  embedding: EmbeddingState;
   speech: SpeechState;
   tts: TtsState;
   caption: CaptionState;
@@ -289,6 +314,117 @@ export interface ChatDocument {
   truncated?: boolean;
 }
 
+export interface KnowledgeDocumentSummary {
+  id: string;
+  path: string;
+  name: string;
+  mimeType: ChatDocumentMimeType;
+  characterCount: number;
+  chunkCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type EmbeddingPhase =
+  | "not-installed"
+  | "stopped"
+  | "starting"
+  | "downloading"
+  | "indexing"
+  | "ready"
+  | "stopping"
+  | "error";
+
+export interface EmbeddingState {
+  enabled: boolean;
+  phase: EmbeddingPhase;
+  endpoint: string;
+  modelPath: string;
+  message: string;
+  pid?: number;
+  indexedChunkCount: number;
+  pendingChunkCount: number;
+  embeddingDimension?: number;
+  download?: ModelDownloadProgress;
+  error?: string;
+  lastLog?: string;
+  updatedAt: number;
+}
+
+export interface KnowledgeSearchResult {
+  chunkId: string;
+  documentId: string;
+  documentName: string;
+  position: number;
+  score: number;
+  text: string;
+}
+
+export type LongTaskStatus =
+  | "draft"
+  | "queued"
+  | "running"
+  | "waiting-approval"
+  | "paused"
+  | "interrupted"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type LongTaskStepStatus =
+  | "pending"
+  | "running"
+  | "interrupted"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface LongTaskStepInput {
+  title: string;
+  instruction: string;
+}
+
+export interface LongTaskCreateInput {
+  title: string;
+  objective: string;
+  steps: LongTaskStepInput[];
+}
+
+export interface LongTaskStep extends LongTaskStepInput {
+  id: string;
+  position: number;
+  status: LongTaskStepStatus;
+  attemptCount: number;
+  output?: string;
+  error?: string;
+  startedAt?: number;
+  completedAt?: number;
+}
+
+export interface LongTask {
+  id: string;
+  title: string;
+  objective: string;
+  status: LongTaskStatus;
+  currentStep: number;
+  steps: LongTaskStep[];
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  pendingApproval?: {
+    requestId: string;
+    stepId: string;
+    call: ChatToolCall;
+  };
+}
+
+export type LongTaskEvent =
+  | { type: "task-updated"; task: LongTask }
+  | { type: "task-deleted"; taskId: string }
+  | { type: "chat-event"; taskId: string; stepId: string; event: ChatEvent };
+
 export type ThinkingEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export type ChatToolCallStatus =
@@ -329,7 +465,7 @@ export type ChatMessagePart =
 export interface ChatToolDefinition {
   id: string;
   displayName: string;
-  source: "builtin" | "mcp";
+  source: "builtin" | "mcp" | "knowledge" | "task";
   requiresApproval: boolean;
 }
 
@@ -357,6 +493,7 @@ export type ChatEvent =
   | {
       requestId: string;
       type: "done";
+      finishReason?: string;
       timings?: Record<string, unknown>;
       contextUsage?: ChatContextUsage;
     }
@@ -381,6 +518,22 @@ export interface DesktopPetApi {
   startRuntime(): Promise<RuntimeState>;
   stopRuntime(): Promise<RuntimeState>;
   restartRuntime(): Promise<RuntimeState>;
+  startEmbedding(): Promise<EmbeddingState>;
+  prepareEmbedding(force?: boolean): Promise<EmbeddingState>;
+  stopEmbedding(): Promise<EmbeddingState>;
+  reindexKnowledge(): Promise<EmbeddingState>;
+  listLongTasks(): Promise<LongTask[]>;
+  createLongTask(input: LongTaskCreateInput): Promise<LongTask>;
+  startLongTask(taskId: string): Promise<LongTask>;
+  pauseLongTask(taskId: string): Promise<LongTask>;
+  cancelLongTask(taskId: string): Promise<LongTask>;
+  deleteLongTask(taskId: string): Promise<void>;
+  resolveLongTaskApproval(
+    taskId: string,
+    requestId: string,
+    toolCallId: string,
+    approved: boolean,
+  ): void;
   prepareSpeech(force?: boolean): Promise<SpeechState>;
   importSpeechModels(): Promise<SpeechState | null>;
   startSpeech(): Promise<SpeechStartResult | null>;
@@ -401,11 +554,15 @@ export interface DesktopPetApi {
   notifyCaptionCaptureEnded(message: string): void;
   pickExecutable(): Promise<FilePickResult | null>;
   pickModel(): Promise<FilePickResult | null>;
+  pickEmbeddingModel(): Promise<FilePickResult | null>;
   pickMmproj(): Promise<FilePickResult | null>;
   pickMcpServersConfig(): Promise<FilePickResult | null>;
   listRuntimeTools(): Promise<ChatToolDefinition[]>;
   pickChatImages(): Promise<ChatImage[]>;
   pickChatDocuments(): Promise<ChatDocument[]>;
+  listKnowledgeDocuments(): Promise<KnowledgeDocumentSummary[]>;
+  importKnowledgeDocuments(): Promise<KnowledgeDocumentSummary[] | null>;
+  deleteKnowledgeDocument(documentId: string): Promise<KnowledgeDocumentSummary[]>;
   listChatConversations(): Promise<ChatConversation[]>;
   createChatConversation(): Promise<ChatConversation>;
   loadChatConversation(conversationId: string): Promise<ChatMessage[]>;
@@ -431,6 +588,8 @@ export interface DesktopPetApi {
   onChatEvent(listener: (event: ChatEvent) => void): () => void;
   onBootstrap(listener: (data: BootstrapData) => void): () => void;
   onRuntimeState(listener: (state: RuntimeState) => void): () => void;
+  onEmbeddingState(listener: (state: EmbeddingState) => void): () => void;
+  onLongTaskEvent(listener: (event: LongTaskEvent) => void): () => void;
   onSpeechState(listener: (state: SpeechState) => void): () => void;
   onSpeechEvent(listener: (event: SpeechEvent) => void): () => void;
   onTtsState(listener: (state: TtsState) => void): () => void;

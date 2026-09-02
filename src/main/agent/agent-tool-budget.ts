@@ -18,7 +18,7 @@ export interface AgentToolSelection {
 
 /**
  * Bounds model-visible tool schemas before the first request. Tools retain
- * provider order (builtin first, then configured MCP servers); skipped tools
+ * provider order (local knowledge, builtin, then configured MCP servers); skipped tools
  * are always surfaced to the user by the caller.
  */
 export function selectAgentToolsForContext(

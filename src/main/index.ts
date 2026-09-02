@@ -45,18 +45,25 @@ import {
   PET_WINDOW_BASE_HEIGHT,
   PET_WINDOW_WIDTH,
 } from "../shared/pet-window";
-import { ConfigStore } from "./config-store";
+import { ConfigStore, normalizeConfig, validateConfig } from "./config-store";
 import { ChatHistoryStore } from "./chat-history-store";
 import { ChatAttachmentService } from "./chat-attachment-service";
+import { KnowledgeBaseStore } from "./knowledge-base-store";
+import { KnowledgeRetriever } from "./knowledge-retriever";
+import { LongTaskStore } from "./long-task-store";
+import { LongTaskRuntime } from "./long-task-runtime";
+import type { LongTaskToolStore } from "./agent/long-task-tool-provider";
 import { registerChatIpc } from "./chat-ipc";
 import { pasteDictationText, resolveShortcutSpeechSource } from "./global-dictation";
 import { AudioModeCoordinator } from "./audio-mode-coordinator";
 import { createAsyncBeforeQuitHandler } from "./app-shutdown";
+import { agentExecutionConfigChanged } from "./agent-execution-config";
 import { LlamaRuntime } from "./llama-runtime";
+import { EmbeddingRuntime } from "./embedding-runtime";
 import { LiveCaptionRuntime } from "./live-caption-runtime";
 import { migrateModelDirectory, resolveModelDirectory } from "./model-directory";
 import { validateMcpServersConfigContents } from "./mcp-servers-config";
-import { ManagedModelDownloader } from "./model-downloader";
+import { ManagedEmbeddingModelDownloader, ManagedModelDownloader } from "./model-downloader";
 import { SpeechModelManager } from "./speech-model-manager";
 import { SpeechRuntime } from "./speech-runtime";
 import { TtsModelManager } from "./tts-model-manager";
@@ -81,8 +88,13 @@ let configStore: ConfigStore;
 let windowStateStore: WindowStateStore;
 let windowUiState: WindowUiState;
 let chatHistoryStore: ChatHistoryStore | null = null;
+let knowledgeBaseStore: KnowledgeBaseStore | null = null;
+let knowledgeRetriever: KnowledgeRetriever | null = null;
+let longTaskStore: LongTaskStore | null = null;
 let config: RuntimeConfig;
 let runtime: LlamaRuntime;
+let embeddingRuntime: EmbeddingRuntime;
+let longTaskRuntime: LongTaskRuntime | null = null;
 let speech: SpeechRuntime;
 let tts: TtsRuntime;
 let caption: LiveCaptionRuntime;
@@ -158,6 +170,44 @@ function updateStoredConfig(
   return task;
 }
 
+function saveRuntimeConfig(nextConfig: RuntimeConfig): Promise<{
+  previousConfig: RuntimeConfig;
+  savedConfig: RuntimeConfig;
+}> {
+  const task = configWriteQueue.then(async () => {
+    const previousConfig = config;
+    const candidateConfig = normalizeConfig({
+      ...nextConfig,
+      speech: {
+        ...nextConfig.speech,
+        modelDirectory: previousConfig.speech.modelDirectory,
+      },
+      tts: {
+        ...nextConfig.tts,
+        modelDirectory: previousConfig.tts.modelDirectory,
+      },
+      caption: previousConfig.caption,
+    });
+    const errors = validateConfig(candidateConfig);
+    if (errors.length) throw new Error(errors.join("\n"));
+
+    await embeddingRuntime.updateConfig(candidateConfig);
+    try {
+      config = await configStore.write(candidateConfig);
+    } catch (error) {
+      try {
+        await embeddingRuntime.updateConfig(previousConfig);
+      } catch (rollbackError) {
+        console.error("[config] failed to restore embedding config after save failure:", rollbackError);
+      }
+      throw error;
+    }
+    return { previousConfig, savedConfig: config };
+  });
+  configWriteQueue = task.then(() => undefined, () => undefined);
+  return task;
+}
+
 function assetPath(fileName: string): string {
   return join(__dirname, "../../assets", fileName);
 }
@@ -173,7 +223,7 @@ function rendererUrl(view?: string, windowKind?: "pet" | "workbench"): string {
 
 function requestedWindowMode(): WindowMode | undefined {
   const value = process.env.DESK_PET_CAPTURE_VIEW;
-  return value === "pet" || value === "chat" || value === "settings" || value === "onboarding"
+  return value === "pet" || value === "chat" || value === "tasks" || value === "settings" || value === "onboarding"
     ? value
     : undefined;
 }
@@ -613,6 +663,10 @@ function createTray(): Tray {
         click: () => openWindowMode("chat"),
       },
       {
+        label: "长期任务",
+        click: () => openWindowMode("tasks"),
+      },
+      {
         label: "设置",
         click: () => openWindowMode("settings"),
       },
@@ -623,7 +677,10 @@ function createTray(): Tray {
       { type: "separator" },
       {
         label: "重启本地模型",
-        click: () => void runtime.restart(),
+        click: () => {
+          pauseExecutableLongTasks("聊天模型正在重启，长期任务已暂停。");
+          void runtime.restart();
+        },
       },
       {
         label: "退出",
@@ -672,12 +729,49 @@ function bootstrap(): BootstrapData {
   return {
     config,
     runtime: runtime.snapshot,
+    embedding: embeddingRuntime.snapshot,
     speech: speech.snapshot,
     tts: tts.snapshot,
     caption: caption.snapshot,
     platform: process.platform,
     appVersion: app.getVersion(),
   };
+}
+
+function refreshEmbeddingIndexStats(): void {
+  if (!knowledgeBaseStore || !embeddingRuntime) return;
+  embeddingRuntime.updateIndexStats(
+    knowledgeBaseStore.getEmbeddingStats(embeddingRuntime.fingerprint()),
+  );
+}
+
+async function reindexKnowledge() {
+  if (!config.embedding.enabled) throw new Error("专用向量模型已在设置中停用。");
+  if (!knowledgeBaseStore || !knowledgeRetriever) {
+    throw new Error("本地知识库尚未初始化。");
+  }
+  await knowledgeRetriever.indexPendingChunks({ force: true });
+  refreshEmbeddingIndexStats();
+  return embeddingRuntime.snapshot;
+}
+
+function pauseExecutableLongTasks(reason: string): void {
+  if (!longTaskRuntime) return;
+  for (const task of longTaskRuntime.listTasks()) {
+    if (task.status !== "queued" && task.status !== "running" && task.status !== "waiting-approval") {
+      continue;
+    }
+    try {
+      longTaskRuntime.pauseTask(task.id, reason);
+    } catch (error) {
+      console.warn(`[long-task:${task.id}] ${reason}`, error);
+    }
+  }
+}
+
+function requireLongTaskRuntime(): LongTaskRuntime {
+  if (!longTaskRuntime) throw new Error("长期任务数据库不可用。");
+  return longTaskRuntime;
 }
 
 async function startSpeechSession(source: "button" | "shortcut") {
@@ -724,13 +818,12 @@ async function migrateLegacyUserData(): Promise<void> {
 function registerIpc(): void {
   ipcMain.handle("desktop-pet:get-bootstrap", () => bootstrap());
   ipcMain.handle("desktop-pet:save-config", async (_event, nextConfig: RuntimeConfig) => {
-    await updateStoredConfig((current) => ({
-      ...nextConfig,
-      speech: { ...nextConfig.speech, modelDirectory: current.speech.modelDirectory },
-      tts: { ...nextConfig.tts, modelDirectory: current.tts.modelDirectory },
-      caption: current.caption,
-    }));
+    const { previousConfig, savedConfig } = await saveRuntimeConfig(nextConfig);
+    if (agentExecutionConfigChanged(previousConfig, savedConfig)) {
+      pauseExecutableLongTasks("模型或工具配置发生变化，长期任务已暂停，请检查后继续。");
+    }
     runtime.updateConfig(config);
+    refreshEmbeddingIndexStats();
     speech.updateConfig(config.speech);
     tts.updateConfig(config.tts);
     caption.updateThreads(config.speech.threads);
@@ -742,8 +835,45 @@ function registerIpc(): void {
   ipcMain.handle("runtime:probe", (_event, executable?: string) => probeExecutable(executable));
   ipcMain.handle("runtime:start", () => runtime.start());
   ipcMain.handle("runtime:stop", () => runtime.stop());
-  ipcMain.handle("runtime:restart", () => runtime.restart());
+  ipcMain.handle("runtime:restart", () => {
+    pauseExecutableLongTasks("聊天模型正在重启，长期任务已暂停。");
+    return runtime.restart();
+  });
   ipcMain.handle("runtime:list-tools", () => runtime.listTools());
+  ipcMain.handle("embedding:start", () => embeddingRuntime.start(false));
+  ipcMain.handle("embedding:prepare", (_event, force?: boolean) =>
+    embeddingRuntime.prepare(force === true));
+  ipcMain.handle("embedding:stop", () => embeddingRuntime.stop());
+  ipcMain.handle("knowledge:reindex", () => reindexKnowledge());
+  ipcMain.handle("long-task:list", () => requireLongTaskRuntime().listTasks());
+  ipcMain.handle("long-task:create", (_event, input) => requireLongTaskRuntime().createTask(input));
+  ipcMain.handle("long-task:start", (_event, taskId: string) => requireLongTaskRuntime().startTask(taskId));
+  ipcMain.handle("long-task:pause", (_event, taskId: string) => requireLongTaskRuntime().pauseTask(taskId));
+  ipcMain.handle("long-task:cancel", (_event, taskId: string) => requireLongTaskRuntime().cancelTask(taskId));
+  ipcMain.handle("long-task:delete", (_event, taskId: string) => requireLongTaskRuntime().deleteTask(taskId));
+  ipcMain.on("long-task:approval", (event, payload: {
+    taskId?: unknown;
+    requestId?: unknown;
+    toolCallId?: unknown;
+    approved?: unknown;
+  }) => {
+    if (event.sender !== mainWindow?.webContents) return;
+    if (
+      typeof payload?.taskId !== "string"
+      || typeof payload.requestId !== "string"
+      || typeof payload.toolCallId !== "string"
+    ) return;
+    try {
+      requireLongTaskRuntime().resolveApproval(
+        payload.taskId,
+        payload.requestId,
+        payload.toolCallId,
+        payload.approved === true,
+      );
+    } catch (error) {
+      console.warn("Could not resolve long-task tool approval:", error);
+    }
+  });
   ipcMain.handle("speech:prepare", async (_event, force?: boolean) => {
     await updateStoredConfig((current) => ({
       ...current,
@@ -838,6 +968,9 @@ function registerIpc(): void {
   ipcMain.handle("dialog:pick-model", () =>
     chatAttachments.pickFile("选择 llama.cpp GGUF 模型", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
   );
+  ipcMain.handle("dialog:pick-embedding-model", () =>
+    chatAttachments.pickFile("选择专用 Embedding GGUF 模型", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
+  );
   ipcMain.handle("dialog:pick-mmproj", () =>
     chatAttachments.pickFile("选择视觉投影模型（mmproj）", [{ name: "GGUF 模型", extensions: ["gguf"] }]),
   );
@@ -852,6 +985,22 @@ function registerIpc(): void {
   });
   ipcMain.handle("dialog:pick-chat-images", () => chatAttachments.pickImages());
   ipcMain.handle("dialog:pick-chat-documents", () => chatAttachments.pickDocuments());
+  ipcMain.handle("knowledge:list", () => knowledgeBaseStore?.listDocuments() ?? []);
+  ipcMain.handle("knowledge:import", async () => {
+    if (!knowledgeBaseStore) throw new Error("本地知识库尚未初始化。");
+    const documents = await chatAttachments.pickKnowledgeDocuments();
+    if (!documents.length) return null;
+    for (const document of documents) knowledgeBaseStore.upsertDocument(document);
+    refreshEmbeddingIndexStats();
+    return knowledgeBaseStore.listDocuments();
+  });
+  ipcMain.handle("knowledge:delete", (_event, documentId: string) => {
+    if (!knowledgeBaseStore) throw new Error("本地知识库尚未初始化。");
+    if (typeof documentId !== "string") throw new Error("知识库文档 ID 无效。");
+    knowledgeBaseStore.deleteDocument(documentId);
+    refreshEmbeddingIndexStats();
+    return knowledgeBaseStore.listDocuments();
+  });
   registerChatIpc({
     runtime,
     tts,
@@ -861,7 +1010,7 @@ function registerIpc(): void {
   ipcMain.handle("window:set-mode", (event, mode: WindowMode) => {
     const trustedSender = event.sender === mainWindow?.webContents || event.sender === petWindow?.webContents;
     if (!trustedSender) throw new Error("不允许此窗口切换应用视图。");
-    if (!["pet", "chat", "settings", "onboarding"].includes(mode)) {
+    if (!["pet", "chat", "tasks", "settings", "onboarding"].includes(mode)) {
       throw new Error("未知的窗口视图。");
     }
     setWindowMode(mode);
@@ -1062,13 +1211,58 @@ async function initialize(): Promise<void> {
     chatHistoryStore = null;
     console.warn("Could not initialize the local chat database:", error);
   }
+  try {
+    await fs.mkdir(app.getPath("userData"), { recursive: true });
+    knowledgeBaseStore = new KnowledgeBaseStore(join(app.getPath("userData"), "knowledge.sqlite"));
+  } catch (error) {
+    knowledgeBaseStore = null;
+    console.warn("Could not initialize the local knowledge database:", error);
+  }
+  try {
+    await fs.mkdir(app.getPath("userData"), { recursive: true });
+    longTaskStore = new LongTaskStore(join(app.getPath("userData"), "long-tasks.sqlite"));
+  } catch (error) {
+    longTaskStore = null;
+    console.warn("Could not initialize the durable long-task database:", error);
+  }
   const modelDownloader = new ManagedModelDownloader(
     modelDirectory,
     (input, init) => net.fetch(input, init),
   );
-  runtime = new LlamaRuntime(config, (modelId, options) =>
-    modelDownloader.resolve(modelId, options),
+  const embeddingModelDownloader = new ManagedEmbeddingModelDownloader(
+    modelDirectory,
+    (input, init) => net.fetch(input, init),
   );
+  embeddingRuntime = new EmbeddingRuntime(
+    config,
+    (modelId, options) => embeddingModelDownloader.resolve(modelId, options),
+    (input, init) => net.fetch(input, init),
+  );
+  knowledgeRetriever = knowledgeBaseStore
+    ? new KnowledgeRetriever(knowledgeBaseStore, embeddingRuntime, {
+        onWarning: (message) => console.warn(`[knowledge-retriever] ${message}`),
+        onIndexProgress: (stats) => embeddingRuntime.updateIndexStats(stats),
+      })
+    : null;
+  const longTaskToolStore: LongTaskToolStore | undefined = longTaskStore
+    ? {
+        createTask: (input) => longTaskRuntime
+          ? longTaskRuntime.createTask(input)
+          : longTaskStore!.createTask(input),
+        listTasks: () => longTaskRuntime
+          ? longTaskRuntime.listTasks()
+          : longTaskStore!.listTasks(),
+        getTask: (taskId) => longTaskStore!.getTask(taskId),
+      }
+    : undefined;
+  runtime = new LlamaRuntime(
+    config,
+    (modelId, options) => modelDownloader.resolve(modelId, options),
+    knowledgeRetriever ?? knowledgeBaseStore ?? undefined,
+    longTaskToolStore,
+  );
+  longTaskRuntime = longTaskStore ? new LongTaskRuntime(longTaskStore, runtime) : null;
+  refreshEmbeddingIndexStats();
   const speechModels = new SpeechModelManager(
     modelDirectory,
     app.isPackaged ? join(process.resourcesPath, "scripts") : join(app.getAppPath(), "scripts"),
@@ -1098,6 +1292,12 @@ async function initialize(): Promise<void> {
   tts.on("state", sendTtsState);
   runtime.on("state", (state) => {
     sendToAppWindows("runtime:state", state);
+  });
+  embeddingRuntime.on("state", (state) => {
+    sendToAppWindows("embedding:state", state);
+  });
+  longTaskRuntime?.on("event", (event) => {
+    sendToAppWindows("long-task:event", event);
   });
   runtime.on("log", (message: string) => {
     console.warn(`[llama-runtime] ${message}`);
@@ -1178,7 +1378,9 @@ app.on("before-quit", createAsyncBeforeQuitHandler({
   cleanup: async () => {
     const results = await Promise.allSettled([
       prepareRendererChatForQuit(),
+      longTaskRuntime?.dispose() ?? Promise.resolve(),
       runtime?.stop(),
+      embeddingRuntime?.stop(),
       speech?.dispose(),
       caption?.dispose(),
       tts?.dispose(),
@@ -1196,6 +1398,19 @@ app.on("before-quit", createAsyncBeforeQuitHandler({
       }
     } else {
       console.warn("Leaving chat history open because the renderer did not acknowledge persistence.");
+    }
+    try {
+      knowledgeBaseStore?.close();
+      knowledgeBaseStore = null;
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      longTaskStore?.close();
+      longTaskStore = null;
+      longTaskRuntime = null;
+    } catch (error) {
+      failures.push(error);
     }
     if (failures.length) throw new AggregateError(failures, "应用退出清理失败");
   },

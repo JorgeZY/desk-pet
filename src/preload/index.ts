@@ -7,6 +7,9 @@ import type {
   CaptionEvent,
   CaptionState,
   DesktopPetApi,
+  EmbeddingState,
+  LongTaskCreateInput,
+  LongTaskEvent,
   RuntimeConfig,
   RuntimeState,
   SpeechEvent,
@@ -28,6 +31,18 @@ const api: DesktopPetApi = {
   startRuntime: () => ipcRenderer.invoke("runtime:start"),
   stopRuntime: () => ipcRenderer.invoke("runtime:stop"),
   restartRuntime: () => ipcRenderer.invoke("runtime:restart"),
+  startEmbedding: () => ipcRenderer.invoke("embedding:start"),
+  prepareEmbedding: (force?: boolean) => ipcRenderer.invoke("embedding:prepare", force),
+  stopEmbedding: () => ipcRenderer.invoke("embedding:stop"),
+  reindexKnowledge: () => ipcRenderer.invoke("knowledge:reindex"),
+  listLongTasks: () => ipcRenderer.invoke("long-task:list"),
+  createLongTask: (input: LongTaskCreateInput) => ipcRenderer.invoke("long-task:create", input),
+  startLongTask: (taskId: string) => ipcRenderer.invoke("long-task:start", taskId),
+  pauseLongTask: (taskId: string) => ipcRenderer.invoke("long-task:pause", taskId),
+  cancelLongTask: (taskId: string) => ipcRenderer.invoke("long-task:cancel", taskId),
+  deleteLongTask: (taskId: string) => ipcRenderer.invoke("long-task:delete", taskId),
+  resolveLongTaskApproval: (taskId, requestId, toolCallId, approved) =>
+    ipcRenderer.send("long-task:approval", { taskId, requestId, toolCallId, approved }),
   prepareSpeech: (force?: boolean) => ipcRenderer.invoke("speech:prepare", force),
   importSpeechModels: () => ipcRenderer.invoke("speech:import"),
   startSpeech: () => ipcRenderer.invoke("speech:start"),
@@ -48,11 +63,16 @@ const api: DesktopPetApi = {
   notifyCaptionCaptureEnded: (message: string) => ipcRenderer.send("caption:capture-ended", message),
   pickExecutable: () => ipcRenderer.invoke("dialog:pick-executable"),
   pickModel: () => ipcRenderer.invoke("dialog:pick-model"),
+  pickEmbeddingModel: () => ipcRenderer.invoke("dialog:pick-embedding-model"),
   pickMmproj: () => ipcRenderer.invoke("dialog:pick-mmproj"),
   pickMcpServersConfig: () => ipcRenderer.invoke("dialog:pick-mcp-servers-config"),
   listRuntimeTools: () => ipcRenderer.invoke("runtime:list-tools"),
   pickChatImages: () => ipcRenderer.invoke("dialog:pick-chat-images"),
   pickChatDocuments: () => ipcRenderer.invoke("dialog:pick-chat-documents"),
+  listKnowledgeDocuments: () => ipcRenderer.invoke("knowledge:list"),
+  importKnowledgeDocuments: () => ipcRenderer.invoke("knowledge:import"),
+  deleteKnowledgeDocument: (documentId: string) =>
+    ipcRenderer.invoke("knowledge:delete", documentId),
   listChatConversations: () => ipcRenderer.invoke("chat-history:list"),
   createChatConversation: () => ipcRenderer.invoke("chat-history:create"),
   loadChatConversation: (conversationId: string) =>
@@ -99,6 +119,18 @@ const api: DesktopPetApi = {
       listener(payload);
     ipcRenderer.on("runtime:state", wrapped);
     return () => ipcRenderer.removeListener("runtime:state", wrapped);
+  },
+  onEmbeddingState: (listener: (state: EmbeddingState) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: EmbeddingState): void =>
+      listener(payload);
+    ipcRenderer.on("embedding:state", wrapped);
+    return () => ipcRenderer.removeListener("embedding:state", wrapped);
+  },
+  onLongTaskEvent: (listener: (event: LongTaskEvent) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: LongTaskEvent): void =>
+      listener(payload);
+    ipcRenderer.on("long-task:event", wrapped);
+    return () => ipcRenderer.removeListener("long-task:event", wrapped);
   },
   onSpeechState: (listener: (state: SpeechState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: SpeechState): void =>

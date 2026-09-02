@@ -1,6 +1,6 @@
 import type { ToolSet } from "ai";
 
-export type AgentToolSource = "builtin" | "mcp";
+export type AgentToolSource = "builtin" | "mcp" | "knowledge" | "task";
 
 export interface AgentToolDescriptor {
   /** Stable, model-visible name. */

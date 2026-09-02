@@ -239,6 +239,22 @@ body.workbench-page {
   body.workbench-page [data-slot="popover-content"] {
     box-shadow: var(--ui-surface-shadow);
   }
+
+  body.workbench-page .conversation-history-title-viewport[data-overflowing="true"]:hover
+    .conversation-history-title-track {
+    animation: conversation-history-title-marquee var(--conversation-title-duration, 4s) ease-in-out
+      infinite alternate;
+  }
+
+  @keyframes conversation-history-title-marquee {
+    0%, 15% {
+      transform: translateX(0);
+    }
+
+    85%, 100% {
+      transform: translateX(calc(-1 * var(--conversation-title-overflow, 0px)));
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -250,5 +266,9 @@ body.workbench-page {
     width: 100%;
     background: var(--ui-primary);
     opacity: 0.58;
+  }
+
+  body.workbench-page .conversation-history-title-track {
+    animation: none !important;
   }
 }

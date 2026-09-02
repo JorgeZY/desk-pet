@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AudioLines, Bot, CircleHelp, Cpu, Palette, Wrench } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { AudioLines, BookOpen, Bot, CircleHelp, Cpu, FileText, Palette, Trash2, Upload, Wrench } from "lucide-react";
 import { toast } from "sonner";
-import type { ChatToolDefinition, RuntimeConfig, RuntimeState, SpeechState, TtsState } from "../../shared/types";
+import type { ChatToolDefinition, EmbeddingState, KnowledgeDocumentSummary, RuntimeConfig, RuntimeState, SpeechState, TtsState } from "../../shared/types";
+import type { ModelParameterKey } from "../../shared/model-parameters";
 import { CHAT_TEMPLATE_COUNT, CHAT_TEMPLATE_MAX_LENGTH } from "../../shared/chat-templates";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -22,10 +23,14 @@ import { RuntimeBadge } from "./RuntimeBadge";
 interface SettingsProps {
   initialConfig: RuntimeConfig;
   runtime: RuntimeState;
+  embedding: EmbeddingState;
   speech: SpeechState;
   tts: TtsState;
   onClose: () => void;
   onSave: (config: RuntimeConfig, restart: boolean) => Promise<void>;
+  onPrepareEmbedding: (force?: boolean) => Promise<void>;
+  onStopEmbedding: () => Promise<void>;
+  onReindexKnowledge: () => Promise<void>;
   onPrepareSpeech: (force?: boolean) => Promise<void>;
   onImportSpeech: () => Promise<void>;
   onPrepareTts: (force?: boolean) => Promise<void>;
@@ -49,6 +54,7 @@ interface NumericTextInputProps {
   min: number;
   max: number;
   integer?: boolean;
+  disabled?: boolean;
   onChange: (value: number) => void;
 }
 
@@ -59,7 +65,7 @@ interface SettingsSectionProps {
   children: ReactNode;
 }
 
-type SettingsCategory = "model" | "agent" | "tools" | "voice" | "appearance";
+type SettingsCategory = "model" | "agent" | "tools" | "knowledge" | "voice" | "appearance";
 
 const settingsCategoryClassName = [
   "h-10 flex-none border-transparent px-3 py-2.5 transition-[box-shadow,background-color,border-color,color] duration-150 after:hidden",
@@ -84,7 +90,15 @@ export function normalizeNumericDraft(
   return Math.min(max, Math.max(min, normalized));
 }
 
-function NumericTextInput({ id, value, min, max, integer = false, onChange }: NumericTextInputProps) {
+function NumericTextInput({
+  id,
+  value,
+  min,
+  max,
+  integer = false,
+  disabled = false,
+  onChange,
+}: NumericTextInputProps) {
   const [draft, setDraft] = useState(String(value));
 
   useEffect(() => setDraft(String(value)), [value]);
@@ -101,6 +115,7 @@ function NumericTextInput({ id, value, min, max, integer = false, onChange }: Nu
       type="text"
       inputMode={integer ? "numeric" : "decimal"}
       value={draft}
+      disabled={disabled}
       onChange={(event) => {
         const nextDraft = event.target.value;
         setDraft(nextDraft);
@@ -141,11 +156,28 @@ function ParameterLabel({ inputId, label, tooltip }: ParameterLabelProps) {
   );
 }
 
-function NumericField({ id, label, tooltip, ...inputProps }: NumericTextInputProps & Omit<ParameterLabelProps, "inputId">) {
+function NumericField({
+  id,
+  label,
+  tooltip,
+  enabled,
+  onEnabledChange,
+  ...inputProps
+}: NumericTextInputProps & Omit<ParameterLabelProps, "inputId"> & {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+}) {
   return (
     <div className="grid gap-2">
-      <ParameterLabel inputId={id} label={label} tooltip={tooltip} />
-      <NumericTextInput id={id} {...inputProps} />
+      <div className="flex items-center justify-between gap-2">
+        <ParameterLabel inputId={id} label={label} tooltip={tooltip} />
+        <Switch
+          aria-label={`自定义${label}`}
+          checked={enabled}
+          onCheckedChange={onEnabledChange}
+        />
+      </div>
+      <NumericTextInput id={id} disabled={!enabled} {...inputProps} />
     </div>
   );
 }
@@ -176,10 +208,14 @@ function StatusProgress({ label, percent }: { label: string; percent?: number })
 export function Settings({
   initialConfig,
   runtime,
+  embedding,
   speech,
   tts,
   onClose,
   onSave,
+  onPrepareEmbedding,
+  onStopEmbedding,
+  onReindexKnowledge,
   onPrepareSpeech,
   onImportSpeech,
   onPrepareTts,
@@ -195,9 +231,51 @@ export function Settings({
   const [error, setError] = useState("");
   const [tools, setTools] = useState<ChatToolDefinition[]>([]);
   const [toolsStatus, setToolsStatus] = useState("正在读取当前工具…");
+  const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocumentSummary[]>([]);
+  const [knowledgeStatus, setKnowledgeStatus] = useState("尚未读取本地知识库。");
+  const [knowledgeAction, setKnowledgeAction] = useState<"import" | string | null>(null);
   const [category, setCategory] = useState<SettingsCategory>("model");
   const [compactSidebar, setCompactSidebar] = useState(false);
+  const embeddingConfigDirty = JSON.stringify(config.embedding)
+    !== JSON.stringify(initialConfig.embedding);
   const saveInFlightRef = useRef(false);
+  const toolRefreshIdRef = useRef(0);
+  const listedToolIds = new Set(tools.map((tool) => tool.id));
+  const displayedTools = [
+    ...tools,
+    ...config.toolSettings.disabledToolIds
+      .filter((toolId) => !listedToolIds.has(toolId))
+      .map((toolId): ChatToolDefinition => ({
+        id: toolId,
+        displayName: toolId,
+        source: toolId === "search_local_knowledge"
+          ? "knowledge"
+          : toolId === "create_long_task" || toolId === "list_long_tasks" || toolId === "get_long_task"
+            ? "task"
+          : toolId.startsWith("mcp__") ? "mcp" : "builtin",
+        requiresApproval: toolId.startsWith("mcp__"),
+      })),
+  ];
+
+  const refreshRuntimeTools = useCallback(async (): Promise<void> => {
+    const refreshId = ++toolRefreshIdRef.current;
+    if (runtime.phase !== "ready") {
+      setTools([]);
+      setToolsStatus("启动模型后可查看 llama-server 当前公开的工具。");
+      return;
+    }
+    setToolsStatus("正在读取当前工具…");
+    try {
+      const currentTools = await window.desktopPet.listRuntimeTools();
+      if (toolRefreshIdRef.current !== refreshId) return;
+      setTools(currentTools);
+      setToolsStatus(currentTools.length ? "" : "当前 llama-server 没有公开可用工具。");
+    } catch (toolError) {
+      if (toolRefreshIdRef.current !== refreshId) return;
+      setTools([]);
+      setToolsStatus(`读取工具失败：${toolError instanceof Error ? toolError.message : String(toolError)}`);
+    }
+  }, [runtime.phase]);
 
   useEffect(() => {
     setConfig(initialConfig);
@@ -222,25 +300,27 @@ export function Settings({
   }, []);
 
   useEffect(() => {
+    void refreshRuntimeTools();
+    return () => {
+      toolRefreshIdRef.current += 1;
+    };
+  }, [refreshRuntimeTools, runtime.updatedAt]);
+
+  useEffect(() => {
+    if (category !== "knowledge") return;
     let cancelled = false;
-    if (runtime.phase !== "ready") {
-      setTools([]);
-      setToolsStatus("启动模型后可查看 llama-server 当前公开的工具。");
-      return () => { cancelled = true; };
-    }
-    setToolsStatus("正在读取当前工具…");
-    void window.desktopPet.listRuntimeTools().then((currentTools) => {
+    setKnowledgeStatus("正在读取本地知识库…");
+    void window.desktopPet.listKnowledgeDocuments().then((documents) => {
       if (cancelled) return;
-      setTools(currentTools);
-      setToolsStatus(currentTools.length ? "" : "当前 llama-server 没有公开可用工具。");
-    }).catch((toolError) => {
-      if (!cancelled) {
-        setTools([]);
-        setToolsStatus(`读取工具失败：${toolError instanceof Error ? toolError.message : String(toolError)}`);
-      }
+      setKnowledgeDocuments(documents);
+      setKnowledgeStatus(documents.length ? "" : "知识库为空，可导入文本或 PDF 文档。");
+    }).catch((knowledgeError) => {
+      if (cancelled) return;
+      setKnowledgeDocuments([]);
+      setKnowledgeStatus(`读取知识库失败：${knowledgeError instanceof Error ? knowledgeError.message : String(knowledgeError)}`);
     });
     return () => { cancelled = true; };
-  }, [runtime.phase, runtime.updatedAt]);
+  }, [category]);
 
   const update = <K extends keyof RuntimeConfig>(key: K, value: RuntimeConfig[K]) =>
     setConfig((current) => ({ ...current, [key]: value }));
@@ -254,9 +334,37 @@ export function Settings({
     update("chatTemplates", chatTemplates);
   };
 
+  const updateToolEnabled = (toolId: string, enabled: boolean) => {
+    const disabledToolIds = new Set(config.toolSettings.disabledToolIds);
+    if (enabled) disabledToolIds.delete(toolId);
+    else disabledToolIds.add(toolId);
+    update("toolSettings", {
+      ...config.toolSettings,
+      disabledToolIds: [...disabledToolIds],
+    });
+  };
+
+  const updateModelParameterEnabled = (key: ModelParameterKey, enabled: boolean) => {
+    update("modelParameterOverrides", {
+      ...config.modelParameterOverrides,
+      [key]: enabled,
+    });
+  };
+
   const pickModel = async () => {
     const result = await window.desktopPet.pickModel();
     if (result) update("modelPath", result.path);
+  };
+
+  const pickEmbeddingModel = async () => {
+    const result = await window.desktopPet.pickEmbeddingModel();
+    if (result) {
+      update("embedding", {
+        ...config.embedding,
+        modelMode: "local",
+        modelPath: result.path,
+      });
+    }
   };
 
   const pickMmproj = async () => {
@@ -274,6 +382,59 @@ export function Settings({
     }
   };
 
+  const importKnowledgeDocuments = async () => {
+    if (knowledgeAction) return;
+    setError("");
+    setKnowledgeAction("import");
+    try {
+      const documents = await window.desktopPet.importKnowledgeDocuments();
+      if (!documents) return;
+      setKnowledgeDocuments(documents);
+      setKnowledgeStatus(documents.length ? "" : "知识库为空，可导入文本或 PDF 文档。");
+      toast.success("本地知识库已更新", {
+        description: "新文档会从下一次 Agent 检索开始生效。",
+      });
+    } catch (knowledgeError) {
+      setError(knowledgeError instanceof Error ? knowledgeError.message : String(knowledgeError));
+    } finally {
+      setKnowledgeAction(null);
+    }
+  };
+
+  const deleteKnowledgeDocument = async (documentId: string) => {
+    if (knowledgeAction) return;
+    setError("");
+    setKnowledgeAction(documentId);
+    try {
+      const documents = await window.desktopPet.deleteKnowledgeDocument(documentId);
+      setKnowledgeDocuments(documents);
+      setKnowledgeStatus(documents.length ? "" : "知识库为空，可导入文本或 PDF 文档。");
+      toast.success("已从知识库移除文档", {
+        description: "原始文件没有被删除。",
+      });
+    } catch (knowledgeError) {
+      setError(knowledgeError instanceof Error ? knowledgeError.message : String(knowledgeError));
+    } finally {
+      setKnowledgeAction(null);
+    }
+  };
+
+  const reindexKnowledge = async () => {
+    if (knowledgeAction) return;
+    setError("");
+    setKnowledgeAction("reindex");
+    try {
+      await onReindexKnowledge();
+      toast.success("向量索引已更新", {
+        description: "知识库搜索将组合语义向量与关键词结果。",
+      });
+    } catch (knowledgeError) {
+      setError(knowledgeError instanceof Error ? knowledgeError.message : String(knowledgeError));
+    } finally {
+      setKnowledgeAction(null);
+    }
+  };
+
   const save = async (restart: boolean) => {
     if (saveInFlightRef.current) return;
     saveInFlightRef.current = true;
@@ -281,9 +442,11 @@ export function Settings({
     setError("");
     try {
       await onSave(config, restart);
+      if (!restart) void refreshRuntimeTools();
       toast.success(restart ? "设置已保存，本地模型已重启" : "设置已保存", {
         description: restart ? "新配置已经应用到当前 Agent。" : "需要时可继续保存并重启模型。",
       });
+      if (restart) onClose();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : String(saveError));
     } finally {
@@ -328,6 +491,9 @@ export function Settings({
               </TabsTrigger>
               <TabsTrigger className={settingsCategoryClassName} value="tools">
                 <Wrench />工具与 MCP
+              </TabsTrigger>
+              <TabsTrigger className={settingsCategoryClassName} value="knowledge">
+                <BookOpen />知识库
               </TabsTrigger>
               <TabsTrigger className={settingsCategoryClassName} value="voice">
                 <AudioLines />语音
@@ -382,18 +548,19 @@ export function Settings({
 
                   <SettingsSection index="02" title="模型参数" description="运行资源与采样设置">
                     <div className="grid grid-cols-3 gap-3">
-                      <NumericField id="settings-context-size" label="上下文" tooltip="模型一次可参考的最大 token 数。越大越能保留长对话，但会占用更多内存或显存。" value={config.contextSize} min={512} max={131072} integer onChange={(value) => update("contextSize", value)} />
-                      <NumericField id="settings-gpu-layers" label="GPU 层数" tooltip="交给 GPU 计算的模型层数。数值越高通常越快，但需要更多显存；999 表示尽量全部卸载。" value={config.gpuLayers} min={0} max={999} integer onChange={(value) => update("gpuLayers", value)} />
-                      <NumericField id="settings-threads" label="CPU 线程" tooltip="llama.cpp 推理使用的 CPU 线程数。过高可能抢占系统资源，通常接近性能核心数即可。" value={config.threads} min={1} max={256} integer onChange={(value) => update("threads", value)} />
-                      <NumericField id="settings-max-tokens" label="最大输出" tooltip="每次回答最多生成的 token 数。提高后回答可以更长，也会增加生成时间。" value={config.maxTokens} min={32} max={8192} integer onChange={(value) => update("maxTokens", value)} />
-                      <NumericField id="settings-temperature" label="温度" tooltip="控制随机性。较低更稳定和确定，较高更有变化但也更容易偏离事实。" value={config.temperature} min={0} max={2} onChange={(value) => update("temperature", value)} />
-                      <NumericField id="settings-port" label="端口" tooltip="本地 llama.cpp 服务监听的端口。仅在端口冲突或连接外部本地服务时需要调整。" value={config.port} min={1024} max={65535} integer onChange={(value) => update("port", value)} />
-                      <NumericField id="settings-top-k" label="Top K" tooltip="每一步只从概率最高的 K 个 token 中采样。较小更保守；0 通常表示关闭此筛选。" value={config.topK} min={0} max={1000} integer onChange={(value) => update("topK", value)} />
-                      <NumericField id="settings-top-p" label="Top P" tooltip="只保留累计概率达到该值的候选 token。越低越聚焦，常与温度一起调节。" value={config.topP} min={0} max={1} onChange={(value) => update("topP", value)} />
-                      <NumericField id="settings-min-p" label="Min P" tooltip="过滤相对概率过低的 token。提高可减少离题候选，但过高可能让表达单一。" value={config.minP} min={0} max={1} onChange={(value) => update("minP", value)} />
-                      <NumericField id="settings-repeat-penalty" label="重复惩罚" tooltip="降低近期已出现 token 再次被选中的概率。1 表示不惩罚，略高可减少复读。" value={config.repeatPenalty} min={0} max={2} onChange={(value) => update("repeatPenalty", value)} />
-                      <NumericField id="settings-presence-penalty" label="存在惩罚" tooltip="对已经出现过的 token 施加固定惩罚。0 表示关闭；正值鼓励引入新内容，负值会增强已有主题。" value={config.presencePenalty} min={-2} max={2} onChange={(value) => update("presencePenalty", value)} />
+                      <NumericField id="settings-context-size" label="上下文" tooltip="模型一次可参考的最大 token 数。禁用自定义后使用应用默认的 8192 token。" value={config.contextSize} min={512} max={131072} integer enabled={config.modelParameterOverrides.contextSize} onEnabledChange={(enabled) => updateModelParameterEnabled("contextSize", enabled)} onChange={(value) => update("contextSize", value)} />
+                      <NumericField id="settings-gpu-layers" label="GPU 层数" tooltip="交给 GPU 计算的模型层数。禁用自定义后不向 llama-server 传入 GPU 层数。" value={config.gpuLayers} min={0} max={999} integer enabled={config.modelParameterOverrides.gpuLayers} onEnabledChange={(enabled) => updateModelParameterEnabled("gpuLayers", enabled)} onChange={(value) => update("gpuLayers", value)} />
+                      <NumericField id="settings-threads" label="CPU 线程" tooltip="llama.cpp 推理使用的 CPU 线程数。禁用自定义后不传入线程数。" value={config.threads} min={1} max={256} integer enabled={config.modelParameterOverrides.threads} onEnabledChange={(enabled) => updateModelParameterEnabled("threads", enabled)} onChange={(value) => update("threads", value)} />
+                      <NumericField id="settings-max-tokens" label="最大输出" tooltip="每次回答最多生成的 token 数。禁用自定义后使用应用默认的 512 token，以保留可靠的上下文预算。" value={config.maxTokens} min={32} max={8192} integer enabled={config.modelParameterOverrides.maxTokens} onEnabledChange={(enabled) => updateModelParameterEnabled("maxTokens", enabled)} onChange={(value) => update("maxTokens", value)} />
+                      <NumericField id="settings-temperature" label="温度" tooltip="控制随机性。禁用自定义后不发送 temperature，使用 llama.cpp 默认值。" value={config.temperature} min={0} max={2} enabled={config.modelParameterOverrides.temperature} onEnabledChange={(enabled) => updateModelParameterEnabled("temperature", enabled)} onChange={(value) => update("temperature", value)} />
+                      <NumericField id="settings-port" label="端口" tooltip="本地 llama.cpp 服务监听端口。禁用自定义后使用应用默认端口 18766。" value={config.port} min={1024} max={65535} integer enabled={config.modelParameterOverrides.port} onEnabledChange={(enabled) => updateModelParameterEnabled("port", enabled)} onChange={(value) => update("port", value)} />
+                      <NumericField id="settings-top-k" label="Top K" tooltip="筛选概率最高的 K 个 token。禁用自定义后不发送 top_k。" value={config.topK} min={0} max={1000} integer enabled={config.modelParameterOverrides.topK} onEnabledChange={(enabled) => updateModelParameterEnabled("topK", enabled)} onChange={(value) => update("topK", value)} />
+                      <NumericField id="settings-top-p" label="Top P" tooltip="按累计概率筛选候选 token。禁用自定义后不发送 top_p。" value={config.topP} min={0} max={1} enabled={config.modelParameterOverrides.topP} onEnabledChange={(enabled) => updateModelParameterEnabled("topP", enabled)} onChange={(value) => update("topP", value)} />
+                      <NumericField id="settings-min-p" label="Min P" tooltip="过滤相对概率过低的 token。禁用自定义后不发送 min_p。" value={config.minP} min={0} max={1} enabled={config.modelParameterOverrides.minP} onEnabledChange={(enabled) => updateModelParameterEnabled("minP", enabled)} onChange={(value) => update("minP", value)} />
+                      <NumericField id="settings-repeat-penalty" label="重复惩罚" tooltip="降低近期 token 再次出现的概率。禁用自定义后不发送 repeat_penalty。" value={config.repeatPenalty} min={0} max={2} enabled={config.modelParameterOverrides.repeatPenalty} onEnabledChange={(enabled) => updateModelParameterEnabled("repeatPenalty", enabled)} onChange={(value) => update("repeatPenalty", value)} />
+                      <NumericField id="settings-presence-penalty" label="存在惩罚" tooltip="对已经出现过的 token 施加固定惩罚。禁用自定义后不发送 presence_penalty。" value={config.presencePenalty} min={-2} max={2} enabled={config.modelParameterOverrides.presencePenalty} onEnabledChange={(enabled) => updateModelParameterEnabled("presencePenalty", enabled)} onChange={(value) => update("presencePenalty", value)} />
                     </div>
+                    <p className="hint text-xs text-muted-foreground">关闭某项“自定义”后，当前输入值会保留，重新启用即可继续使用；修改在保存并重启模型后生效。</p>
                   </SettingsSection>
                 </TabsContent>
 
@@ -421,6 +588,53 @@ export function Settings({
 
                 <TabsContent value="tools" className="grid gap-4">
                   <SettingsSection index="01" title="工具与 MCP" description="查看 builtin tools，并通过 MCP 扩展">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="switch-row flex items-center justify-between gap-4 rounded-lg border p-3">
+                        <Label htmlFor="settings-builtin-tools-enabled" className="grid gap-1">
+                          <b>内置工具</b>
+                          <span className="text-xs font-normal text-muted-foreground">允许模型使用 llama-server 工具</span>
+                        </Label>
+                        <Switch
+                          id="settings-builtin-tools-enabled"
+                          aria-label="启用内置工具"
+                          checked={config.toolSettings.builtinEnabled}
+                          onCheckedChange={(checked) => update("toolSettings", {
+                            ...config.toolSettings,
+                            builtinEnabled: checked,
+                          })}
+                        />
+                      </div>
+                      <div className="switch-row flex items-center justify-between gap-4 rounded-lg border p-3">
+                        <Label htmlFor="settings-task-tools-enabled" className="grid gap-1">
+                          <b>长期任务工具</b>
+                          <span className="text-xs font-normal text-muted-foreground">允许 Agent 创建和读取任务草稿</span>
+                        </Label>
+                        <Switch
+                          id="settings-task-tools-enabled"
+                          aria-label="启用长期任务工具"
+                          checked={config.toolSettings.tasksEnabled}
+                          onCheckedChange={(checked) => update("toolSettings", {
+                            ...config.toolSettings,
+                            tasksEnabled: checked,
+                          })}
+                        />
+                      </div>
+                      <div className="switch-row flex items-center justify-between gap-4 rounded-lg border p-3">
+                        <Label htmlFor="settings-mcp-tools-enabled" className="grid gap-1">
+                          <b>MCP 工具</b>
+                          <span className="text-xs font-normal text-muted-foreground">连接已配置的 MCP Servers</span>
+                        </Label>
+                        <Switch
+                          id="settings-mcp-tools-enabled"
+                          aria-label="启用 MCP 工具"
+                          checked={config.toolSettings.mcpEnabled}
+                          onCheckedChange={(checked) => update("toolSettings", {
+                            ...config.toolSettings,
+                            mcpEnabled: checked,
+                          })}
+                        />
+                      </div>
+                    </div>
                     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg border bg-card p-3 [&>div:first-child]:grid [&>div:first-child]:min-w-0 [&>div:first-child]:gap-1 [&_span]:text-xs [&_span]:text-muted-foreground [&_strong]:truncate [&_strong]:text-sm">
                       <div><span>MCP Servers 配置（可选）</span><strong title={config.mcpServersConfigPath}>{config.mcpServersConfigPath || "未添加自定义工具"}</strong></div>
                       <div className="flex flex-row items-center justify-end gap-2">
@@ -428,20 +642,225 @@ export function Settings({
                         <Button variant="outline" size="sm" type="button" onClick={pickMcpServersConfig}>选择 JSON</Button>
                       </div>
                     </div>
-                    <p className="hint text-xs leading-relaxed text-muted-foreground">仅选择可信的 Cursor 兼容 MCP 配置：其中本地 command 会在保存并重启模型后直接执行，后续工具调用才会逐次确认。支持 remote Streamable HTTP / SSE url（远程地址须为 HTTPS，本机 loopback 可用 HTTP；可附带 headers）。首期工具结果以文本为主，富媒体结果暂不回注模型。</p>
+                    <p className="hint text-xs leading-relaxed text-muted-foreground">工具启停在保存后生效，无需重启模型。仅选择可信的 Cursor 兼容 MCP 配置：启用 MCP 后，其中本地 command 会在下一次初始化工具时直接执行，后续工具调用才会逐次确认。支持 remote Streamable HTTP / SSE url（远程地址须为 HTTPS，本机 loopback 可用 HTTP；可附带 headers）。</p>
                     <div className="runtime-tool-viewport max-h-64 overflow-auto rounded-lg border bg-muted/25 p-2">
-                      {tools.length ? (
+                      {displayedTools.length ? (
                         <ul className="runtime-tool-list grid gap-2" aria-label="当前工具列表">
-                          {tools.map((tool) => (
-                            <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 rounded-md bg-card p-3" key={tool.id}>
+                          {displayedTools.map((tool) => (
+                            <li className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-3 rounded-md bg-card p-3" key={tool.id}>
                               <div className="min-w-0"><b className="block truncate text-sm">{tool.displayName}</b><code className="block truncate text-xs text-muted-foreground">{tool.id}</code></div>
-                              <Badge variant="outline">{tool.source === "mcp" ? "MCP" : "BUILTIN"}</Badge>
+                              <Badge variant="outline">{tool.source === "mcp" ? "MCP" : tool.source === "knowledge" ? "RAG" : tool.source === "task" ? "TASK" : "BUILTIN"}</Badge>
                               <span className="text-xs text-muted-foreground">{tool.requiresApproval ? "调用需确认" : "自动执行"}</span>
+                              <Switch
+                                aria-label={`启用工具 ${tool.displayName}`}
+                                checked={!config.toolSettings.disabledToolIds.includes(tool.id)}
+                                disabled={tool.source === "mcp"
+                                  ? !config.toolSettings.mcpEnabled
+                                  : tool.source === "knowledge"
+                                    ? !config.toolSettings.knowledgeEnabled
+                                    : tool.source === "task"
+                                      ? !config.toolSettings.tasksEnabled
+                                    : !config.toolSettings.builtinEnabled}
+                                onCheckedChange={(checked) => updateToolEnabled(tool.id, checked)}
+                              />
                             </li>
                           ))}
                         </ul>
                       ) : <p className="compact-result text-sm text-muted-foreground">{toolsStatus}</p>}
                     </div>
+                  </SettingsSection>
+                </TabsContent>
+
+                <TabsContent value="knowledge" className="grid gap-4">
+                  <SettingsSection index="01" title="专用向量模型" description="第二个 llama-server 只负责本地语义检索">
+                    <div className="switch-row flex items-center justify-between gap-4 rounded-lg border p-3">
+                      <Label htmlFor="settings-embedding-enabled" className="grid gap-1">
+                        <b>启用混合向量检索</b>
+                        <span className="text-xs font-normal text-muted-foreground">停用后保留已有向量，只使用 MiniSearch 关键词索引</span>
+                      </Label>
+                      <Switch
+                        id="settings-embedding-enabled"
+                        aria-label="启用专用向量模型"
+                        checked={config.embedding.enabled}
+                        onCheckedChange={(checked) => update("embedding", {
+                          ...config.embedding,
+                          enabled: checked,
+                        })}
+                      />
+                    </div>
+
+                    <RadioGroup
+                      aria-label="Embedding 模型来源"
+                      className="grid grid-cols-2 gap-3"
+                      disabled={!config.embedding.enabled}
+                      value={config.embedding.modelMode}
+                      onValueChange={(value) => update("embedding", {
+                        ...config.embedding,
+                        modelMode: value === "local" ? "local" : "huggingface",
+                      })}
+                    >
+                      <div className="flex items-center gap-3 rounded-lg border p-3">
+                        <RadioGroupItem id="settings-embedding-managed" value="huggingface" />
+                        <Label htmlFor="settings-embedding-managed" className="grid flex-1 cursor-pointer gap-1">
+                          <b className="text-sm">官方 Qwen Q8</b>
+                          <small className="font-normal text-muted-foreground">自动下载约 639 MB</small>
+                        </Label>
+                      </div>
+                      <div className="flex items-center gap-3 rounded-lg border p-3">
+                        <RadioGroupItem id="settings-embedding-local" value="local" />
+                        <Label htmlFor="settings-embedding-local" className="grid flex-1 cursor-pointer gap-1">
+                          <b className="text-sm">本地 GGUF</b>
+                          <small className="font-normal text-muted-foreground">选择兼容 embedding 的模型</small>
+                        </Label>
+                      </div>
+                    </RadioGroup>
+
+                    {config.embedding.modelMode === "huggingface" ? (
+                      <div className="grid gap-2">
+                        <Label htmlFor="settings-embedding-repo">模型标识</Label>
+                        <Input
+                          id="settings-embedding-repo"
+                          disabled={!config.embedding.enabled}
+                          readOnly
+                          value={config.embedding.hfRepo}
+                        />
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                        <Input
+                          aria-label="Embedding GGUF 路径"
+                          disabled={!config.embedding.enabled}
+                          readOnly
+                          value={config.embedding.modelPath}
+                          placeholder="尚未选择专用 GGUF"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={!config.embedding.enabled}
+                          onClick={() => void pickEmbeddingModel()}
+                        >选择</Button>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="grid gap-2">
+                        <ParameterLabel inputId="settings-embedding-port" label="服务端口" tooltip="专用 embedding llama-server 的本机端口，不能与聊天模型相同。" />
+                        <NumericTextInput id="settings-embedding-port" value={config.embedding.port} min={1024} max={65535} integer disabled={!config.embedding.enabled} onChange={(value) => update("embedding", { ...config.embedding, port: value })} />
+                      </div>
+                      <div className="grid gap-2">
+                        <ParameterLabel inputId="settings-embedding-context" label="上下文" tooltip="单批知识片段可使用的 token 上限；默认 4096。" />
+                        <NumericTextInput id="settings-embedding-context" value={config.embedding.contextSize} min={512} max={32768} integer disabled={!config.embedding.enabled} onChange={(value) => update("embedding", { ...config.embedding, contextSize: value })} />
+                      </div>
+                      <div className="grid gap-2">
+                        <ParameterLabel inputId="settings-embedding-gpu" label="GPU 层数" tooltip="默认 0，避免第二个服务与聊天模型争抢显存。" />
+                        <NumericTextInput id="settings-embedding-gpu" value={config.embedding.gpuLayers} min={0} max={999} integer disabled={!config.embedding.enabled} onChange={(value) => update("embedding", { ...config.embedding, gpuLayers: value })} />
+                      </div>
+                      <div className="grid gap-2">
+                        <ParameterLabel inputId="settings-embedding-threads" label="CPU 线程" tooltip="专用向量服务使用的 CPU 线程数。" />
+                        <NumericTextInput id="settings-embedding-threads" value={config.embedding.threads} min={1} max={256} integer disabled={!config.embedding.enabled} onChange={(value) => update("embedding", { ...config.embedding, threads: value })} />
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 rounded-lg border bg-muted/25 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <b className="block text-sm">{embedding.message}</b>
+                          <span className="block truncate text-xs text-muted-foreground" title={embedding.modelPath}>
+                            {embedding.indexedChunkCount} 个向量已索引
+                            {embedding.pendingChunkCount ? ` · ${embedding.pendingChunkCount} 个待处理` : ""}
+                          </span>
+                        </div>
+                        <Badge variant={embedding.phase === "ready" ? "default" : "outline"}>
+                          {embedding.phase}
+                        </Badge>
+                      </div>
+                      {embedding.download ? <StatusProgress label="向量模型下载进度" percent={embedding.download.percent} /> : null}
+                      <div className="flex flex-wrap gap-2">
+                        {embedding.phase === "ready" ? (
+                          <Button type="button" variant="outline" onClick={() => void onStopEmbedding()}>停止向量服务</Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={!config.embedding.enabled || embeddingConfigDirty || embedding.phase === "starting" || embedding.phase === "downloading" || embedding.phase === "stopping"}
+                            onClick={() => void onPrepareEmbedding(false)}
+                          >{embeddingConfigDirty ? "请先保存配置" : embedding.phase === "downloading" ? "下载中…" : "准备向量模型"}</Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={!config.embedding.enabled || embeddingConfigDirty || embedding.phase !== "ready" || knowledgeAction !== null}
+                          onClick={() => void reindexKnowledge()}
+                        >{knowledgeAction === "reindex" ? "重建中…" : "重建向量索引"}</Button>
+                      </div>
+                    </div>
+                    <p className="hint text-xs leading-relaxed text-muted-foreground">官方 Qwen3-Embedding-0.6B-Q8 使用 last pooling 与 L2 归一化；服务按需启动，默认只用 CPU。模型文件仍保存在项目或应用旁的 models，不进入 userData。</p>
+                  </SettingsSection>
+
+                  <SettingsSection index="02" title="本地知识库" description="用检索代替把整份文档塞入上下文">
+                    <div className="switch-row flex items-center justify-between gap-4 rounded-lg border p-3">
+                      <Label htmlFor="settings-knowledge-enabled" className="grid gap-1">
+                        <b>允许 Agent 检索知识库</b>
+                        <span className="text-xs font-normal text-muted-foreground">只把相关片段加入当前工具结果，可单独停用</span>
+                      </Label>
+                      <Switch
+                        id="settings-knowledge-enabled"
+                        aria-label="启用本地知识库"
+                        checked={config.toolSettings.knowledgeEnabled}
+                        onCheckedChange={(checked) => update("toolSettings", {
+                          ...config.toolSettings,
+                          knowledgeEnabled: checked,
+                        })}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="grid gap-1">
+                        <b className="text-sm">已索引文档</b>
+                        <span className="text-xs text-muted-foreground">支持可提取文字的 PDF 与常见文本/代码文件</span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={knowledgeAction !== null}
+                        onClick={() => void importKnowledgeDocuments()}
+                      >
+                        <Upload />{knowledgeAction === "import" ? "导入中…" : "导入文档"}
+                      </Button>
+                    </div>
+
+                    <div className="max-h-80 overflow-auto rounded-lg border bg-muted/25 p-2">
+                      {knowledgeDocuments.length ? (
+                        <ul className="grid gap-2" aria-label="本地知识库文档">
+                          {knowledgeDocuments.map((document) => (
+                            <li className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-md bg-card p-3" key={document.id}>
+                              <FileText className="size-4 text-muted-foreground" aria-hidden="true" />
+                              <div className="min-w-0">
+                                <b className="block truncate text-sm" title={document.path}>{document.name}</b>
+                                <span className="block truncate text-xs text-muted-foreground">
+                                  {document.mimeType === "application/pdf" ? "PDF" : "文本"}
+                                  {" · "}{document.characterCount.toLocaleString()} 字符
+                                  {" · "}{document.chunkCount} 个片段
+                                </span>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={`移除知识库文档 ${document.name}`}
+                                title="从索引移除（不会删除原文件）"
+                                disabled={knowledgeAction !== null}
+                                onClick={() => void deleteKnowledgeDocument(document.id)}
+                              >
+                                <Trash2 />
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : <p className="compact-result text-sm text-muted-foreground">{knowledgeStatus}</p>}
+                    </div>
+                    <p className="hint text-xs leading-relaxed text-muted-foreground">文档正文和索引保存在本机 SQLite 中；MiniSearch 只在内存中建立轻量中英文词法索引。每次检索最多返回少量有来源的片段，并继续受 8K–16K 精确上下文预算约束。扫描版 PDF 暂不支持 OCR；单文档上限为 400,000 字符。</p>
                   </SettingsSection>
                 </TabsContent>
 
