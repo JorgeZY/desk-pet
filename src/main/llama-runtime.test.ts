@@ -453,4 +453,60 @@ describe("buildLlamaCommand", () => {
     expect(utf8ByteLength(warning ?? "")).toBeLessThanOrEqual(DIAGNOSTIC_TEXT_BYTE_LIMIT);
     await runtime.stop();
   });
+
+  it("uses safe defaults for required disabled parameters and omits optional tuning flags", () => {
+    const command = buildLlamaCommand({
+      ...DEFAULT_CONFIG,
+      port: 29999,
+      contextSize: 32768,
+      gpuLayers: 12,
+      threads: 3,
+      modelParameterOverrides: {
+        ...DEFAULT_CONFIG.modelParameterOverrides,
+        port: false,
+        contextSize: false,
+        gpuLayers: false,
+        threads: false,
+      },
+    });
+
+    expect(command.args.slice(command.args.indexOf("--port"), command.args.indexOf("--port") + 2))
+      .toEqual(["--port", "18766"]);
+    expect(command.args.slice(command.args.indexOf("-c"), command.args.indexOf("-c") + 2))
+      .toEqual(["-c", "8192"]);
+    expect(command.args).not.toContain("-ngl");
+    expect(command.args).not.toContain("-t");
+  });
+
+  it("does not initialize disabled tool sources", async () => {
+    const readFile = vi.spyOn(fs, "readFile");
+    const runtime = new LlamaRuntime({
+      ...DEFAULT_CONFIG,
+      mcpServersConfigPath: "D:\\tools\\mcp.json",
+      toolSettings: {
+        builtinEnabled: false,
+        mcpEnabled: false,
+        disabledToolIds: [],
+      },
+    });
+    const internals = runtime as unknown as {
+      state: RuntimeState;
+      toolProviders: {
+        getSnapshot(signal: AbortSignal): Promise<{ descriptors: AgentToolDescriptor[] }>;
+      };
+    };
+    internals.state = {
+      phase: "ready",
+      visionEnabled: false,
+      endpoint: runtime.endpoint,
+      message: "ready",
+      updatedAt: 1,
+    };
+
+    const snapshot = await internals.toolProviders.getSnapshot(new AbortController().signal);
+
+    expect(snapshot.descriptors).toEqual([]);
+    expect(readFile).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
 });

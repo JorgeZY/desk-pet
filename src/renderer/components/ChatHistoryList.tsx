@@ -55,10 +55,25 @@ function ConversationHistoryItem({
   onRequestDelete,
 }: ConversationHistoryItemProps) {
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const titleViewportRef = useRef<HTMLSpanElement>(null);
+  const titleTrackRef = useRef<HTMLElement>(null);
+
+  const prepareTitleMarquee = () => {
+    const viewport = titleViewportRef.current;
+    const track = titleTrackRef.current;
+    if (!viewport || !track) return;
+    const overflow = Math.max(0, track.scrollWidth - viewport.clientWidth);
+    viewport.style.setProperty("--conversation-title-overflow", `${overflow}px`);
+    viewport.style.setProperty(
+      "--conversation-title-duration",
+      `${Math.max(3, overflow / 24).toFixed(2)}s`,
+    );
+    viewport.dataset.overflowing = overflow > 0 ? "true" : "false";
+  };
 
   return (
     <div
-      className="group flex w-full min-w-0 max-w-full items-center gap-1 overflow-x-hidden rounded-lg px-1 py-0.5 transition-colors hover:bg-sidebar-accent/65 data-[active=true]:bg-sidebar-accent data-[selected=true]:bg-sidebar-accent data-[selected=true]:ring-1 data-[selected=true]:ring-primary/25"
+      className={`group grid w-full min-w-0 max-w-full items-center gap-1 overflow-x-hidden rounded-lg px-1 py-0.5 transition-colors hover:bg-sidebar-accent/65 data-[active=true]:bg-sidebar-accent data-[selected=true]:bg-sidebar-accent data-[selected=true]:ring-1 data-[selected=true]:ring-primary/25 ${batchMode ? "grid-cols-[auto_minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)_auto]"}`}
       data-active={active}
       data-selected={selected}
       data-slot="conversation-history-item"
@@ -73,7 +88,7 @@ function ConversationHistoryItem({
         />
       ) : null}
       <Button
-        className="h-auto min-w-0 flex-1 justify-start overflow-hidden px-2 py-2 text-left hover:bg-transparent active:bg-transparent"
+        className="h-auto min-w-0 w-full justify-start overflow-hidden px-2 py-2 text-left hover:bg-transparent active:bg-transparent"
         disabled={disabled}
         onClick={batchMode ? onToggleSelection : onSwitch}
         title={conversation.title}
@@ -81,7 +96,13 @@ function ConversationHistoryItem({
         variant="ghost"
       >
         <span className="min-w-0 flex-1 overflow-hidden">
-          <b className="block truncate text-sm font-medium">{conversation.title}</b>
+          <span
+            ref={titleViewportRef}
+            className="conversation-history-title-viewport block min-w-0 overflow-hidden"
+            onPointerEnter={prepareTitleMarquee}
+          >
+            <b ref={titleTrackRef} className="conversation-history-title-track block w-max min-w-full whitespace-nowrap text-sm font-medium">{conversation.title}</b>
+          </span>
           <small className="block truncate text-xs text-muted-foreground">
             {formatConversationTime(conversation.updatedAt)} · {conversation.messageCount} 条消息
           </small>

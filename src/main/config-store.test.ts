@@ -10,6 +10,20 @@ describe("runtime config", () => {
     expect(config.contextSize).toBe(8192);
     expect(config.mmprojPath).toBe("");
     expect(config.mcpServersConfigPath).toBe("");
+    expect(config.toolSettings).toEqual({
+      builtinEnabled: true,
+      mcpEnabled: true,
+      knowledgeEnabled: true,
+      tasksEnabled: true,
+      disabledToolIds: [],
+    });
+    expect(config.embedding).toMatchObject({
+      enabled: true,
+      modelMode: "huggingface",
+      hfRepo: "Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0",
+      port: 18767,
+    });
+    expect(Object.values(config.modelParameterOverrides).every(Boolean)).toBe(true);
     expect(config.topK).toBe(40);
     expect(config.topP).toBe(0.95);
     expect(config.minP).toBe(0.05);
@@ -181,6 +195,47 @@ describe("runtime config", () => {
     expect(validateConfig(config)).toEqual([]);
     expect(validateConfig({ ...config, mcpServersConfigPath: "D:\\tools\\mcp.yaml" }))
       .toContain("MCP Servers 配置必须是 .json 文件。");
+  });
+
+  it("migrates and normalizes tool enablement settings", () => {
+    expect(normalizeConfig({ ...DEFAULT_CONFIG, toolSettings: undefined }).toolSettings)
+      .toEqual(DEFAULT_CONFIG.toolSettings);
+
+    expect(normalizeConfig({
+      ...DEFAULT_CONFIG,
+      toolSettings: {
+        builtinEnabled: false,
+        mcpEnabled: false,
+        knowledgeEnabled: false,
+        tasksEnabled: false,
+        disabledToolIds: [" mcp__files__read ", "mcp__files__read", "", 42],
+      },
+    }).toolSettings).toEqual({
+      builtinEnabled: false,
+      mcpEnabled: false,
+      knowledgeEnabled: false,
+      tasksEnabled: false,
+      disabledToolIds: ["mcp__files__read"],
+    });
+  });
+
+  it("migrates model parameter overrides and preserves explicit disabled fields", () => {
+    expect(normalizeConfig({
+      ...DEFAULT_CONFIG,
+      modelParameterOverrides: undefined,
+    }).modelParameterOverrides).toEqual(DEFAULT_CONFIG.modelParameterOverrides);
+
+    const config = normalizeConfig({
+      ...DEFAULT_CONFIG,
+      modelParameterOverrides: {
+        ...DEFAULT_CONFIG.modelParameterOverrides,
+        gpuLayers: false,
+        temperature: false,
+      },
+    });
+    expect(config.modelParameterOverrides.gpuLayers).toBe(false);
+    expect(config.modelParameterOverrides.temperature).toBe(false);
+    expect(config.modelParameterOverrides.contextSize).toBe(true);
   });
 
   it("accepts an optional GGUF mmproj and rejects other file types", () => {

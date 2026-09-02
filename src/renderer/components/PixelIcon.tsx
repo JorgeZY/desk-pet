@@ -11,6 +11,7 @@ import {
   Captions,
   Cat,
   Image,
+  ListTodo,
   Maximize2,
   Mic,
   Minimize2,
@@ -46,6 +47,7 @@ export type PixelIconName =
   | "bolt"
   | "sparkle"
   | "history"
+  | "tasks"
   | "plus"
   | "minus"
   | "clear"
@@ -83,6 +85,7 @@ const LUCIDE_ICONS: Record<PixelIconName, LucideIcon> = {
   bolt: Zap,
   sparkle: Sparkles,
   history: History,
+  tasks: ListTodo,
   plus: Plus,
   minus: Minus,
   clear: Eraser,

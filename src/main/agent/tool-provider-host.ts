@@ -1,5 +1,11 @@
 import { promises as fs } from "node:fs";
 import type { RuntimeConfig } from "../../shared/types";
+import type { KnowledgeSearchRetriever } from "../knowledge-retriever";
+import { KnowledgeToolProvider } from "./knowledge-tool-provider";
+import {
+  LongTaskToolProvider,
+  type LongTaskToolStore,
+} from "./long-task-tool-provider";
 import { LlamaToolProvider } from "./llama-tool-provider";
 import { McpToolProvider } from "./mcp-tool-provider";
 import { truncateDiagnosticText } from "./tool-result-budget";
@@ -29,6 +35,10 @@ export interface ToolProviderHostOptions {
   getEndpoint: () => string;
   isRuntimeReady: () => boolean;
   onLog: (message: string) => void;
+  knowledgeRetriever?: KnowledgeSearchRetriever;
+  /** @deprecated Pass knowledgeRetriever when hybrid retrieval is available. */
+  knowledgeStore?: KnowledgeSearchRetriever;
+  longTaskStore?: LongTaskToolStore;
 }
 
 /** Owns discovery, replacement, and bounded shutdown of app-owned tools. */
@@ -87,13 +97,34 @@ export class ToolProviderHost {
     const config = this.options.getConfig();
     const providers: ToolProvider[] = [];
     const warnings: string[] = [];
-    const candidates: Array<{ label: string; provider: ToolProvider; timeoutMs: number }> = [{
-      label: "llama-server builtin tools",
-      provider: new LlamaToolProvider({ endpoint: this.options.getEndpoint(), cwd: process.cwd() }),
-      timeoutMs: BUILTIN_START_TIMEOUT_MS,
-    }];
+    const candidates: Array<{ label: string; provider: ToolProvider; timeoutMs: number }> = [];
+    const knowledgeRetriever = this.options.knowledgeRetriever ?? this.options.knowledgeStore;
 
-    if (config.mcpServersConfigPath) {
+    if (config.toolSettings.tasksEnabled && this.options.longTaskStore) {
+      candidates.push({
+        label: "long tasks",
+        provider: new LongTaskToolProvider(this.options.longTaskStore),
+        timeoutMs: BUILTIN_START_TIMEOUT_MS,
+      });
+    }
+
+    if (config.toolSettings.knowledgeEnabled && knowledgeRetriever) {
+      candidates.push({
+        label: "local knowledge",
+        provider: new KnowledgeToolProvider(knowledgeRetriever),
+        timeoutMs: BUILTIN_START_TIMEOUT_MS,
+      });
+    }
+
+    if (config.toolSettings.builtinEnabled) {
+      candidates.push({
+        label: "llama-server builtin tools",
+        provider: new LlamaToolProvider({ endpoint: this.options.getEndpoint(), cwd: process.cwd() }),
+        timeoutMs: BUILTIN_START_TIMEOUT_MS,
+      });
+    }
+
+    if (config.toolSettings.mcpEnabled && config.mcpServersConfigPath) {
       try {
         const contents = await fs.readFile(config.mcpServersConfigPath, "utf8");
         candidates.push({
@@ -137,9 +168,11 @@ export class ToolProviderHost {
           ));
         }
       }
+      const disabledToolIds = new Set(config.toolSettings.disabledToolIds);
       return {
         providers,
-        descriptors: mergeToolDescriptors(providers.map((provider) => provider.getDescriptors())),
+        descriptors: mergeToolDescriptors(providers.map((provider) => provider.getDescriptors()))
+          .filter((descriptor) => !disabledToolIds.has(descriptor.name)),
         warnings,
       };
     } catch (error) {

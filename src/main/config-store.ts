@@ -5,6 +5,12 @@ import { dirname, join } from "node:path";
 import type { RuntimeConfig } from "../shared/types";
 import { DEFAULT_CHAT_TEMPLATES, normalizeChatTemplates } from "../shared/chat-templates";
 import { normalizeCaptionConfig } from "../shared/caption-window";
+import {
+  DEFAULT_MODEL_PARAMETER_OVERRIDES,
+  effectiveRequiredModelParameter,
+  MODEL_PARAMETER_KEYS,
+  type ModelParameterOverrides,
+} from "../shared/model-parameters";
 
 const LEGACY_DEFAULT_SYSTEM_PROMPT =
   "你是一只住在用户桌面上的 AI 小猫，名字叫团子。你温暖、机灵、简洁，优先用中文回答。不要假装能看到屏幕或执行未提供的操作。一般回答控制在 1 到 4 个短段落；遇到技术问题时可以更详细。";
@@ -17,6 +23,24 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
   modelPath: "",
   mmprojPath: "",
   mcpServersConfigPath: "",
+  toolSettings: {
+    builtinEnabled: true,
+    mcpEnabled: true,
+    knowledgeEnabled: true,
+    tasksEnabled: true,
+    disabledToolIds: [],
+  },
+  embedding: {
+    enabled: true,
+    modelMode: "huggingface",
+    hfRepo: "Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0",
+    modelPath: "",
+    port: 18767,
+    contextSize: 4096,
+    gpuLayers: 0,
+    threads: Math.max(2, Math.floor(cpus().length / 2)),
+  },
+  modelParameterOverrides: { ...DEFAULT_MODEL_PARAMETER_OVERRIDES },
   host: "127.0.0.1",
   port: 18766,
   contextSize: 8192,
@@ -71,6 +95,17 @@ export function normalizeConfig(value: unknown): RuntimeConfig {
   const rawSpeech = raw.speech as
     | (Partial<RuntimeConfig["speech"]> & { globalShortcut?: unknown })
     | undefined;
+  const rawDisabledToolIds = Array.isArray(raw.toolSettings?.disabledToolIds)
+    ? raw.toolSettings.disabledToolIds
+    : [];
+  const rawModelParameterOverrides = raw.modelParameterOverrides
+    && typeof raw.modelParameterOverrides === "object"
+    ? raw.modelParameterOverrides
+    : {};
+  const modelParameterOverrides = Object.fromEntries(MODEL_PARAMETER_KEYS.map((key) => [
+    key,
+    (rawModelParameterOverrides as Partial<ModelParameterOverrides>)[key] !== false,
+  ])) as unknown as ModelParameterOverrides;
   return {
     setupComplete: raw.setupComplete === true,
     executable:
@@ -86,6 +121,41 @@ export function normalizeConfig(value: unknown): RuntimeConfig {
     mmprojPath: typeof raw.mmprojPath === "string" ? raw.mmprojPath.trim() : "",
     mcpServersConfigPath:
       typeof raw.mcpServersConfigPath === "string" ? raw.mcpServersConfigPath.trim() : "",
+    toolSettings: {
+      builtinEnabled: raw.toolSettings?.builtinEnabled !== false,
+      mcpEnabled: raw.toolSettings?.mcpEnabled !== false,
+      knowledgeEnabled: raw.toolSettings?.knowledgeEnabled !== false,
+      tasksEnabled: raw.toolSettings?.tasksEnabled !== false,
+      disabledToolIds: [...new Set(rawDisabledToolIds
+        .filter((id): id is string => typeof id === "string")
+        .map((id) => id.trim())
+        .filter(Boolean))].slice(0, 512),
+    },
+    embedding: {
+      enabled: raw.embedding?.enabled !== false,
+      modelMode: raw.embedding?.modelMode === "local" ? "local" : "huggingface",
+      hfRepo:
+        typeof raw.embedding?.hfRepo === "string" && raw.embedding.hfRepo.trim()
+          ? raw.embedding.hfRepo.trim()
+          : DEFAULT_CONFIG.embedding.hfRepo,
+      modelPath:
+        typeof raw.embedding?.modelPath === "string" ? raw.embedding.modelPath.trim() : "",
+      port: clampInt(raw.embedding?.port, DEFAULT_CONFIG.embedding.port, 1024, 65535),
+      contextSize: clampInt(
+        raw.embedding?.contextSize,
+        DEFAULT_CONFIG.embedding.contextSize,
+        512,
+        32768,
+      ),
+      gpuLayers: clampInt(
+        raw.embedding?.gpuLayers,
+        DEFAULT_CONFIG.embedding.gpuLayers,
+        0,
+        999,
+      ),
+      threads: clampInt(raw.embedding?.threads, DEFAULT_CONFIG.embedding.threads, 1, 256),
+    },
+    modelParameterOverrides,
     host: "127.0.0.1",
     port: clampInt(raw.port, DEFAULT_CONFIG.port, 1024, 65535),
     contextSize: clampInt(raw.contextSize, DEFAULT_CONFIG.contextSize, 512, 131072),
@@ -149,6 +219,28 @@ export function validateConfig(config: RuntimeConfig): string[] {
     if (!config.modelPath) errors.push("请选择 llama.cpp 支持的 GGUF 模型。");
     if (config.modelPath && !config.modelPath.toLowerCase().endsWith(".gguf")) {
       errors.push("本地模型必须是 .gguf 文件。");
+    }
+  }
+  if (
+    config.embedding.enabled
+    && config.embedding.port === effectiveRequiredModelParameter(config, "port")
+  ) {
+    errors.push("向量服务端口不能与聊天模型端口相同。");
+  }
+  if (
+    config.embedding.enabled
+    && config.embedding.modelMode === "huggingface"
+    && !config.embedding.hfRepo.includes("/")
+  ) {
+    errors.push("Embedding 模型标识应为 owner/repo:quant。");
+  }
+  if (config.embedding.enabled && config.embedding.modelMode === "local") {
+    if (!config.embedding.modelPath) errors.push("请选择专用的 Embedding GGUF 模型。");
+    if (
+      config.embedding.modelPath
+      && !config.embedding.modelPath.toLowerCase().endsWith(".gguf")
+    ) {
+      errors.push("Embedding 模型必须是 .gguf 文件。");
     }
   }
   if (config.mmprojPath && !config.mmprojPath.toLowerCase().endsWith(".gguf")) {

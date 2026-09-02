@@ -3,7 +3,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../../shared/types";
 import { DEFAULT_CONFIG } from "../config-store";
-import { AgentRunner } from "./agent-runner";
+import { agentInstructions, AgentRunner } from "./agent-runner";
 import type { createLlamaModelAdapter } from "./llama-model-adapter";
 import type { AgentToolDescriptor } from "./tool-provider";
 import {
@@ -92,6 +92,13 @@ async function run(
 }
 
 describe("AgentRunner", () => {
+  it("adds compact prompt-injection guidance only when local knowledge is available", () => {
+    const knowledge = descriptor("search_local_knowledge", async () => "result");
+    knowledge.source = "knowledge";
+    expect(agentInstructions("system", [knowledge])).toContain("不可信的参考数据");
+    expect(agentInstructions("system", [])).toBe("system");
+  });
+
   it("serializes multiple tool calls from the same model step", async () => {
     const model = new MockLanguageModelV4({
       doStream: [

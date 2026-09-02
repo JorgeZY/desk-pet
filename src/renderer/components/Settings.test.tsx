@@ -6,7 +6,7 @@ import type { ComponentProps } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../../main/config-store";
-import type { ChatToolDefinition, RuntimeState, SpeechState, TtsState } from "../../shared/types";
+import type { ChatToolDefinition, EmbeddingState, RuntimeState, SpeechState, TtsState } from "../../shared/types";
 import { normalizeNumericDraft, Settings } from "./Settings";
 
 vi.mock("sonner", () => ({
@@ -20,6 +20,18 @@ const runtime: RuntimeState = {
   visionEnabled: false,
   endpoint: "http://127.0.0.1:18766",
   message: "模型已就绪。",
+  updatedAt: 1,
+};
+
+const embedding: EmbeddingState = {
+  enabled: true,
+  phase: "ready",
+  endpoint: "http://127.0.0.1:18767",
+  modelPath: "D:\\models\\Qwen3-Embedding-0.6B-Q8_0.gguf",
+  message: "向量模型已就绪。",
+  indexedChunkCount: 0,
+  pendingChunkCount: 0,
+  embeddingDimension: 1024,
   updatedAt: 1,
 };
 
@@ -39,40 +51,58 @@ const tts: TtsState = {
   updatedAt: 1,
 };
 
-const defaultTools: ChatToolDefinition[] = [{
-  id: "mcp__files__read",
-  displayName: "files · read",
-  source: "mcp",
-  requiresApproval: true,
-}];
+const defaultTools: ChatToolDefinition[] = [
+  {
+    id: "builtin__time",
+    displayName: "time",
+    source: "builtin",
+    requiresApproval: false,
+  },
+  {
+    id: "mcp__files__read",
+    displayName: "files · read",
+    source: "mcp",
+    requiresApproval: true,
+  },
+];
 
-function installDesktopPetMock(tools: ChatToolDefinition[] = defaultTools): void {
+function installDesktopPetMock(tools: ChatToolDefinition[] = defaultTools) {
+  const api = {
+    listRuntimeTools: vi.fn().mockResolvedValue(tools),
+    pickModel: vi.fn().mockResolvedValue(null),
+    pickEmbeddingModel: vi.fn().mockResolvedValue(null),
+    pickMmproj: vi.fn().mockResolvedValue(null),
+    pickMcpServersConfig: vi.fn().mockResolvedValue(null),
+    listKnowledgeDocuments: vi.fn().mockResolvedValue([]),
+    importKnowledgeDocuments: vi.fn().mockResolvedValue(null),
+    deleteKnowledgeDocument: vi.fn().mockResolvedValue([]),
+    getWorkbenchWindowState: vi.fn().mockResolvedValue({
+      maximized: false,
+      sidebarCollapsed: false,
+    }),
+    onWorkbenchWindowState: vi.fn().mockReturnValue(() => undefined),
+    setSidebarCollapsed: vi.fn().mockResolvedValue(undefined),
+  };
   Object.defineProperty(window, "desktopPet", {
     configurable: true,
-    value: {
-      listRuntimeTools: vi.fn().mockResolvedValue(tools),
-      pickModel: vi.fn().mockResolvedValue(null),
-      pickMmproj: vi.fn().mockResolvedValue(null),
-      pickMcpServersConfig: vi.fn().mockResolvedValue(null),
-      getWorkbenchWindowState: vi.fn().mockResolvedValue({
-        maximized: false,
-        sidebarCollapsed: false,
-      }),
-      onWorkbenchWindowState: vi.fn().mockReturnValue(() => undefined),
-      setSidebarCollapsed: vi.fn().mockResolvedValue(undefined),
-    },
+    value: api,
   });
+  return api;
 }
 
 function renderSettings(overrides: Partial<ComponentProps<typeof Settings>> = {}) {
   const props: ComponentProps<typeof Settings> = {
     initialConfig: { ...DEFAULT_CONFIG, chatTemplates: ["模板甲", "", "模板丙"] },
     runtime,
+    embedding,
     speech,
     tts,
     embedded: true,
     onClose: vi.fn(),
     onSave: vi.fn().mockResolvedValue(undefined),
+    onPrepareEmbedding: vi.fn().mockResolvedValue(undefined),
+    onStopEmbedding: vi.fn().mockResolvedValue(undefined),
+    onReindexKnowledge: vi.fn().mockResolvedValue(undefined),
     onPrepareSpeech: vi.fn().mockResolvedValue(undefined),
     onImportSpeech: vi.fn().mockResolvedValue(undefined),
     onPrepareTts: vi.fn().mockResolvedValue(undefined),
@@ -104,7 +134,7 @@ afterEach(() => {
 });
 
 describe("Settings", () => {
-  it("uses five keyboard-accessible settings categories", async () => {
+  it("uses six keyboard-accessible settings categories", async () => {
     const user = userEvent.setup();
     renderSettings();
 
@@ -113,6 +143,7 @@ describe("Settings", () => {
       "模型",
       "Agent",
       "工具与 MCP",
+      "知识库",
       "语音",
       "外观",
     ]);
@@ -187,6 +218,7 @@ describe("Settings", () => {
       "存在惩罚",
     ]) {
       expect(screen.getByRole("button", { name: `${label}参数说明` })).toBeTruthy();
+      expect(screen.getByRole("switch", { name: `自定义${label}` })).toBeTruthy();
     }
     expect(screen.getByRole("textbox", { name: "上下文" })).toBeTruthy();
     await user.hover(screen.getByRole("button", { name: "上下文参数说明" }));
@@ -219,6 +251,140 @@ describe("Settings", () => {
       description: "需要时可继续保存并重启模型。",
     });
     expect(screen.getByRole("tab", { name: "Agent" }).getAttribute("data-state")).toBe("active");
+  });
+
+  it("disables an individual model parameter without losing its saved draft", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderSettings({ onSave });
+
+    const contextInput = screen.getByRole("textbox", { name: "上下文" }) as HTMLInputElement;
+    expect(contextInput.disabled).toBe(false);
+    expect(contextInput.value).toBe("8192");
+
+    await user.click(screen.getByRole("switch", { name: "自定义上下文" }));
+    expect(contextInput.disabled).toBe(true);
+    expect(contextInput.value).toBe("8192");
+    await user.click(screen.getByRole("button", { name: "仅保存" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelParameterOverrides: expect.objectContaining({ contextSize: false }),
+      }),
+      false,
+    ));
+  });
+
+  it("controls tool sources and individual tools through persisted settings", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderSettings({ onSave });
+
+    await user.click(screen.getByRole("tab", { name: "工具与 MCP" }));
+    const builtinSwitch = screen.getByRole("switch", { name: "启用内置工具" });
+    const mcpSwitch = screen.getByRole("switch", { name: "启用 MCP 工具" });
+    const mcpToolSwitch = await screen.findByRole("switch", { name: "启用工具 files · read" });
+
+    expect(builtinSwitch.getAttribute("data-state")).toBe("checked");
+    expect(mcpSwitch.getAttribute("data-state")).toBe("checked");
+    await user.click(mcpToolSwitch);
+    await user.click(screen.getByRole("button", { name: "仅保存" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolSettings: expect.objectContaining({ disabledToolIds: ["mcp__files__read"] }),
+      }),
+      false,
+    ));
+
+    await user.click(mcpSwitch);
+    expect((screen.getByRole("switch", { name: "启用工具 files · read" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+  });
+
+  it("refreshes the runtime tool inventory after saving without a restart", async () => {
+    const user = userEvent.setup();
+    const refreshedTool: ChatToolDefinition = {
+      id: "mcp__git__status",
+      displayName: "git · status",
+      source: "mcp",
+      requiresApproval: true,
+    };
+    const api = installDesktopPetMock();
+    api.listRuntimeTools
+      .mockResolvedValueOnce(defaultTools)
+      .mockResolvedValueOnce([refreshedTool]);
+    api.pickMcpServersConfig.mockResolvedValue({
+      path: "D:\\mcp-next.json",
+      name: "mcp-next.json",
+    });
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderSettings({ onSave });
+
+    await user.click(screen.getByRole("tab", { name: "工具与 MCP" }));
+    expect(await screen.findByRole("switch", { name: "启用工具 files · read" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "选择 JSON" }));
+    await user.click(screen.getByRole("button", { name: "仅保存" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ mcpServersConfigPath: "D:\\mcp-next.json" }),
+      false,
+    ));
+    expect(await screen.findByRole("switch", { name: "启用工具 git · status" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("switch", { name: "启用工具 files · read" })).toBeNull();
+      expect(api.listRuntimeTools).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("loads, disables, and removes local knowledge without deleting the source file", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const document = {
+      id: "knowledge-1",
+      path: "D:\\docs\\机器人材料.md",
+      name: "机器人材料.md",
+      mimeType: "text/plain" as const,
+      characterCount: 1_234,
+      chunkCount: 3,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    vi.mocked(window.desktopPet.listKnowledgeDocuments).mockResolvedValue([document]);
+    vi.mocked(window.desktopPet.deleteKnowledgeDocument).mockResolvedValue([]);
+    renderSettings({ onSave });
+
+    await user.click(screen.getByRole("tab", { name: "知识库" }));
+    expect(await screen.findByText("机器人材料.md")).toBeTruthy();
+    expect(screen.getByText(/1,234 字符 · 3 个片段/)).toBeTruthy();
+    await user.click(screen.getByRole("switch", { name: "启用本地知识库" }));
+    await user.click(screen.getByRole("button", { name: "移除知识库文档 机器人材料.md" }));
+    await waitFor(() => expect(window.desktopPet.deleteKnowledgeDocument)
+      .toHaveBeenCalledWith("knowledge-1"));
+    expect(await screen.findByText("知识库为空，可导入文本或 PDF 文档。")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "仅保存" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolSettings: expect.objectContaining({ knowledgeEnabled: false }),
+      }),
+      false,
+    ));
+    expect(toast.success).toHaveBeenCalledWith("已从知识库移除文档", {
+      description: "原始文件没有被删除。",
+    });
+  });
+
+  it("closes settings only after save-and-restart succeeds", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderSettings({ onClose, onSave });
+
+    await user.click(screen.getByRole("button", { name: "保存并重启模型" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.any(Object), true));
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("shows progress only on the settings action that is running", async () => {
@@ -260,6 +426,8 @@ describe("Settings", () => {
     expect(indices()).toEqual(["01", "02"]);
     await user.click(screen.getByRole("tab", { name: "工具与 MCP" }));
     expect(indices()).toEqual(["01"]);
+    await user.click(screen.getByRole("tab", { name: "知识库" }));
+    expect(indices()).toEqual(["01", "02"]);
     await user.click(screen.getByRole("tab", { name: "语音" }));
     expect(indices()).toEqual(["01", "02"]);
     await user.click(screen.getByRole("tab", { name: "外观" }));

@@ -1,6 +1,6 @@
 import type { WindowMode } from "../shared/types";
 
-export type WorkbenchDestination = "chat" | "settings" | "pet";
+export type WorkbenchDestination = "chat" | "tasks" | "settings" | "pet";
 
 export function shouldUpdateRendererView(
   windowKind: string | null,

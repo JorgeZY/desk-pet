@@ -11,9 +11,24 @@ import type {
   ThinkingEffort,
 } from "../../shared/types";
 import { thinkingBudgetFor } from "../../shared/thinking-effort";
+import { modelParameterEnabled } from "../../shared/model-parameters";
 
 export const LLAMA_CPP_MODEL_ALIAS = "desk-pet-model";
 export const LLAMA_CPP_PROVIDER_METADATA_KEY = "llamaCpp";
+
+// llama.cpp rejects a generated GBNF rule when a finite repetition reaches
+// its 2,000-rule safety threshold. Some releases also reject larger bounds
+// before they can be treated as unbounded. Keep the original schemas on the
+// executable tools and only relax incompatible bounds in the wire request.
+const LLAMA_CPP_GRAMMAR_REPETITION_THRESHOLD = 2_000;
+const GRAMMAR_REPETITION_KEYWORDS = new Set([
+  "maxItems",
+  "maxLength",
+  "maxProperties",
+  "minItems",
+  "minLength",
+  "minProperties",
+]);
 
 type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
 type JsonObject = { [key: string]: JsonValue };
@@ -24,12 +39,13 @@ export interface LlamaModelAdapterOptions {
   fetch?: OpenAICompatibleProviderSettings["fetch"];
 }
 
-export type LlamaModelAdapterSettings = Required<
-  Pick<
-    LanguageModelCallOptions,
-    "maxOutputTokens" | "temperature" | "topP" | "presencePenalty"
-  >
-> & {
+export type LlamaModelAdapterSettings = Pick<
+  LanguageModelCallOptions,
+  "maxOutputTokens"
+> & Partial<Pick<
+  LanguageModelCallOptions,
+  "temperature" | "topP" | "presencePenalty"
+>> & {
   maxRetries: 0;
 };
 
@@ -134,11 +150,15 @@ export function createLlamaModelAdapter(
     metadataExtractor: createMetadataExtractor(),
     transformRequestBody: (body) => {
       const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+      const compatibleTools = llamaCppCompatibleTools(body.tools);
       return {
         ...body,
-        top_k: config.topK,
-        min_p: config.minP,
-        repeat_penalty: config.repeatPenalty,
+        ...(compatibleTools === undefined ? {} : { tools: compatibleTools }),
+        ...(modelParameterEnabled(config, "topK") ? { top_k: config.topK } : {}),
+        ...(modelParameterEnabled(config, "minP") ? { min_p: config.minP } : {}),
+        ...(modelParameterEnabled(config, "repeatPenalty")
+          ? { repeat_penalty: config.repeatPenalty }
+          : {}),
         reasoning_effort: effort,
         thinking_budget_tokens: thinking
           ? thinkingBudgetFor(options.thinkingEffort ?? "medium", config.maxTokens)
@@ -156,12 +176,70 @@ export function createLlamaModelAdapter(
     model: provider(LLAMA_CPP_MODEL_ALIAS),
     settings: {
       maxOutputTokens: config.maxTokens,
-      temperature: config.temperature,
-      topP: config.topP,
-      presencePenalty: config.presencePenalty,
+      ...(modelParameterEnabled(config, "temperature")
+        ? { temperature: config.temperature }
+        : {}),
+      ...(modelParameterEnabled(config, "topP") ? { topP: config.topP } : {}),
+      ...(modelParameterEnabled(config, "presencePenalty")
+        ? { presencePenalty: config.presencePenalty }
+        : {}),
       maxRetries: 0,
     },
   };
+}
+
+/**
+ * Downlevels only the serialized tool schemas sent to llama.cpp. Executable
+ * tools retain their original schemas and existing executor-side checks even
+ * when the model-facing grammar representation must be less precise.
+ */
+export function llamaCppCompatibleTools(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((tool) => {
+    if (!isRecord(tool) || !isRecord(tool.function)) return tool;
+    return {
+      ...tool,
+      function: {
+        ...tool.function,
+        parameters: llamaCppCompatibleSchema(tool.function.parameters),
+      },
+    };
+  });
+}
+
+function llamaCppCompatibleSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(llamaCppCompatibleSchema);
+  if (!isRecord(value)) return value;
+
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      GRAMMAR_REPETITION_KEYWORDS.has(key)
+      && typeof child === "number"
+      && Number.isFinite(child)
+      && child >= LLAMA_CPP_GRAMMAR_REPETITION_THRESHOLD
+    ) {
+      continue;
+    }
+    result[key] = llamaCppCompatibleSchema(child);
+  }
+
+  // Several llama.cpp releases generate invalid GBNF for a strict object with
+  // zero properties. `{ type: "object" }` represents the same no-argument tool
+  // at the model boundary while the original executable schema stays strict.
+  if (
+    result.type === "object"
+    && isRecord(result.properties)
+    && Object.keys(result.properties).length === 0
+  ) {
+    delete result.properties;
+    if (Array.isArray(result.required) && result.required.length === 0) {
+      delete result.required;
+    }
+    if (result.additionalProperties === false) delete result.additionalProperties;
+  }
+
+  return result;
 }
 
 function nonNegativeTokenCount(value: unknown): number | undefined {

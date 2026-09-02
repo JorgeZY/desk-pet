@@ -23,8 +23,12 @@ import {
   truncateDiagnosticText,
 } from "./agent/tool-result-budget";
 import { ToolProviderHost } from "./agent/tool-provider-host";
+import { ModelRunCoordinator } from "./agent/model-run-coordinator";
 import type { AgentToolDescriptor } from "./agent/tool-provider";
+import { effectiveRequiredModelParameter } from "../shared/model-parameters";
 import { buildLlamaCommand } from "./llama-command";
+import type { KnowledgeSearchRetriever } from "./knowledge-retriever";
+import type { LongTaskToolStore } from "./agent/long-task-tool-provider";
 export { buildLlamaCommand } from "./llama-command";
 
 function nonNegativeTokenCount(value: unknown): number | undefined {
@@ -71,7 +75,7 @@ export type ManagedModelResolver = (
 const initialState = (config: RuntimeConfig): RuntimeState => ({
   phase: "stopped",
   visionEnabled: false,
-  endpoint: `http://${config.host}:${config.port}`,
+  endpoint: `http://${config.host}:${effectiveRequiredModelParameter(config, "port")}`,
   message: "本地模型尚未启动",
   updatedAt: Date.now(),
 });
@@ -85,19 +89,26 @@ export class LlamaRuntime extends EventEmitter {
   private readonly abortControllers = new Map<string, AbortController>();
   private readonly toolApprovals = new Map<string, { resolve: (approved: boolean) => void }>();
   private readonly toolProviders: ToolProviderHost;
+  private readonly modelRuns: ModelRunCoordinator;
 
   constructor(
     config: RuntimeConfig,
     private readonly resolveManagedModel?: ManagedModelResolver,
+    knowledgeRetriever?: KnowledgeSearchRetriever,
+    longTaskStore?: LongTaskToolStore,
+    modelRuns = new ModelRunCoordinator(),
   ) {
     super();
     this.config = config;
     this.state = initialState(config);
+    this.modelRuns = modelRuns;
     this.toolProviders = new ToolProviderHost({
       getConfig: () => this.config,
       getEndpoint: () => this.endpoint,
       isRuntimeReady: () => this.state.phase === "ready",
       onLog: (message) => this.emitLog(message),
+      knowledgeRetriever,
+      longTaskStore,
     });
   }
 
@@ -118,7 +129,7 @@ export class LlamaRuntime extends EventEmitter {
   }
 
   get endpoint(): string {
-    return `http://${this.config.host}:${this.config.port}`;
+    return `http://${this.config.host}:${effectiveRequiredModelParameter(this.config, "port")}`;
   }
 
   get hasActiveChat(): boolean {
@@ -283,12 +294,17 @@ export class LlamaRuntime extends EventEmitter {
     this.toolApprovals.get(`${requestId}:${toolCallId}`)?.resolve(approved);
   }
 
-  async streamChat(request: ChatRequest, emit: (event: ChatEvent) => void): Promise<void> {
+  async streamChat(
+    request: ChatRequest,
+    emit: (event: ChatEvent) => void,
+    runKind: "chat" | "task" = "chat",
+  ): Promise<void> {
     const controller = new AbortController();
     this.abortControllers.set(request.requestId, controller);
     emit({ requestId: request.requestId, type: "start" });
 
     try {
+      await this.modelRuns.run(runKind, controller.signal, async () => {
       if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
       if (this.state.phase !== "ready") throw new Error("本地模型尚未就绪。");
       let discoveredTools: AgentToolDescriptor[] = [];
@@ -306,7 +322,10 @@ export class LlamaRuntime extends EventEmitter {
           message: `无法初始化工具：${error instanceof Error ? error.message : String(error)}`,
         });
       }
-      if (!discoveredTools.some((tool) => tool.source === "builtin")) {
+      if (
+        this.config.toolSettings.builtinEnabled
+        && !discoveredTools.some((tool) => tool.source === "builtin")
+      ) {
         emit({
           requestId: request.requestId,
           type: "warning",
@@ -315,7 +334,7 @@ export class LlamaRuntime extends EventEmitter {
       }
       const toolSelection = selectAgentToolsForContext(
         discoveredTools,
-        this.config.contextSize,
+        effectiveRequiredModelParameter(this.config, "contextSize"),
       );
       const tools = toolSelection.tools;
       if (toolSelection.omitted.length) {
@@ -340,6 +359,7 @@ export class LlamaRuntime extends EventEmitter {
         config: this.config,
         endpoint: this.endpoint,
         tools,
+        maxSteps: runKind === "task" ? 6 : 20,
         waitForApproval: (toolCallId, signal) => this.waitForToolApproval(
           request.requestId,
           toolCallId,
@@ -351,6 +371,7 @@ export class LlamaRuntime extends EventEmitter {
         messages,
         signal: controller.signal,
         emit,
+      });
       });
     } catch (error) {
       const message =

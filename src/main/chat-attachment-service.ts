@@ -14,6 +14,10 @@ import {
   MAX_CHAT_DOCUMENT_TOTAL_CHARACTERS,
   readChatDocument,
 } from "./chat-documents";
+import { MAX_KNOWLEDGE_DOCUMENT_CHARACTERS } from "./knowledge-base-store";
+
+const MAX_KNOWLEDGE_DOCUMENTS_PER_IMPORT = 10;
+const MAX_KNOWLEDGE_DOCUMENT_TOTAL_BYTES = 50 * 1024 * 1024;
 
 const CHAT_IMAGE_MIME_TYPES: Record<string, ChatImageMimeType> = {
   ".jpg": "image/jpeg",
@@ -96,6 +100,30 @@ export class ChatAttachmentService {
     const documents: ChatDocument[] = [];
     for (const path of result.filePaths) {
       documents.push(await readChatDocument(path, perDocumentLimit));
+    }
+    return documents;
+  }
+
+  async pickKnowledgeDocuments(): Promise<ChatDocument[]> {
+    const result = await this.open({
+      title: "选择要加入本地知识库的文本或 PDF 文档",
+      properties: ["openFile", "multiSelections"],
+      filters: [{ name: "文本与 PDF", extensions: [...CHAT_TEXT_EXTENSIONS, "pdf"] }],
+    });
+    if (result.canceled) return [];
+    if (result.filePaths.length > MAX_KNOWLEDGE_DOCUMENTS_PER_IMPORT) {
+      throw new Error(`一次最多导入 ${MAX_KNOWLEDGE_DOCUMENTS_PER_IMPORT} 个知识库文档。`);
+    }
+
+    let totalBytes = 0;
+    for (const path of result.filePaths) totalBytes += (await fs.stat(path)).size;
+    if (totalBytes > MAX_KNOWLEDGE_DOCUMENT_TOTAL_BYTES) {
+      throw new Error("一次导入的知识库文档合计不能超过 50 MB。");
+    }
+
+    const documents: ChatDocument[] = [];
+    for (const path of result.filePaths) {
+      documents.push(await readChatDocument(path, MAX_KNOWLEDGE_DOCUMENT_CHARACTERS));
     }
     return documents;
   }
