@@ -377,12 +377,12 @@ export class LongTaskRuntime extends EventEmitter {
           return;
         }
         if (latest.status !== "running") return;
-        if (finishReason === "length") {
+        if (finishReason !== "stop") {
           this.persistActiveOutput(taskId);
           this.clearPendingApproval(taskId);
           this.emitTask(this.store.pauseTask(
             taskId,
-            "模型输出达到长度上限，当前步骤已保存但未完成。请提高最大输出长度后继续。",
+            `模型未正常完成当前步骤（结束原因：${finishReason ?? "unknown"}），已保存检查点。请检查后继续。`,
           ));
           return;
         }

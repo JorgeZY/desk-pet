@@ -82,7 +82,7 @@ function finishWithText(text: string) {
   return async (request: ChatRequest, emit: (event: ChatEvent) => void): Promise<void> => {
     emit({ requestId: request.requestId, type: "start" });
     emit({ requestId: request.requestId, type: "delta", text });
-    emit({ requestId: request.requestId, type: "done" });
+    emit({ requestId: request.requestId, type: "done", finishReason: "stop" });
   };
 }
 
@@ -127,7 +127,7 @@ describe("LongTaskRuntime", () => {
     const model = createModel(async (request, emit) => {
       const output = outputs[model.streamChat.mock.calls.length - 1]!;
       emit({ requestId: request.requestId, type: "delta", text: output });
-      emit({ requestId: request.requestId, type: "done" });
+      emit({ requestId: request.requestId, type: "done", finishReason: "stop" });
     });
     const runtime = new LongTaskRuntime(store, model.runtime);
     const task = runtime.createTask(taskInput(2));
@@ -161,11 +161,11 @@ describe("LongTaskRuntime", () => {
         firstDelta.resolve();
         await firstRun.promise;
         emit({ requestId: request.requestId, type: "delta", text: "不应继续写入" });
-        emit({ requestId: request.requestId, type: "done" });
+        emit({ requestId: request.requestId, type: "done", finishReason: "stop" });
         return;
       }
       emit({ requestId: request.requestId, type: "delta", text: "恢复后的最终输出" });
-      emit({ requestId: request.requestId, type: "done" });
+      emit({ requestId: request.requestId, type: "done", finishReason: "stop" });
     });
     const runtime = new LongTaskRuntime(store, model.runtime);
     const task = runtime.createTask(taskInput());
@@ -219,7 +219,7 @@ describe("LongTaskRuntime", () => {
         result: approved ? "已写入" : "用户拒绝",
       });
       emit({ requestId: request.requestId, type: "delta", text: "审批后的步骤输出" });
-      emit({ requestId: request.requestId, type: "done" });
+      emit({ requestId: request.requestId, type: "done", finishReason: "stop" });
     });
     model.resolveToolApproval.mockImplementation((_requestId, toolCallId, approved) => {
       if (toolCallId === "tool-call-1") approval.resolve(approved);
@@ -322,26 +322,29 @@ describe("LongTaskRuntime", () => {
     expect(model.streamChat).toHaveBeenCalledTimes(1);
   });
 
-  it("pauses a step instead of completing it when model output reaches its limit", async () => {
-    const { store } = createStore();
-    const model = createModel(async (request, emit) => {
-      emit({ requestId: request.requestId, type: "delta", text: "被截断的部分输出" });
-      emit({ requestId: request.requestId, type: "done", finishReason: "length" });
-    });
-    const runtime = new LongTaskRuntime(store, model.runtime);
-    const task = runtime.createTask(taskInput(2));
-    runtime.startTask(task.id);
+  it.each(["length", "content-filter", "other", "unknown"])(
+    "pauses a step instead of completing it for a %s finish reason",
+    async (finishReason) => {
+      const { store } = createStore();
+      const model = createModel(async (request, emit) => {
+        emit({ requestId: request.requestId, type: "delta", text: "被截断的部分输出" });
+        emit({ requestId: request.requestId, type: "done", finishReason });
+      });
+      const runtime = new LongTaskRuntime(store, model.runtime);
+      const task = runtime.createTask(taskInput(2));
+      runtime.startTask(task.id);
 
-    await vi.waitFor(() => expect(store.getTask(task.id).status).toBe("paused"));
-    const paused = store.getTask(task.id);
-    expect(paused.error).toContain("模型输出达到长度上限");
-    expect(paused.steps[0]).toMatchObject({
-      status: "interrupted",
-      output: "被截断的部分输出",
-    });
-    expect(paused.steps[1]?.status).toBe("pending");
-    expect(model.streamChat).toHaveBeenCalledTimes(1);
-  });
+      await vi.waitFor(() => expect(store.getTask(task.id).status).toBe("paused"));
+      const paused = store.getTask(task.id);
+      expect(paused.error).toContain(`结束原因：${finishReason}`);
+      expect(paused.steps[0]).toMatchObject({
+        status: "interrupted",
+        output: "被截断的部分输出",
+      });
+      expect(paused.steps[1]?.status).toBe("pending");
+      expect(model.streamChat).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("persists a rejected model run as a failed task and step", async () => {
     const { store } = createStore();
@@ -393,7 +396,7 @@ describe("LongTaskRuntime", () => {
       emitted.resolve();
       await release.promise;
       emit({ requestId: request.requestId, type: "delta", text: "退出后迟到输出" });
-      emit({ requestId: request.requestId, type: "done" });
+      emit({ requestId: request.requestId, type: "done", finishReason: "stop" });
     });
     const runtime = new LongTaskRuntime(store, model.runtime);
     const active = runtime.createTask(taskInput(2));

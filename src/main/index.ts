@@ -45,7 +45,7 @@ import {
   PET_WINDOW_BASE_HEIGHT,
   PET_WINDOW_WIDTH,
 } from "../shared/pet-window";
-import { ConfigStore } from "./config-store";
+import { ConfigStore, normalizeConfig, validateConfig } from "./config-store";
 import { ChatHistoryStore } from "./chat-history-store";
 import { ChatAttachmentService } from "./chat-attachment-service";
 import { KnowledgeBaseStore } from "./knowledge-base-store";
@@ -165,6 +165,44 @@ function updateStoredConfig(
   const task = configWriteQueue.then(async () => {
     config = await configStore.write(mutate(config));
     return config;
+  });
+  configWriteQueue = task.then(() => undefined, () => undefined);
+  return task;
+}
+
+function saveRuntimeConfig(nextConfig: RuntimeConfig): Promise<{
+  previousConfig: RuntimeConfig;
+  savedConfig: RuntimeConfig;
+}> {
+  const task = configWriteQueue.then(async () => {
+    const previousConfig = config;
+    const candidateConfig = normalizeConfig({
+      ...nextConfig,
+      speech: {
+        ...nextConfig.speech,
+        modelDirectory: previousConfig.speech.modelDirectory,
+      },
+      tts: {
+        ...nextConfig.tts,
+        modelDirectory: previousConfig.tts.modelDirectory,
+      },
+      caption: previousConfig.caption,
+    });
+    const errors = validateConfig(candidateConfig);
+    if (errors.length) throw new Error(errors.join("\n"));
+
+    await embeddingRuntime.updateConfig(candidateConfig);
+    try {
+      config = await configStore.write(candidateConfig);
+    } catch (error) {
+      try {
+        await embeddingRuntime.updateConfig(previousConfig);
+      } catch (rollbackError) {
+        console.error("[config] failed to restore embedding config after save failure:", rollbackError);
+      }
+      throw error;
+    }
+    return { previousConfig, savedConfig: config };
   });
   configWriteQueue = task.then(() => undefined, () => undefined);
   return task;
@@ -780,21 +818,11 @@ async function migrateLegacyUserData(): Promise<void> {
 function registerIpc(): void {
   ipcMain.handle("desktop-pet:get-bootstrap", () => bootstrap());
   ipcMain.handle("desktop-pet:save-config", async (_event, nextConfig: RuntimeConfig) => {
-    let previousConfig = config;
-    const savedConfig = await updateStoredConfig((current) => {
-      previousConfig = current;
-      return {
-        ...nextConfig,
-        speech: { ...nextConfig.speech, modelDirectory: current.speech.modelDirectory },
-        tts: { ...nextConfig.tts, modelDirectory: current.tts.modelDirectory },
-        caption: current.caption,
-      };
-    });
+    const { previousConfig, savedConfig } = await saveRuntimeConfig(nextConfig);
     if (agentExecutionConfigChanged(previousConfig, savedConfig)) {
       pauseExecutableLongTasks("模型或工具配置发生变化，长期任务已暂停，请检查后继续。");
     }
     runtime.updateConfig(config);
-    await embeddingRuntime.updateConfig(config);
     refreshEmbeddingIndexStats();
     speech.updateConfig(config.speech);
     tts.updateConfig(config.tts);
