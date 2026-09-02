@@ -57,6 +57,7 @@ import { registerChatIpc } from "./chat-ipc";
 import { pasteDictationText, resolveShortcutSpeechSource } from "./global-dictation";
 import { AudioModeCoordinator } from "./audio-mode-coordinator";
 import { createAsyncBeforeQuitHandler } from "./app-shutdown";
+import { agentExecutionConfigChanged } from "./agent-execution-config";
 import { LlamaRuntime } from "./llama-runtime";
 import { EmbeddingRuntime } from "./embedding-runtime";
 import { LiveCaptionRuntime } from "./live-caption-runtime";
@@ -779,13 +780,19 @@ async function migrateLegacyUserData(): Promise<void> {
 function registerIpc(): void {
   ipcMain.handle("desktop-pet:get-bootstrap", () => bootstrap());
   ipcMain.handle("desktop-pet:save-config", async (_event, nextConfig: RuntimeConfig) => {
-    await updateStoredConfig((current) => ({
-      ...nextConfig,
-      speech: { ...nextConfig.speech, modelDirectory: current.speech.modelDirectory },
-      tts: { ...nextConfig.tts, modelDirectory: current.tts.modelDirectory },
-      caption: current.caption,
-    }));
-    pauseExecutableLongTasks("模型或工具配置发生变化，长期任务已暂停，请检查后继续。");
+    let previousConfig = config;
+    const savedConfig = await updateStoredConfig((current) => {
+      previousConfig = current;
+      return {
+        ...nextConfig,
+        speech: { ...nextConfig.speech, modelDirectory: current.speech.modelDirectory },
+        tts: { ...nextConfig.tts, modelDirectory: current.tts.modelDirectory },
+        caption: current.caption,
+      };
+    });
+    if (agentExecutionConfigChanged(previousConfig, savedConfig)) {
+      pauseExecutableLongTasks("模型或工具配置发生变化，长期任务已暂停，请检查后继续。");
+    }
     runtime.updateConfig(config);
     await embeddingRuntime.updateConfig(config);
     refreshEmbeddingIndexStats();
