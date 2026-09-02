@@ -308,6 +308,7 @@ describe("LongTaskRuntime", () => {
   it("fails the active step and does not execute later steps after a model error", async () => {
     const { store } = createStore();
     const model = createModel(async (request, emit) => {
+      emit({ requestId: request.requestId, type: "delta", text: "失败前的部分检查点" });
       emit({ requestId: request.requestId, type: "error", message: "模型执行失败" });
     });
     const runtime = new LongTaskRuntime(store, model.runtime);
@@ -317,7 +318,11 @@ describe("LongTaskRuntime", () => {
     await vi.waitFor(() => expect(store.getTask(task.id).status).toBe("failed"));
     const failed = store.getTask(task.id);
     expect(failed).toMatchObject({ status: "failed", error: "模型执行失败" });
-    expect(failed.steps[0]).toMatchObject({ status: "failed", error: "模型执行失败" });
+    expect(failed.steps[0]).toMatchObject({
+      status: "failed",
+      error: "模型执行失败",
+      output: "失败前的部分检查点",
+    });
     expect(failed.steps[1]?.status).toBe("pending");
     expect(model.streamChat).toHaveBeenCalledTimes(1);
   });

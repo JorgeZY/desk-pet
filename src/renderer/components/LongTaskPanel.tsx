@@ -407,7 +407,7 @@ export function LongTaskPanel({ onClose }: LongTaskPanelProps) {
                     const streamedOutput = step.status === "running"
                       ? liveOutput[selectedTask.id]?.[step.id]
                       : undefined;
-                    const visibleOutput = step.error ?? streamedOutput ?? step.output;
+                    const visibleOutput = streamedOutput ?? step.output;
                     return (
                       <Card key={step.id} className={cn("gap-3 py-4", step.status === "running" && "border-primary/55")}>
                         <CardHeader className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-4">
@@ -418,11 +418,18 @@ export function LongTaskPanel({ onClose }: LongTaskPanelProps) {
                           </div>
                           <Badge variant="outline">{step.status}</Badge>
                         </CardHeader>
-                        {visibleOutput ? (
-                          <CardContent className="px-4">
-                            <pre className={cn("max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/60 p-3 text-xs leading-relaxed", step.error && "text-destructive")}>
-                              {visibleOutput}
-                            </pre>
+                        {step.error || visibleOutput ? (
+                          <CardContent className="grid gap-2 px-4">
+                            {step.error ? (
+                              <p className="whitespace-pre-wrap text-xs text-destructive">
+                                {step.error}
+                              </p>
+                            ) : null}
+                            {visibleOutput ? (
+                              <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/60 p-3 text-xs leading-relaxed">
+                                {visibleOutput}
+                              </pre>
+                            ) : null}
                           </CardContent>
                         ) : null}
                       </Card>

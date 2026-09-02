@@ -270,6 +270,24 @@ describe("LongTaskPanel", () => {
     expect(screen.getByRole("button", { name: "暂停" })).toBeTruthy();
   });
 
+  it("shows a failed step error without hiding its saved partial output", async () => {
+    const failed = task("failed-output", "failed", {
+      title: "失败输出任务",
+      error: "模型连接中断",
+      steps: [step("failed-output", 0, "failed", {
+        error: "模型连接中断",
+        output: "断开前保存的部分结果",
+      })],
+    });
+    installDesktopPet([failed]);
+
+    render(<LongTaskPanel onClose={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "失败输出任务" })).toBeTruthy();
+    expect(screen.getAllByText("模型连接中断").length).toBeGreaterThan(0);
+    expect(screen.getByText("断开前保存的部分结果")).toBeTruthy();
+  });
+
   it("isolates streamed output by task step and keeps the active stream ahead of checkpoints", async () => {
     const running = task("streamed", "running", {
       steps: [

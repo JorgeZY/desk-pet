@@ -372,6 +372,7 @@ export class LongTaskRuntime extends EventEmitter {
           finalError
           && (latest.status === "running" || latest.status === "waiting-approval")
         ) {
+          this.persistActiveOutput(taskId);
           this.clearPendingApproval(taskId);
           this.emitTask(this.store.failStep(taskId, runningStep.id, finalError));
           return;
